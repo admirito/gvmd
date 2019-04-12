@@ -1,0 +1,5 @@
+gvmd (8.0.0-1) bionic; urgency=medium
+
+  * Initial release (imported upstream vertion 8.0.0)
+
+ -- Mohammad Razavi <mrazavi64@gmail.com>  Fri, 12 Apr 2019 20:09:31 +0430
