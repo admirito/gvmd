@@ -11,3 +11,5 @@
 # To set listening port number:
 #
 # PORT_NUMBER=9390
+
+[ -e "/etc/default/gvmd-pg" ] && . /etc/default/gvmd-pg
