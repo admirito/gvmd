@@ -42,6 +42,8 @@ case "$1" in
 	USERS=$(gvmd-pg --get-users) || true
 	[ -z "$USERS" ] && gvmd-pg --create-user=admin --role=Admin && gvmd-pg --user=admin --new-password=admin || true
 
+	gvm-manage-certs -q -a || true
+
 	if ! update-alternatives --display gvmd 2>/dev/null | grep -q '^/usr/sbin/gvmd-pg'; then
             update-alternatives --install /usr/sbin/gvmd gvmd /usr/sbin/gvmd-pg 1 \
 				--slave /usr/share/man/man8/gvmd.8.gz gvmd.8.gz \
