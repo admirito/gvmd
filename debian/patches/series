@@ -1,1 +1,3 @@
+change-ospd-socket-path.patch
+manage_sql_secinfo_h_include_signal_h.patch
 gvmd_postgresql_uri_env.patch
