@@ -152,7 +152,9 @@ sql_insert (const char *string)
  * @param[in]  sql    Format string for SQL statement.
  * @param[in]  args   Arguments for format string.
  *
- * @return 0 success, 1 gave up (even when retry given), -1 error.
+ * @return 0 success, 1 gave up (even when retry given),
+ *         2 reserved (lock unavailable), 3 unique constraint violation,
+ *         -1 error.
  */
 int
 sqlv (int retry, char *sql, va_list args)
@@ -187,6 +189,8 @@ sqlv (int retry, char *sql, va_list args)
         return 1;
       if (ret == -3)
         return -1;
+      if (ret == -4)
+        return 3;
       assert (ret == -1 || ret == 0);
       return ret;
     }
@@ -209,11 +213,11 @@ sql (char *sql, ...)
       va_start (args, sql);
       ret = sqlv (1, sql, args);
       va_end (args);
-      if (ret == -1)
-        abort ();
       if (ret == 1)
         /* Gave up with statement reset. */
         continue;
+      else if (ret)
+        abort();
       break;
     }
 }
@@ -226,7 +230,8 @@ sql (char *sql, ...)
  * @param[in]  sql    Format string for SQL statement.
  * @param[in]  ...    Arguments for format string.
  *
- * @return 0 success, -1 error.
+ * @return 0 success, 2 reserved (lock unavailable),
+ *         3 unique constraint violation, -1 error.
  */
 int
 sql_error (char *sql, ...)
@@ -242,6 +247,8 @@ sql_error (char *sql, ...)
       if (ret == 1)
         /* Gave up with statement reset. */
         continue;
+      if (ret == -4)
+        return 3;
       break;
     }
 
@@ -254,7 +261,9 @@ sql_error (char *sql, ...)
  * @param[in]  sql    Format string for SQL statement.
  * @param[in]  ...    Arguments for format string.
  *
- * @return 0 success, 1 gave up, -1 error.
+ * @return 0 success, 1 gave up,
+ *         2 reserved (lock unavailable), 3 unique constraint violation,
+ *         -1 error.
  */
 int
 sql_giveup (char *sql, ...)
@@ -304,7 +313,7 @@ sql_x_internal (int log, char *sql, va_list args, sql_stmt_t **stmt_return)
       /* Run statement. */
 
       ret = sql_exec_internal (1, *stmt_return);
-      if (ret == -1)
+      if (ret == -1 || ret == -4)
         {
           if (log_errors)
             g_warning ("%s: sql_exec_internal failed", __FUNCTION__);
@@ -694,7 +703,7 @@ next (iterator_t *iterator)
           iterator->done = TRUE;
           return FALSE;
         }
-      if (ret == -1)
+      if (ret == -1 || ret == -4)
         {
           if (log_errors)
             g_warning ("%s: sql_exec_internal failed", __FUNCTION__);
@@ -703,28 +712,9 @@ next (iterator_t *iterator)
       if (ret == -3 || ret == -2)
         {
           /* Busy or locked, with statement reset.  Just try step again like
-           * we used to do in sql_exec_internal.  We're not supposed to do this
-           * for SQLite, but it would mean quite a bit of reworking in the
-           * callers to be able to handle this case. */
+           * we used to do in sql_exec_internal. */
           g_warning ("%s: stepping after reset", __FUNCTION__);
           continue;
-        }
-      if (ret == 2)
-        {
-          /* Schema changed, for example an internal change due to a VACUUM.
-           * Retrying will result in the same error, so abort.  We lock
-           * exclusively around the VACUUM in --optimize, so hopefully when
-           * using --optimize the schema error will happen earlier, in the
-           * the init function for the iterator.
-           *
-           * This only applies to SQLite3. */
-          g_warning ("%s: schema error.\n"
-                     "  This is possibly due to running VACUUM while Manager\n"
-                     "  is running.  Restart Manager.  In future use\n"
-                     "  --optimize=vacuum instead of running VACUUM"
-                     "  directly.",
-                     __FUNCTION__);
-          abort ();
         }
       break;
     }

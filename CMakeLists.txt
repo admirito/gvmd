@@ -1,4 +1,4 @@
-# Copyright (C) 2009-2018 Greenbone Networks GmbH
+# Copyright (C) 2009-2019 Greenbone Networks GmbH
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
@@ -20,9 +20,11 @@ cmake_minimum_required (VERSION 3.0)
 
 message ("-- Configuring Greenbone Vulnerability Manager...")
 
+# VERSION: Set patch version for stable releases, e.g. "9.0.0",
+#          unset patch version for prereleases, e.g. "9.0"
 project (gvm
-  VERSION 8.0.0
-  LANGUAGES C)
+         VERSION 9.0.0
+         LANGUAGES C)
 
 if (POLICY CMP0005)
   cmake_policy (SET CMP0005 NEW)
@@ -36,58 +38,49 @@ if (NOT CMAKE_BUILD_TYPE)
   set (CMAKE_BUILD_TYPE Debug)
 endif (NOT CMAKE_BUILD_TYPE)
 
-if (NOT BACKEND STREQUAL POSTGRESQL)
-  set (BACKEND SQLITE3)
-endif (NOT BACKEND STREQUAL POSTGRESQL)
-
 OPTION (ENABLE_COVERAGE "Enable support for coverage analysis" OFF)
 OPTION (DEBUG_FUNCTION_NAMES "Print function names on entry and exit" OFF)
 
 ## Retrieve git revision (at configure time)
 include (GetGit)
-
 if (NOT CMAKE_BUILD_TYPE MATCHES "Release")
   if (EXISTS "${CMAKE_SOURCE_DIR}/.git/")
     if (GIT_FOUND)
       Git_GET_REVISION(${CMAKE_SOURCE_DIR} ProjectRevision)
       set (GIT_REVISION "~git-${ProjectRevision}")
+    else (GIT_FOUND)
+      set (GIT_REVISION "~git")
     endif (GIT_FOUND)
   endif (EXISTS "${CMAKE_SOURCE_DIR}/.git/")
 endif (NOT CMAKE_BUILD_TYPE MATCHES "Release")
 
-## make format
-message (STATUS "Looking for clang-format...")
-find_program (CLANG_FORMAT clang-format)
-
-if (CLANG_FORMAT)
-  message (STATUS "Looking for clang-format... ${CLANG_FORMAT}")
-  add_custom_target(format COMMAND ${CLANG_FORMAT} "-i" "./src/*.c" "./src/*.h"
-                    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
-else (CLANG_FORMAT)
-  message (STATUS "clang-format not found...")
-endif (CLANG_FORMAT)
-
-# Set beta version if this is a beta release series,
+# set if this is in prerelease status, starting at 0 before first beta release,
 # unset if this is a stable release series.
-#set (PROJECT_BETA_RELEASE 1)
+# set (PROJECT_BETA_RELEASE 0)
 
 if (GIT_REVISION)
   set (PROJECT_VERSION_GIT "${GIT_REVISION}")
 else (GIT_REVISION)
-  set (PROJECT_VERSION_GIT "~git")
+  set (PROJECT_VERSION_GIT "")
 endif (GIT_REVISION)
 
-# If PROJECT_BETA_RELEASE is set, the version string will be set to:
+# If PROJECT_BETA_RELEASE is set to "0", the version string will be set to:
+#   "major.minor+alpha"
+# If PROJECT_BETA_RELEASE is set otherwise, the version string will be set to:
 #   "major.minor+beta${PROJECT_BETA_RELEASE}"
 # If PROJECT_BETA_RELEASE is NOT set, the version string will be set to:
 #   "major.minor.patch"
-if (PROJECT_BETA_RELEASE)
-  set (PROJECT_VERSION_SUFFIX "+beta${PROJECT_BETA_RELEASE}")
-else (PROJECT_BETA_RELEASE)
+if (DEFINED PROJECT_BETA_RELEASE AND NOT PROJECT_BETA_RELEASE STREQUAL "")
+  if (PROJECT_BETA_RELEASE STREQUAL "0")
+    set (PROJECT_VERSION_SUFFIX "+alpha")
+  else (PROJECT_BETA_RELEASE STREQUAL "0")
+    set (PROJECT_VERSION_SUFFIX "+beta${PROJECT_BETA_RELEASE}")
+  endif (PROJECT_BETA_RELEASE STREQUAL "0")
+elseif (DEFINED PROJECT_VERSION_PATCH AND NOT PROJECT_VERSION_PATCH STREQUAL "")
   set (PROJECT_VERSION_SUFFIX ".${PROJECT_VERSION_PATCH}")
-endif (PROJECT_BETA_RELEASE)
+endif (DEFINED PROJECT_BETA_RELEASE AND NOT PROJECT_BETA_RELEASE STREQUAL "")
 
-set (PROJECT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}${PROJECT_VERSION_SUFFIX}")
+set (PROJECT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}${PROJECT_VERSION_SUFFIX}${PROJECT_VERSION_GIT}")
 
 ## CPack configuration
 
@@ -118,13 +111,13 @@ include (CPack)
 
 ## Variables
 
-set (GVMD_DATABASE_VERSION 205)
+set (GVMD_DATABASE_VERSION 221)
 
 set (GVMD_SCAP_DATABASE_VERSION 15)
 
 set (GVMD_CERT_DATABASE_VERSION 6)
 
-set (GMP_VERSION "8.0")
+set (GMP_VERSION "9.0")
 
 if (SYSCONF_INSTALL_DIR)
   set (SYSCONFDIR "${SYSCONF_INSTALL_DIR}")
@@ -161,15 +154,6 @@ endif (NOT DATADIR)
 if (NOT INCLUDEDIR)
   set (INCLUDEDIR "${CMAKE_INSTALL_PREFIX}/include")
 endif (NOT INCLUDEDIR)
-
-# The maximum number of seconds the SQLite backend will sleep
-# before retrying an SQL operation that is getting a busy response.
-#
-# 0 means to not sleep at all, and let the db/libsqlite do its own thing.
-#
-if (NOT DEFINED GVM_SQLITE_SLEEP_MAX)
-  set (GVM_SQLITE_SLEEP_MAX 0)
-endif (NOT DEFINED GVM_SQLITE_SLEEP_MAX)
 
 set (GVM_SYSCONF_DIR  "${SYSCONFDIR}/gvm")
 
@@ -257,6 +241,10 @@ configure_file (tools/greenbone-certdata-sync.in tools/greenbone-certdata-sync @
 configure_file (tools/gvm-portnames-update.in tools/gvm-portnames-update @ONLY)
 configure_file (tools/gvm-migrate-to-postgres.in tools/gvm-migrate-to-postgres @ONLY)
 configure_file (tools/gvm-manage-certs.in tools/gvm-manage-certs @ONLY)
+
+## Testing
+
+enable_testing ()
 
 ## Program
 
@@ -596,13 +584,6 @@ install (FILES ${CMAKE_BINARY_DIR}/tools/gvm-migrate-to-postgres
          DESTINATION ${SBINDIR}
          PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE
                      GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-if (BACKEND STREQUAL SQLITE3)
-  install (FILES ${CMAKE_SOURCE_DIR}/tools/database-statistics-sqlite
-           DESTINATION ${SBINDIR}
-           PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE
-                       GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-endif (BACKEND STREQUAL SQLITE3)
 
 install (FILES ${CMAKE_BINARY_DIR}/tools/gvm-manage-certs
          DESTINATION ${BINDIR}

@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2018 Greenbone Networks GmbH
+/* Copyright (C) 2009-2019 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
@@ -49,28 +49,15 @@
 #define TRUNCATE_TEXT_SUFFIX "[...]\n(text truncated)"
 
 int
-init_gmp (GSList *,
-          int,
-          const gchar *,
-          int,
-          int,
-          int,
-          int,
-          manage_connection_forker_t,
-          int);
+init_gmp (GSList *, const gchar *, int, int, int, int,
+          manage_connection_forker_t, int);
 
 void
-init_gmp_process (int,
-                  const gchar *,
-                  int (*) (const char *, void *),
-                  void *,
+init_gmp_process (const gchar *, int (*) (const char *, void *), void *,
                   gchar **);
 
 int
 process_gmp_client_input ();
-
-int
-process_gmp_change ();
 
 /** @todo As described in gmp.c, probably should be replaced by gmp_parser_t. */
 extern char to_client[];

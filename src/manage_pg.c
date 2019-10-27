@@ -1,4 +1,4 @@
-/* Copyright (C) 2014-2018 Greenbone Networks GmbH
+/* Copyright (C) 2014-2019 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
@@ -25,13 +25,13 @@
  * to be coded for each backend.  This is the PostgreSQL version.
  */
 
-#include "manage_acl.h"
+#include <strings.h> /* for strcasecmp() */
+#include <assert.h>  /* for assert() */
+
+#include "sql.h"
 #include "manage_sql.h"
 #include "manage_utils.h"
-#include "sql.h"
-
-#include <assert.h>  /* for assert() */
-#include <strings.h> /* for strcasecmp() */
+#include "manage_acl.h"
 
 #undef G_LOG_DOMAIN
 /**
@@ -39,6 +39,7 @@
  */
 #define G_LOG_DOMAIN "md manage"
 
+
 /* Session. */
 
 /**
@@ -70,6 +71,7 @@ manage_session_set_timezone (const char *zone)
   return;
 }
 
+
 /* Helpers. */
 
 /**
@@ -89,6 +91,7 @@ manage_db_empty ()
          == 0;
 }
 
+
 /* SCAP. */
 
 /**
@@ -160,7 +163,7 @@ manage_update_cert_db_init ()
        "               cve_refs_arg);"
        "       RETURN;"
        "     EXCEPTION WHEN unique_violation THEN"
-       "       NULL;" /* Try again. */
+       "       NULL;"  /* Try again. */
        "     END;"
        "   END LOOP;"
        " END;"
@@ -197,7 +200,7 @@ manage_update_cert_db_init ()
        "               cve_refs_arg);"
        "       RETURN;"
        "     EXCEPTION WHEN unique_violation THEN"
-       "       NULL;" /* Try again. */
+       "       NULL;"  /* Try again. */
        "     END;"
        "   END LOOP;"
        " END;"
@@ -266,7 +269,7 @@ manage_update_scap_db_init ()
        "               nvd_id_arg);"
        "       RETURN;"
        "     EXCEPTION WHEN unique_violation THEN"
-       "       NULL;" /* Try again. */
+       "       NULL;"  /* Try again. */
        "     END;"
        "   END LOOP;"
        " END;"
@@ -319,7 +322,7 @@ manage_update_scap_db_init ()
        "               availability_impact_arg, products_arg);"
        "       RETURN;"
        "     EXCEPTION WHEN unique_violation THEN"
-       "       NULL;" /* Try again. */
+       "       NULL;"  /* Try again. */
        "     END;"
        "   END LOOP;"
        " END;"
@@ -344,7 +347,7 @@ manage_update_scap_db_init ()
        "       VALUES (uuid_arg, name_arg, published_arg, modified_arg);"
        "       RETURN;"
        "     EXCEPTION WHEN unique_violation THEN"
-       "       NULL;" /* Try again. */
+       "       NULL;"  /* Try again. */
        "     END;"
        "   END LOOP;"
        " END;"
@@ -367,7 +370,7 @@ manage_update_scap_db_init ()
        "       VALUES (cve_arg, cpe_arg);"
        "       RETURN;"
        "     EXCEPTION WHEN unique_violation THEN"
-       "       NULL;" /* Try again. */
+       "       NULL;"  /* Try again. */
        "     END;"
        "   END LOOP;"
        " END;"
@@ -420,7 +423,7 @@ manage_update_scap_db_init ()
        "               status_arg, 0.0, cve_refs_arg);"
        "       RETURN;"
        "     EXCEPTION WHEN unique_violation THEN"
-       "       NULL;" /* Try again. */
+       "       NULL;"  /* Try again. */
        "     END;"
        "   END LOOP;"
        " END;"
@@ -478,6 +481,7 @@ manage_update_scap_db_cleanup ()
        "                             cve_refs_arg INTEGER);");
 }
 
+
 /* SQL functions. */
 
 /**
@@ -489,10 +493,8 @@ manage_update_scap_db_cleanup ()
  * @param[in]  new_name   Name of column in new table.
  */
 void
-sql_rename_column (const char *old_table,
-                   const char *new_table,
-                   const char *old_name,
-                   const char *new_name)
+sql_rename_column (const char *old_table, const char *new_table,
+                   const char *old_name, const char *new_name)
 {
   return;
 }
@@ -500,41 +502,40 @@ sql_rename_column (const char *old_table,
 /**
  * @brief Common overrides SQL for SQL functions.
  */
-#define OVERRIDES_SQL(severity_sql)                     \
-  " coalesce"                                           \
-  "  ((SELECT overrides.new_severity"                   \
-  "    FROM overrides"                                  \
-  "    WHERE overrides.result_nvt = results.result_nvt" \
-  "    AND ((overrides.owner IS NULL)"                  \
-  "         OR (overrides.owner ="                      \
-  "             (SELECT id FROM users"                  \
-  "              WHERE users.uuid"                      \
-  "                    = (SELECT uuid"                  \
-  "                       FROM current_credentials))))" \
-  "    AND ((overrides.end_time = 0)"                   \
-  "         OR (overrides.end_time >= m_now ()))"       \
-  "    AND (overrides.task = results.task"              \
-  "         OR overrides.task = 0)"                     \
-  "    AND (overrides.result = results.id"              \
-  "         OR overrides.result = 0)"                   \
-  "    AND (overrides.hosts is NULL"                    \
-  "         OR overrides.hosts = ''"                    \
-  "         OR hosts_contains (overrides.hosts,"        \
-  "                            results.host))"          \
-  "    AND (overrides.port is NULL"                     \
-  "         OR overrides.port = ''"                     \
-  "         OR overrides.port = results.port)"          \
-  "    AND severity_matches_ov"                         \
-  "         (" severity_sql ", overrides.severity)"     \
-  "    ORDER BY overrides.result DESC,"                 \
-  "             overrides.task DESC,"                   \
-  "             overrides.port DESC,"                   \
-  "             overrides.severity ASC,"                \
-  "             overrides.creation_time DESC"           \
-  "    LIMIT 1),"                                       \
-  "   " severity_sql ")"
+#define OVERRIDES_SQL(severity_sql)                         \
+ " coalesce"                                                \
+ "  ((SELECT overrides.new_severity"                        \
+ "    FROM overrides"                                       \
+ "    WHERE overrides.result_nvt = results.result_nvt"      \
+ "    AND ((overrides.owner IS NULL)"                       \
+ "         OR (overrides.owner ="                           \
+ "             (SELECT id FROM users"                       \
+ "              WHERE users.uuid"                           \
+ "                    = (SELECT uuid"                       \
+ "                       FROM current_credentials))))"      \
+ "    AND ((overrides.end_time = 0)"                        \
+ "         OR (overrides.end_time >= m_now ()))"            \
+ "    AND (overrides.task = results.task"                   \
+ "         OR overrides.task = 0)"                          \
+ "    AND (overrides.result = results.id"                   \
+ "         OR overrides.result = 0)"                        \
+ "    AND (overrides.hosts is NULL"                         \
+ "         OR overrides.hosts = ''"                         \
+ "         OR hosts_contains (overrides.hosts,"             \
+ "                            results.host))"               \
+ "    AND (overrides.port is NULL"                          \
+ "         OR overrides.port = ''"                          \
+ "         OR overrides.port = results.port)"               \
+ "    AND severity_matches_ov"                              \
+ "         (" severity_sql ", overrides.severity)"          \
+ "    ORDER BY overrides.result DESC,"                      \
+ "             overrides.task DESC,"                        \
+ "             overrides.port DESC,"                        \
+ "             overrides.severity ASC,"                     \
+ "             overrides.creation_time DESC"                \
+ "    LIMIT 1),"                                            \
+ "   " severity_sql ")"
 
-// clang-format off
 /**
  * @brief Create functions.
  *
@@ -647,6 +648,21 @@ manage_create_sql_functions ()
   sql ("RESET role;");
 
   /* Functions in pl/pgsql. */
+
+  /* Wrapping the "LOCK TABLE ... NOWAIT" like this will prevent
+   *  error messages in the PostgreSQL log if the lock is not available.
+   */
+  sql ("CREATE OR REPLACE FUNCTION try_exclusive_lock (regclass)"
+       " RETURNS integer AS $$"
+       " BEGIN"
+       "   EXECUTE 'LOCK TABLE \"'"
+       "           || $1"
+       "           || '\" IN ACCESS EXCLUSIVE MODE NOWAIT;';"
+       "   RETURN 1;"
+       " EXCEPTION WHEN lock_not_available THEN"
+       "   RETURN 0;"
+       " END;"
+       "$$ language 'plpgsql';");
 
   if (sql_int ("SELECT EXISTS (SELECT * FROM information_schema.tables"
                "               WHERE table_catalog = '%s'"
@@ -932,7 +948,9 @@ manage_create_sql_functions ()
        "$$ LANGUAGE plpgsql"
        " IMMUTABLE;");
 
-  sql ("CREATE OR REPLACE FUNCTION iso_time (seconds integer)"
+  sql ("DROP FUNCTION IF EXISTS iso_time (seconds integer);");
+
+  sql ("CREATE OR REPLACE FUNCTION iso_time (seconds bigint)"
        " RETURNS text AS $$"
        " DECLARE"
        "   user_zone text;"
@@ -975,7 +993,22 @@ manage_create_sql_functions ()
        " END;"
        "$$ LANGUAGE plpgsql;");
 
-  sql ("CREATE OR REPLACE FUNCTION days_from_now (seconds integer)"
+  sql ("DROP FUNCTION IF EXISTS iso_time (integer);");
+
+  sql ("CREATE OR REPLACE FUNCTION certificate_iso_time (bigint)"
+       " RETURNS text AS $$"
+       " BEGIN"
+       "   RETURN CASE"
+       "     WHEN ($1 = 0) THEN 'unlimited'"
+       "     WHEN ($1 = -1) THEN 'unknown'"
+       "     ELSE iso_time($1)"
+       "     END;"
+       " END;"
+       "$$ LANGUAGE plpgsql;");
+
+  sql ("DROP FUNCTION IF EXISTS days_from_now (seconds integer);");
+
+  sql ("CREATE OR REPLACE FUNCTION days_from_now (seconds bigint)"
        " RETURNS integer AS $$"
        " DECLARE"
        "   diff interval;"
@@ -1006,7 +1039,7 @@ manage_create_sql_functions ()
        "   LOOP"
        "     EXECUTE 'SELECT count (*) = 0 FROM ' || type || 's"
        "              WHERE name = $1"
-       "              AND ((owner IS NULL) OR (owner = $2))'"
+       "              AND (($2 IS NULL) OR (owner IS NULL) OR (owner = $2))'"
        "       INTO unique_candidate"
        "       USING candidate, owner;"
        "     EXIT WHEN unique_candidate;"
@@ -1276,13 +1309,6 @@ manage_create_sql_functions ()
 
   sql ("CREATE OR REPLACE FUNCTION make_uuid () RETURNS text AS $$"
        "  SELECT uuid_generate_v4 ()::text AS result;"
-       "$$ LANGUAGE SQL;");
-
-  sql ("CREATE OR REPLACE FUNCTION tag (text, text) RETURNS text AS $$"
-       /* Extract a tag from an OTP tag list. */
-       "  SELECT split_part (unnest, '=', 2)"
-       "  FROM unnest (string_to_array ($1, '|'))"
-       "  WHERE split_part (unnest, '=', 1) = $2;"
        "$$ LANGUAGE SQL;");
 
   if (sql_int ("SELECT EXISTS (SELECT * FROM information_schema.tables"
@@ -1976,8 +2002,8 @@ manage_create_sql_functions ()
 
   return 0;
 }
-// clang-format on
 
+
 /* Creation. */
 
 /**
@@ -1997,12 +2023,10 @@ manage_create_result_indexes ()
 /**
  * @brief Results WHERE SQL for creating views in create_tabes.
  */
-#define VULNS_RESULTS_WHERE     \
-  " WHERE uuid IN"              \
-  "   (SELECT nvt FROM results" \
+#define VULNS_RESULTS_WHERE                                           \
+  " WHERE uuid IN"                                                    \
+  "   (SELECT nvt FROM results"                                       \
   "     WHERE (results.severity != " G_STRINGIFY (SEVERITY_ERROR) "))"
-
-// clang-format off
 
 /**
  * @brief Create all tables.
@@ -2027,7 +2051,7 @@ create_tables ()
        " (id SERIAL PRIMARY KEY,"
        "  uuid text UNIQUE NOT NULL,"
        "  owner integer REFERENCES users (id) ON DELETE RESTRICT,"
-       "  name text NOT NULL,"
+       "  name text UNIQUE NOT NULL,"
        "  comment text,"
        "  password text,"
        "  timezone text,"
@@ -2491,6 +2515,47 @@ create_tables ()
        "  result_uuid text,"
        "  report integer);"); // REFERENCES reports_trash (id) ON DELETE RESTRICT
 
+  sql ("CREATE TABLE IF NOT EXISTS tls_certificates"
+       " (id SERIAL PRIMARY KEY,"
+       "  uuid text UNIQUE NOT NULL,"
+       "  owner integer REFERENCES users (id) ON DELETE RESTRICT,"
+       "  name text,"
+       "  comment text,"
+       "  creation_time bigint,"
+       "  modification_time bigint,"
+       "  certificate text,"
+       "  subject_dn text,"
+       "  issuer_dn text,"
+       "  activation_time bigint,"
+       "  expiration_time bigint,"
+       "  md5_fingerprint text,"
+       "  trust integer,"
+       "  certificate_format text,"
+       "  sha256_fingerprint text,"
+       "  serial text);");
+
+  sql ("CREATE TABLE IF NOT EXISTS tls_certificate_locations"
+       " (id SERIAL PRIMARY KEY,"
+       "  uuid text UNIQUE NOT NULL,"
+       "  host_ip text,"
+       "  port text);");
+
+  sql ("CREATE TABLE IF NOT EXISTS tls_certificate_origins"
+       " (id SERIAL PRIMARY KEY,"
+       "  uuid text UNIQUE NOT NULL,"
+       "  origin_type text,"
+       "  origin_id text,"
+       "  origin_data text);");
+
+  sql ("CREATE TABLE IF NOT EXISTS tls_certificate_sources"
+       " (id SERIAL PRIMARY KEY,"
+       "  uuid text UNIQUE NOT NULL,"
+       "  tls_certificate integer REFERENCES tls_certificates (id),"
+       "  location integer REFERENCES tls_certificate_locations (id),"
+       "  origin integer REFERENCES tls_certificate_origins (id),"
+       "  timestamp bigint,"
+       "  tls_versions text);");
+
   sql ("CREATE TABLE IF NOT EXISTS scanners"
        " (id SERIAL PRIMARY KEY,"
        "  uuid text UNIQUE NOT NULL,"
@@ -2519,7 +2584,8 @@ create_tables ()
        "  type integer,"
        "  scanner integer REFERENCES scanners (id) ON DELETE RESTRICT,"
        "  creation_time integer,"
-       "  modification_time integer);");
+       "  modification_time integer,"
+       "  usage_type text);");
 
   sql ("CREATE TABLE IF NOT EXISTS configs_trash"
        " (id SERIAL PRIMARY KEY,"
@@ -2536,7 +2602,8 @@ create_tables ()
        "  scanner integer," /* REFERENCES scanners (id) */
        "  creation_time integer,"
        "  modification_time integer,"
-       "  scanner_location integer);");
+       "  scanner_location integer,"
+       "  usage_type text);");
 
   sql ("CREATE TABLE IF NOT EXISTS config_preferences"
        " (id SERIAL PRIMARY KEY,"
@@ -2629,7 +2696,8 @@ create_tables ()
        "  hosts_ordering text,"
        "  alterable integer,"
        "  creation_time integer,"
-       "  modification_time integer);");
+       "  modification_time integer,"
+       "  usage_type text);");
 
   sql ("CREATE TABLE IF NOT EXISTS task_files"
        " (id SERIAL PRIMARY KEY,"
@@ -2663,7 +2731,6 @@ create_tables ()
        "  date integer,"
        "  start_time integer,"
        "  end_time integer,"
-       "  nbefile text,"
        "  comment text,"
        "  scan_run_status integer,"
        "  slave_progress integer,"
@@ -2828,6 +2895,13 @@ create_tables ()
        "  name text,"
        "  value text);");
 
+  sql ("CREATE TABLE IF NOT EXISTS vt_refs"
+       " (id SERIAL PRIMARY KEY,"
+       "  vt_oid text NOT NULL,"
+       "  type text NOT NULL,"
+       "  ref_id text NOT NULL,"
+       "  ref_text text);");
+
   sql ("CREATE TABLE IF NOT EXISTS nvt_preferences"
        " (id SERIAL PRIMARY KEY,"
        "  name text UNIQUE NOT NULL,"
@@ -2839,24 +2913,22 @@ create_tables ()
        "  oid text UNIQUE NOT NULL,"
        "  name text,"
        "  comment text,"
+       "  summary text,"
+       "  insight text,"
+       "  affected text,"
+       "  impact text,"
        "  cve text,"
-       "  bid text,"
-       "  xref text,"
        "  tag text,"
        "  category text,"
        "  family text,"
        "  cvss_base text,"
        "  creation_time integer,"
        "  modification_time integer,"
+       "  solution text,"
        "  solution_type text,"
+       "  detection text,"
        "  qod integer,"
        "  qod_type text);");
-
-  sql ("CREATE TABLE IF NOT EXISTS nvt_cves"
-       " (id SERIAL PRIMARY KEY,"
-       "  nvt integer REFERENCES nvts (id) ON DELETE RESTRICT,"
-       "  oid text,"
-       "  cve_name text);");
 
   sql ("CREATE TABLE IF NOT EXISTS notes"
        " (id SERIAL PRIMARY KEY,"
@@ -3080,12 +3152,11 @@ create_tables ()
        "          (CASE WHEN"
        "           (((SELECT family FROM nvts WHERE oid = results.nvt)"
        "             IN (" LSC_FAMILY_LIST "))"
-       "            OR results.nvt = '0'" /* Open ports previously had 0 NVT. */
        "            OR EXISTS"
        "              (SELECT id FROM nvts"
        "               WHERE oid = results.nvt"
        "               AND"
-       "                (cve = 'NOCVE'"
+       "                (cve = ''"
        "                 OR cve NOT IN (SELECT cve FROM nvts"
        "                                WHERE oid"
        "                                      IN (SELECT source_name"
@@ -3106,12 +3177,11 @@ create_tables ()
        "          (CASE WHEN"
        "            (((SELECT family FROM nvts WHERE oid = results.nvt)"
        "              IN (" LSC_FAMILY_LIST "))"
-       "             OR results.nvt = '0'" /* Open ports previously had 0 NVT.*/
        "             OR EXISTS"
        "             (SELECT id FROM nvts AS outer_nvts"
        "              WHERE oid = results.nvt"
        "              AND"
-       "              (cve = 'NOCVE'"
+       "              (cve = ''"
        "               OR NOT EXISTS"
        "                  (SELECT cve FROM nvts"
        "                   WHERE oid IN (SELECT source_name"
@@ -3136,6 +3206,13 @@ create_tables ()
        "  (SELECT 0 AS autofp_selection"
        "   UNION SELECT 1 AS autofp_selection"
        "   UNION SELECT 2 AS autofp_selection) AS autofp_opts;");
+
+  sql ("CREATE OR REPLACE VIEW tls_certificate_source_origins AS"
+       " SELECT sources.id AS source_id, tls_certificate,"
+       "        origin_id, origin_type, origin_data"
+       "  FROM tls_certificate_sources AS sources"
+       "  JOIN tls_certificate_origins AS origins"
+       "    ON sources.origin = origins.id;");
 
   sql ("DROP VIEW IF EXISTS vulns;");
   if (sql_int ("SELECT EXISTS (SELECT * FROM information_schema.tables"
@@ -3185,7 +3262,6 @@ create_tables ()
   sql ("SELECT create_index ('host_oss_by_host',"
        "                     'host_oss', 'host');");
 
-  sql ("SELECT create_index ('nvt_cves_by_oid', 'nvt_cves', 'oid');");
   sql ("SELECT create_index ('nvt_selectors_by_family_or_nvt',"
        "                     'nvt_selectors',"
        "                     'type, family_or_nvt');");
@@ -3227,6 +3303,16 @@ create_tables ()
   sql ("SELECT create_index ('tag_resources_trash_by_tag',"
        "                     'tag_resources_trash', 'tag');");
 
+  sql ("SELECT create_index ('tls_certificate_locations_by_host_ip',"
+       "                     'tls_certificate_locations', 'host_ip')");
+
+  sql ("SELECT create_index ('tls_certificate_origins_by_origin_id_and_type',"
+       "                     'tls_certificate_origins',"
+       "                     'origin_id, origin_type')");
+
+  sql ("SELECT create_index ('vt_refs_by_vt_oid',"
+       "                     'vt_refs', 'vt_oid');");
+
 
 #if 0
   /* TODO The value column can be bigger than 8191, the maximum size that
@@ -3255,7 +3341,6 @@ create_tables ()
        "         'result_nvt_reports',"
        "         'report');");
 }
-// clang-format on
 
 /**
  * @brief Ensure sequences for automatic ids are in a consistent state.
@@ -3266,27 +3351,27 @@ void
 check_db_sequences ()
 {
   iterator_t sequence_tables;
-  init_iterator (&sequence_tables,
-                 "SELECT table_name, column_name,"
-                 "       pg_get_serial_sequence (table_name, column_name)"
-                 "  FROM information_schema.columns"
-                 "  WHERE table_schema = 'public'"
-                 "    AND pg_get_serial_sequence (table_name, column_name)"
-                 "        IS NOT NULL;");
+  init_iterator(&sequence_tables,
+                "WITH table_columns AS ("
+                " SELECT table_name, column_name FROM information_schema.columns"
+                "  WHERE table_schema = 'public')"
+                " SELECT *, pg_get_serial_sequence (table_name, column_name) FROM table_columns"
+                "  WHERE pg_get_serial_sequence (table_name, column_name) IS NOT NULL;");
 
   while (next (&sequence_tables))
     {
-      const char *table = iterator_string (&sequence_tables, 0);
-      const char *column = iterator_string (&sequence_tables, 1);
-      const char *sequence = iterator_string (&sequence_tables, 2);
+      const char* table = iterator_string (&sequence_tables, 0);
+      const char* column = iterator_string (&sequence_tables, 1);
+      const char* sequence = iterator_string (&sequence_tables, 2);
       resource_t old_start, new_start;
 
-      sql_int64 (&old_start, "SELECT last_value + 1 FROM %s;", sequence);
+      sql_int64 (&old_start,
+                 "SELECT last_value + 1 FROM %s;",
+                 sequence);
 
       sql_int64 (&new_start,
                  "SELECT coalesce (max (%s), 0) + 1 FROM %s;",
-                 column,
-                 table);
+                 column, table);
 
       if (old_start < new_start)
         sql ("ALTER SEQUENCE %s RESTART WITH %llu;", sequence, new_start);
@@ -3295,6 +3380,7 @@ check_db_sequences ()
   cleanup_iterator (&sequence_tables);
 }
 
+
 /* SecInfo. */
 
 /**
@@ -3524,13 +3610,13 @@ manage_db_init (const gchar *name)
       sql ("CREATE TABLE scap.ovaldefs"
            " (id SERIAL PRIMARY KEY,"
            "  uuid text UNIQUE,"
-           "  name text," /* OVAL identifier. */
+           "  name text,"                   /* OVAL identifier. */
            "  comment text,"
            "  creation_time integer,"
            "  modification_time integer,"
            "  version INTEGER,"
            "  deprecated INTEGER,"
-           "  def_class TEXT," /* Enum. */
+           "  def_class TEXT,"              /* Enum. */
            "  title TEXT,"
            "  description TEXT,"
            "  xml_file TEXT,"
@@ -3570,7 +3656,7 @@ manage_db_init (const gchar *name)
            "$$ LANGUAGE plpgsql;");
 
       sql ("CREATE TRIGGER cves_delete AFTER DELETE ON cves"
-           " FOR EACH ROW EXECUTE PROCEDURE scap_delete_affected ();");
+	   " FOR EACH ROW EXECUTE PROCEDURE scap_delete_affected ();");
 
       sql ("CREATE OR REPLACE FUNCTION scap_update_cpes ()"
            " RETURNS TRIGGER AS $$"
@@ -3605,7 +3691,7 @@ manage_db_init (const gchar *name)
 
       sql ("CREATE TRIGGER affected_ovaldefs_delete"
            " AFTER DELETE ON affected_ovaldefs"
-           " FOR EACH ROW EXECUTE PROCEDURE scap_update_oval ();");
+	   " FOR EACH ROW EXECUTE PROCEDURE scap_update_oval ();");
 
       /* Init tables. */
 
@@ -3677,33 +3763,4 @@ manage_scap_loaded ()
                     "               AND table_name = 'cves')"
                     " ::integer;",
                     sql_database ());
-}
-
-/* Backup. */
-
-/**
- * @brief Backup the database to a file.
- *
- * @param[in]  database  Name of manage database.
- *
- * @return 0 success, -1 error.
- */
-int
-manage_backup_db (const gchar *database)
-{
-  g_warning ("%s: database backup not supported for Postgres", __FUNCTION__);
-  return -1;
-}
-
-/* Migrator helper. */
-
-/**
- * @brief Dummy for SQLite3 compatibility.
- *
- * @return 0 success, -1 error.
- */
-int
-manage_create_migrate_51_to_52_convert ()
-{
-  return 0;
 }

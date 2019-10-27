@@ -5,13 +5,13 @@
     xmlns:func="http://exslt.org/functions"
     xmlns:str="http://exslt.org/strings"
     xmlns:date="http://exslt.org/dates-and-times"
-    xmlns:openvas="http://openvas.org"
-    extension-element-prefixes="str date func openvas">
+    xmlns:gvm="http://greenbone.net"
+    extension-element-prefixes="str date func gvm">
   <xsl:output method="text" encoding="string" indent="no"/>
   <xsl:strip-space elements="*"/>
 
 <!--
-Copyright (C) 2010-2018 Greenbone Networks GmbH
+Copyright (C) 2010-2019 Greenbone Networks GmbH
 
 SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -32,7 +32,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
 
 <!-- Report stylesheet for NBE format. -->
 
-  <func:function name="openvas:get-nvt-tag">
+  <func:function name="gvm:get-nvt-tag">
     <xsl:param name="tags"/>
     <xsl:param name="name"/>
     <xsl:variable name="after">
@@ -107,87 +107,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
   <xsl:value-of select="substring-after('.', 'cvss_base_vector=')"/>
 </xsl:template>
 
-<xsl:template name="ref_cve_list">
-  <xsl:param name="cvelist"/>
-
-  <xsl:variable name="cvecount" select="count(str:split($cvelist, ','))"/>
-  <xsl:if test="$cvecount &gt; 0">
-    <xsl:text>CVE: </xsl:text>
-    <xsl:for-each select="str:split($cvelist, ',')">
-      <xsl:value-of select="str:replace (normalize-space(.), '&#10;', '\n')"/>
-      <xsl:if test="position() &lt; $cvecount">
-        <xsl:text>, </xsl:text>
-      </xsl:if>
-    </xsl:for-each>
-    <xsl:text>\n</xsl:text>
-  </xsl:if>
-</xsl:template>
-
-<xsl:template name="ref_bid_list">
-  <xsl:param name="bidlist"/>
-
-  <xsl:variable name="bidcount" select="count(str:split($bidlist, ','))"/>
-  <xsl:if test="$bidcount &gt; 0">
-    <xsl:text>BID: </xsl:text>
-    <xsl:for-each select="str:split($bidlist, ',')">
-      <xsl:value-of select="str:replace (., '&#10;', '\n')"/>
-      <xsl:if test="position() &lt; $bidcount">
-        <xsl:text>, </xsl:text>
-      </xsl:if>
-    </xsl:for-each>
-    <xsl:text>\n</xsl:text>
-  </xsl:if>
-</xsl:template>
-
-<xsl:template name="ref_cert_list">
-  <xsl:param name="certlist"/>
-
-  <xsl:variable name="certcount" select="count($certlist/cert_ref)"/>
-
-  <xsl:if test="count($certlist/warning)">
-    <xsl:for-each select="$certlist/warning">
-      <xsl:text>CERT: Warning: </xsl:text>
-      <xsl:value-of select="str:replace (text(), '&#10;', '\n')"/>
-      <xsl:text>\n</xsl:text>
-    </xsl:for-each>
-  </xsl:if>
-
-  <xsl:if test="$certcount &gt; 0">
-    <xsl:text>CERT: </xsl:text>
-    <xsl:for-each select="$certlist/cert_ref">
-      <xsl:value-of select="@id"/>
-      <xsl:if test="position() &lt; $certcount">
-        <xsl:text>, </xsl:text>
-      </xsl:if>
-    </xsl:for-each>
-    <xsl:text>\n</xsl:text>
-  </xsl:if>
-</xsl:template>
-
-<xsl:template name="ref_xref_list">
-  <xsl:param name="xreflist"/>
-
-  <xsl:variable name="xrefcount" select="count(str:split($xreflist, ','))"/>
-  <xsl:if test="$xrefcount &gt; 0">
-    <xsl:for-each select="str:split($xreflist, ',')">
-      <xsl:if test="position()=1">
-        <xsl:text>Other:</xsl:text>
-        <xsl:text>\n</xsl:text>
-      </xsl:if>
-      <xsl:text>    </xsl:text>
-      <xsl:choose>
-        <xsl:when test="contains(., 'URL:')">
-          <xsl:value-of select="str:replace (substring-after(., 'URL:'), '&#10;', '\n')"/>
-        </xsl:when>
-        <xsl:otherwise>
-          <xsl:value-of select="str:replace (., '&#10;', '\n')"/>
-        </xsl:otherwise>
-      </xsl:choose>
-      <xsl:text>\n</xsl:text>
-    </xsl:for-each>
-  </xsl:if>
-</xsl:template>
-
 <xsl:template match="result">
   <xsl:variable name="netmask">
     <xsl:call-template name="substring-before-last">
@@ -211,10 +130,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
   <xsl:text>|</xsl:text>
 
   <!-- Summary -->
-  <xsl:if test="string-length (openvas:get-nvt-tag (nvt/tags, 'summary')) &gt; 0">
+  <xsl:if test="string-length (gvm:get-nvt-tag (nvt/tags, 'summary')) &gt; 0">
     <xsl:text>Summary:</xsl:text>
     <xsl:text>\n</xsl:text>
-    <xsl:value-of select="str:replace (openvas:get-nvt-tag (nvt/tags, 'summary'), '&#10;', '\n')"/>
+    <xsl:value-of select="str:replace (gvm:get-nvt-tag (nvt/tags, 'summary'), '&#10;', '\n')"/>
     <xsl:text>\n\n</xsl:text>
   </xsl:if>
 
@@ -237,36 +156,36 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
   </xsl:choose>
   <xsl:text>\n</xsl:text>
 
-  <xsl:if test="string-length (openvas:get-nvt-tag (nvt/tags, 'impact')) &gt; 0 and openvas:get-nvt-tag (nvt/tags, 'impact') != 'N/A'">
+  <xsl:if test="string-length (gvm:get-nvt-tag (nvt/tags, 'impact')) &gt; 0 and gvm:get-nvt-tag (nvt/tags, 'impact') != 'N/A'">
     <xsl:text>Impact:</xsl:text>
     <xsl:text>\n</xsl:text>
-    <xsl:value-of select="str:replace (openvas:get-nvt-tag (nvt/tags, 'impact'), '&#10;', '\n')"/>
+    <xsl:value-of select="str:replace (gvm:get-nvt-tag (nvt/tags, 'impact'), '&#10;', '\n')"/>
     <xsl:text>\n\n</xsl:text>
   </xsl:if>
 
-  <xsl:if test="(string-length (openvas:get-nvt-tag (nvt/tags, 'solution')) &gt; 0 and openvas:get-nvt-tag (nvt/tags, 'solution') != 'N/A') or (string-length (openvas:get-nvt-tag (nvt/tags, 'solution_type')))">
+  <xsl:if test="(string-length (gvm:get-nvt-tag (nvt/tags, 'solution')) &gt; 0 and gvm:get-nvt-tag (nvt/tags, 'solution') != 'N/A') or (string-length (gvm:get-nvt-tag (nvt/tags, 'solution_type')))">
     <xsl:text>Solution:</xsl:text>
     <xsl:text>\n</xsl:text>
-    <xsl:if test="string-length (openvas:get-nvt-tag (nvt/tags, 'solution_type')) &gt; 0">
+    <xsl:if test="string-length (gvm:get-nvt-tag (nvt/tags, 'solution_type')) &gt; 0">
       <xsl:text>Solution type: </xsl:text>
-      <xsl:value-of select="openvas:get-nvt-tag (nvt/tags, 'solution_type')"/>
+      <xsl:value-of select="gvm:get-nvt-tag (nvt/tags, 'solution_type')"/>
       <xsl:text>\n</xsl:text>
     </xsl:if>
-    <xsl:value-of select="str:replace (openvas:get-nvt-tag (nvt/tags, 'solution'), '&#10;', '\n')"/>
+    <xsl:value-of select="str:replace (gvm:get-nvt-tag (nvt/tags, 'solution'), '&#10;', '\n')"/>
     <xsl:text>\n\n</xsl:text>
   </xsl:if>
 
-  <xsl:if test="string-length (openvas:get-nvt-tag (nvt/tags, 'affected')) &gt; 0 and openvas:get-nvt-tag (nvt/tags, 'affected') != 'N/A'">
+  <xsl:if test="string-length (gvm:get-nvt-tag (nvt/tags, 'affected')) &gt; 0 and gvm:get-nvt-tag (nvt/tags, 'affected') != 'N/A'">
     <xsl:text>Affected Software/OS:</xsl:text>
     <xsl:text>\n</xsl:text>
-    <xsl:value-of select="str:replace (openvas:get-nvt-tag (nvt/tags, 'affected'), '&#10;', '\n')"/>
+    <xsl:value-of select="str:replace (gvm:get-nvt-tag (nvt/tags, 'affected'), '&#10;', '\n')"/>
     <xsl:text>\n\n</xsl:text>
   </xsl:if>
 
-  <xsl:if test="string-length (openvas:get-nvt-tag (nvt/tags, 'insight')) &gt; 0 and openvas:get-nvt-tag (nvt/tags, 'insight') != 'N/A'">
+  <xsl:if test="string-length (gvm:get-nvt-tag (nvt/tags, 'insight')) &gt; 0 and gvm:get-nvt-tag (nvt/tags, 'insight') != 'N/A'">
     <xsl:text>Vulnerability Insight:</xsl:text>
     <xsl:text>\n</xsl:text>
-    <xsl:value-of select="str:replace (openvas:get-nvt-tag (nvt/tags, 'insight'), '&#10;', '\n')"/>
+    <xsl:value-of select="str:replace (gvm:get-nvt-tag (nvt/tags, 'insight'), '&#10;', '\n')"/>
     <xsl:text>\n\n</xsl:text>
   </xsl:if>
 
@@ -279,8 +198,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     </xsl:otherwise>
   </xsl:choose>
   <xsl:text>\n</xsl:text>
-  <xsl:if test="string-length (openvas:get-nvt-tag (nvt/tags, 'vuldetect')) &gt; 0">
-    <xsl:value-of select="str:replace (openvas:get-nvt-tag (nvt/tags, 'vuldetect'), '&#10;', '\n')"/>
+  <xsl:if test="string-length (gvm:get-nvt-tag (nvt/tags, 'vuldetect')) &gt; 0">
+    <xsl:value-of select="str:replace (gvm:get-nvt-tag (nvt/tags, 'vuldetect'), '&#10;', '\n')"/>
     <xsl:text>\n</xsl:text>
   </xsl:if>
   <xsl:text>Details:</xsl:text>
@@ -331,23 +250,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <xsl:text>\n</xsl:text>
   </xsl:if>
 
-  <xsl:variable name="cve_ref">
-    <xsl:if test="nvt/cve != '' and nvt/cve != 'NOCVE'">
-      <xsl:value-of select="nvt/cve/text()"/>
-    </xsl:if>
-  </xsl:variable>
-  <xsl:variable name="bid_ref">
-    <xsl:if test="nvt/bid != '' and nvt/bid != 'NOBID'">
-      <xsl:value-of select="nvt/bid/text()"/>
-    </xsl:if>
-  </xsl:variable>
-  <xsl:variable name="cert_ref" select="nvt/cert"/>
-  <xsl:variable name="xref">
-    <xsl:if test="nvt/xref != '' and nvt/xref != 'NOXREF'">
-      <xsl:value-of select="nvt/xref/text()"/>
-    </xsl:if>
-  </xsl:variable>
-
   <xsl:if test="nvt/cvss_base != ''">
     <xsl:variable name="cvss_base_vector">
       <xsl:for-each select="str:split (nvt/tags, '|')">
@@ -364,21 +266,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <xsl:text>)\n</xsl:text>
   </xsl:if>
 
-  <xsl:if test="$cve_ref != '' or $bid_ref != '' or $xref != '' or count($cert_ref/cert_ref) > 0">
+  <xsl:if test="count(nvt/refs/ref) > 0">
     <xsl:text>References:</xsl:text>
     <xsl:text>\n</xsl:text>
-    <xsl:call-template name="ref_cve_list">
-      <xsl:with-param name="cvelist" select="$cve_ref"/>
-    </xsl:call-template>
-    <xsl:call-template name="ref_bid_list">
-      <xsl:with-param name="bidlist" select="$bid_ref"/>
-    </xsl:call-template>
-    <xsl:call-template name="ref_cert_list">
-      <xsl:with-param name="certlist" select="$cert_ref"/>
-    </xsl:call-template>
-    <xsl:call-template name="ref_xref_list">
-      <xsl:with-param name="xreflist" select="$xref"/>
-    </xsl:call-template>
+    <xsl:for-each select="nvt/refs/ref">
+      <xsl:value-of select="concat(@type, ': ', @id, '\n')"/>
+    </xsl:for-each>
   </xsl:if>
   <xsl:call-template name="newline"/>
 </xsl:template>

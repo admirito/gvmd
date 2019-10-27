@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
-Copyright (C) 2010-2018 Greenbone Networks GmbH
+Copyright (C) 2010-2019 Greenbone Networks GmbH
 
 SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -24,13 +24,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
 <xsl:stylesheet version="1.0"
                 xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
                 xmlns:func="http://exslt.org/functions"
-                xmlns:openvas="http://openvas.org"
+                xmlns:gvm="http://greenbone.net"
                 xmlns:str="http://exslt.org/strings"
                 extension-element-prefixes="func str">
 <xsl:output method="text"
             encoding="string"/>
 
-<func:function name="openvas:report">
+<func:function name="gvm:report">
   <xsl:choose>
     <xsl:when test="count(/report/report) &gt; 0">
       <func:result select="/report/report"/>
@@ -45,7 +45,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
   Add a single quote to strings that could otherwise be interpreted as
   formulas in common spreadsheet software.
 -->
-<func:function name="openvas:formula_quote">
+<func:function name="gvm:formula_quote">
   <xsl:param name="string" select="''"/>
   <xsl:choose>
     <xsl:when test="string(number($string)) != 'NaN'">
@@ -127,41 +127,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
   </xsl:choose>
 </xsl:template>
 
-<!-- Ensure NOCVE is removed -->
-<xsl:template name="cve">
-  <xsl:variable name="cve_list" select="translate(nvt/cve, ',', '')" />
-  <xsl:choose>
-    <xsl:when test="$cve_list = 'NOCVE'"/>
-    <xsl:otherwise>
-      <xsl:value-of select="$cve_list"/>
-    </xsl:otherwise>
-  </xsl:choose>
-</xsl:template>
-
-<!-- Ensure NOBID is removed -->
-<xsl:template name="bid">
-  <xsl:variable name="bid_list" select="translate(nvt/bid, ',', '')" />
-  <xsl:choose>
-    <xsl:when test="$bid_list = 'NOBID'"/>
-    <xsl:otherwise>
-      <xsl:value-of select="$bid_list"/>
-    </xsl:otherwise>
-  </xsl:choose>
-</xsl:template>
-
-<!-- Substitute "Open Port" if the NVT name is empty -->
 <xsl:template name="nvt_name">
   <xsl:variable name="name_without_single_quotes"
                 select="translate(nvt/name, &quot;&apos;&quot;, '')" />
-  <xsl:choose>
-    <xsl:when test="string-length($name_without_single_quotes) > 0">
-      <xsl:value-of select="openvas:formula_quote (str:replace ($name_without_single_quotes, $quote, $two-quotes))"/>
-    </xsl:when>
-    <xsl:otherwise>Open Port</xsl:otherwise>
-  </xsl:choose>
+  <xsl:value-of select="gvm:formula_quote (str:replace ($name_without_single_quotes, $quote, $two-quotes))"/>
 </xsl:template>
 
-<func:function name="openvas:get-nvt-tag">
+<func:function name="gvm:get-nvt-tag">
   <xsl:param name="tags"/>
   <xsl:param name="name"/>
   <xsl:variable name="after">
@@ -183,7 +155,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
 <!-- MATCH RESULT -->
 <xsl:template match="result">
   <xsl:variable name="ip" select="host/text()"/>
-  <xsl:variable name="summary-tag" select="openvas:get-nvt-tag (nvt/tags, 'summary')"/>
+  <xsl:variable name="summary-tag" select="gvm:get-nvt-tag (nvt/tags, 'summary')"/>
   <xsl:variable name="summary">
     <xsl:choose>
       <xsl:when test="string-length ($summary-tag) &gt; 0">
@@ -198,69 +170,79 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <xsl:call-template name="portport" select="port"/>
   </xsl:variable>
 
-  <xsl:value-of select="openvas:formula_quote ($ip)"/>
+  <xsl:value-of select="gvm:formula_quote ($ip)"/>
   <xsl:text>,</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (../../host[ip = $ip]/detail[name = 'hostname']/value)"/>
+  <xsl:value-of select="gvm:formula_quote (../../host[ip = $ip]/detail[name = 'hostname']/value)"/>
   <xsl:text>,</xsl:text>
-  <xsl:value-of select="openvas:formula_quote ($port)"/>
+  <xsl:value-of select="gvm:formula_quote ($port)"/>
   <xsl:text>,</xsl:text>
   <xsl:choose>
     <xsl:when test="string-length ($port) &gt; 0">
-      <xsl:call-template name="portproto" select="openvas:formula_quote (port)"/>
+      <xsl:call-template name="portproto" select="gvm:formula_quote (port)"/>
     </xsl:when>
   </xsl:choose>
   <xsl:text>,</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (severity)"/>
+  <xsl:value-of select="gvm:formula_quote (severity)"/>
   <xsl:text>,</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (threat)"/>
+  <xsl:value-of select="gvm:formula_quote (threat)"/>
   <xsl:text>,"</xsl:text>
-  <xsl:if test="openvas:get-nvt-tag (nvt/tags, 'solution_type') != ''">
-    <xsl:value-of select="openvas:formula_quote (str:replace (openvas:get-nvt-tag (nvt/tags, 'solution_type'), $quote, $two-quotes))"/>
+  <xsl:if test="gvm:get-nvt-tag (nvt/tags, 'solution_type') != ''">
+    <xsl:value-of select="gvm:formula_quote (str:replace (gvm:get-nvt-tag (nvt/tags, 'solution_type'), $quote, $two-quotes))"/>
   </xsl:if>
   <xsl:text>","</xsl:text>
   <xsl:call-template name="nvt_name"/>
   <xsl:text>","</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (str:replace ($summary, $quote, $two-quotes))"/>
+  <xsl:value-of select="gvm:formula_quote (str:replace ($summary, $quote, $two-quotes))"/>
   <xsl:text>","</xsl:text>
   <xsl:choose>
     <xsl:when test="string-length (description) &lt; 2">
       <xsl:text>Vulnerability was detected according to the Vulnerability Detection Method.</xsl:text>
     </xsl:when>
     <xsl:otherwise>
-      <xsl:value-of select="openvas:formula_quote (str:replace (description, $quote, $two-quotes))"/>
+      <xsl:value-of select="gvm:formula_quote (str:replace (description, $quote, $two-quotes))"/>
     </xsl:otherwise>
   </xsl:choose>
   <xsl:text>",</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (nvt/@oid)"/>
-  <xsl:text>,"</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (nvt/cve)"/>
+  <xsl:value-of select="gvm:formula_quote (nvt/@oid)"/>
+
+  <xsl:text>,"</xsl:text> <!-- column "CVEs" -->
+
+  <xsl:variable name="cell_cves">
+    <xsl:for-each select="nvt/refs/ref[@type = 'cve']">
+      <xsl:value-of select="str:replace (@id, $quote, $two-quotes)"/>
+      <xsl:text>,</xsl:text>
+    </xsl:for-each>
+  </xsl:variable>
+  <xsl:value-of select="gvm:formula_quote (substring ($cell_cves, 0, string-length($cell_cves)))"/>
+
   <xsl:text>",</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (../../task/@id)"/>
+
+  <xsl:value-of select="gvm:formula_quote (../../task/@id)"/>
   <xsl:text>,"</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (str:replace (../../task/name, $quote, $two-quotes))"/>
+  <xsl:value-of select="gvm:formula_quote (str:replace (../../task/name, $quote, $two-quotes))"/>
   <xsl:text>",</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (../../host[ip = $ip]/start)"/>
+  <xsl:value-of select="gvm:formula_quote (../../host[ip = $ip]/start)"/>
   <xsl:text>,</xsl:text>
-  <xsl:value-of select="openvas:formula_quote (@id)"/>
+  <xsl:value-of select="gvm:formula_quote (@id)"/>
   <xsl:text>,"</xsl:text>
-  <xsl:if test="openvas:get-nvt-tag (nvt/tags, 'impact') != 'N/A'">
-    <xsl:value-of select="openvas:formula_quote (str:replace (openvas:get-nvt-tag (nvt/tags, 'impact'), $quote, $two-quotes))"/>
+  <xsl:if test="gvm:get-nvt-tag (nvt/tags, 'impact') != 'N/A'">
+    <xsl:value-of select="gvm:formula_quote (str:replace (gvm:get-nvt-tag (nvt/tags, 'impact'), $quote, $two-quotes))"/>
   </xsl:if>
   <xsl:text>","</xsl:text>
-  <xsl:if test="openvas:get-nvt-tag (nvt/tags, 'solution') != 'N/A'">
-    <xsl:value-of select="openvas:formula_quote (str:replace (openvas:get-nvt-tag (nvt/tags, 'solution'), $quote, $two-quotes))"/>
+  <xsl:if test="gvm:get-nvt-tag (nvt/tags, 'solution') != 'N/A'">
+    <xsl:value-of select="gvm:formula_quote (str:replace (gvm:get-nvt-tag (nvt/tags, 'solution'), $quote, $two-quotes))"/>
   </xsl:if>
   <xsl:text>","</xsl:text>
-  <xsl:if test="openvas:get-nvt-tag (nvt/tags, 'affected') != 'N/A'">
-    <xsl:value-of select="openvas:formula_quote (str:replace (openvas:get-nvt-tag (nvt/tags, 'affected'), $quote, $two-quotes))"/>
+  <xsl:if test="gvm:get-nvt-tag (nvt/tags, 'affected') != 'N/A'">
+    <xsl:value-of select="gvm:formula_quote (str:replace (gvm:get-nvt-tag (nvt/tags, 'affected'), $quote, $two-quotes))"/>
   </xsl:if>
   <xsl:text>","</xsl:text>
-  <xsl:if test="openvas:get-nvt-tag (nvt/tags, 'insight') != 'N/A'">
-    <xsl:value-of select="openvas:formula_quote (str:replace (openvas:get-nvt-tag (nvt/tags, 'insight'), $quote, $two-quotes))"/>
+  <xsl:if test="gvm:get-nvt-tag (nvt/tags, 'insight') != 'N/A'">
+    <xsl:value-of select="gvm:formula_quote (str:replace (gvm:get-nvt-tag (nvt/tags, 'insight'), $quote, $two-quotes))"/>
   </xsl:if>
   <xsl:text>","</xsl:text>
-  <xsl:if test="openvas:get-nvt-tag (nvt/tags, 'vuldetect') != 'N/A'">
-    <xsl:value-of select="openvas:formula_quote (str:replace (openvas:get-nvt-tag (nvt/tags, 'vuldetect'), $quote, $two-quotes))"/>
+  <xsl:if test="gvm:get-nvt-tag (nvt/tags, 'vuldetect') != 'N/A'">
+    <xsl:value-of select="gvm:formula_quote (str:replace (gvm:get-nvt-tag (nvt/tags, 'vuldetect'), $quote, $two-quotes))"/>
     <xsl:call-template name="newline"/>
     <xsl:text>Details:</xsl:text>
     <xsl:call-template name="newline"/>
@@ -274,11 +256,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
         <xsl:variable name="max" select="77"/>
         <xsl:choose>
           <xsl:when test="string-length(nvt/name) &gt; $max">
-            <xsl:value-of select="openvas:formula_quote (str:replace (substring (nvt/name, 0, $max), $quote, $two-quotes))"/>
+            <xsl:value-of select="gvm:formula_quote (str:replace (substring (nvt/name, 0, $max), $quote, $two-quotes))"/>
             <xsl:text>...</xsl:text>
           </xsl:when>
           <xsl:otherwise>
-            <xsl:value-of select="openvas:formula_quote (str:replace (nvt/name, $quote, $two-quotes))"/>
+            <xsl:value-of select="gvm:formula_quote (str:replace (nvt/name, $quote, $two-quotes))"/>
           </xsl:otherwise>
         </xsl:choose>
         <xsl:call-template name="newline"/>
@@ -307,62 +289,41 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <xsl:text>)</xsl:text>
     <xsl:call-template name="newline"/>
   </xsl:if>
-  <xsl:text>","</xsl:text>
-  <xsl:if test="nvt/bid != '' and nvt/bid != 'NOBID'">
-    <xsl:variable name="bidlist" select="nvt/bid/text()"/>
-    <xsl:variable name="bidcount" select="count (str:split($bidlist, ','))"/>
-    <xsl:variable name="new_bidlist">
-      <xsl:for-each select="str:split ($bidlist, ',')">
-        <xsl:value-of select="str:replace (., $quote, $two-quotes)"/>
-        <xsl:if test="position() &lt; $bidcount">
-          <xsl:text>, </xsl:text>
-        </xsl:if>
-      </xsl:for-each>
-    </xsl:variable>
-    <xsl:value-of select="openvas:formula_quote ($new_bidlist)"/>
-  </xsl:if>
-  <xsl:text>","</xsl:text>
-  <xsl:if test="count(nvt/cert/cert_ref) &gt; 0">
-    <xsl:variable name="certlist" select="nvt/cert"/>
-    <xsl:variable name="certcount" select="count ($certlist/cert_ref)"/>
-    <xsl:variable name="new_certlist">
-      <xsl:for-each select="$certlist/warning">
-        <xsl:text>Warning: </xsl:text>
-        <xsl:value-of select="str:replace (text(), $quote, $two-quotes)"/>
-        <xsl:call-template name="newline"/>
-      </xsl:for-each>
-      <xsl:if test="$certcount &gt; 0">
-        <xsl:for-each select="$certlist/cert_ref">
-          <xsl:value-of select="str:replace (@id, $quote, $two-quotes)"/>
-          <xsl:if test="position() &lt; $certcount">
-            <xsl:text>, </xsl:text>
-          </xsl:if>
-        </xsl:for-each>
-      </xsl:if>
-    </xsl:variable>
-    <xsl:value-of select="openvas:formula_quote ($new_certlist)"/>
-  </xsl:if>
-  <xsl:text>","</xsl:text>
-  <xsl:if test="nvt/xref != '' and nvt/xref != 'NOXREF'">
-    <xsl:variable name="xreflist" select="nvt/xref/text()"/>
-    <xsl:variable name="xrefcount" select="count (str:split ($xreflist, ','))"/>
-    <xsl:variable name="new_xreflist">
-      <xsl:for-each select="str:split ($xreflist, ',')">
-        <xsl:choose>
-          <xsl:when test="contains(., 'URL:')">
-            <xsl:value-of select="str:replace (substring-after (., 'URL:'), $quote, $two-quotes)"/>
-          </xsl:when>
-          <xsl:otherwise>
-            <xsl:value-of select="str:replace (., $quote, $two-quotes)"/>
-          </xsl:otherwise>
-        </xsl:choose>
-        <xsl:if test="position() &lt; $xrefcount">
-          <xsl:text>, </xsl:text>
-        </xsl:if>
-      </xsl:for-each>
-    </xsl:variable>
-    <xsl:value-of select="openvas:formula_quote ($new_xreflist)"/>
-  </xsl:if>
+
+  <xsl:text>","</xsl:text> <!-- column "BIDs" -->
+
+  <xsl:variable name="cell_bids">
+    <xsl:for-each select="nvt/refs/ref[@type = 'bid']">
+      <xsl:value-of select="str:replace (@id, $quote, $two-quotes)"/>
+      <xsl:text>,</xsl:text>
+    </xsl:for-each>
+  </xsl:variable>
+  <xsl:value-of select="gvm:formula_quote (substring ($cell_bids, 0, string-length($cell_bids)))"/>
+
+  <xsl:text>","</xsl:text> <!-- column "CERTs" -->
+
+  <xsl:variable name="cell_certs">
+    <xsl:for-each select="nvt/refs/ref[@type = 'dfn-cert']">
+      <xsl:value-of select="@id"/>
+      <xsl:text>,</xsl:text>
+    </xsl:for-each>
+    <xsl:for-each select="nvt/refs/ref[@type = 'cert-bund']">
+      <xsl:value-of select="str:replace (@id, $quote, $two-quotes)"/>
+      <xsl:text>,</xsl:text>
+    </xsl:for-each>
+  </xsl:variable>
+  <xsl:value-of select="gvm:formula_quote (substring ($cell_certs, 0, string-length($cell_certs)))"/>
+
+  <xsl:text>","</xsl:text> <!-- column "Other References" -->
+
+  <xsl:variable name="cell_urls">
+    <xsl:for-each select="nvt/refs/ref[@type = 'URL']">
+      <xsl:value-of select="str:replace (@id, $quote, $two-quotes)"/>
+      <xsl:text>,</xsl:text>
+    </xsl:for-each>
+  </xsl:variable>
+  <xsl:value-of select="gvm:formula_quote (substring ($cell_urls, 0, string-length($cell_urls)))"/>
+
   <xsl:text>"</xsl:text>
   <xsl:text>
 </xsl:text>
