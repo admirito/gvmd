@@ -59,9 +59,6 @@ time_t
 next_time (time_t, int, int, int, const char *, int);
 
 int
-parse_time (const gchar *, int *);
-
-int
 manage_count_hosts_max (const char *, const char *, int);
 
 double
@@ -77,20 +74,13 @@ int
 hosts_str_contains (const char *, const char *, int);
 
 icalcomponent *
-icalendar_from_old_schedule_data (time_t,
-                                  time_t,
-                                  time_t,
-                                  time_t,
-                                  int,
-                                  const char *);
+icalendar_from_old_schedule_data (time_t, time_t, time_t, time_t, int);
 
 icalcomponent *
 icalendar_from_string (const char *, gchar **);
 
 int
-icalendar_approximate_rrule_from_vcalendar (icalcomponent *,
-                                            time_t *,
-                                            time_t *,
+icalendar_approximate_rrule_from_vcalendar (icalcomponent *, time_t *, time_t *,
                                             int *);
 
 time_t

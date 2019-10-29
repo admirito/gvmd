@@ -35,7 +35,8 @@
 /**
  * @brief Insert a port range.
  */
-#define RANGE(type, start, end) insert_port_range (list, type, start, end)
+#define RANGE(type, start, end)                                      \
+  insert_port_range (list, type, start, end)
 
 /**
  * @brief Make port ranges for IANA TCP and UDP 2012.

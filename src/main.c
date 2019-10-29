@@ -18,30 +18,24 @@
  */
 
 /**
- * @file comm.h
- * @brief Protos for communication between gvmd and openvassd.
+ * @file  main.c
+ * @brief Main function of gvmd.
  *
- * This file contains the protos for \ref comm.c
+ * This file separates out the "main" function of gvmd.
  */
 
-#ifndef _GVMD_COMM_H
-#define _GVMD_COMM_H
+#include "gvmd.h"
 
-#include <glib.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-
+/**
+ * @brief Main function.
+ *
+ * @param[in]  argc  The number of arguments in argv.
+ * @param[in]  argv  The list of arguments to the program.
+ *
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on failure.
+ */
 int
-send_to_server (const char *);
-
-int
-sendf_to_server (const char *, ...);
-
-int
-sendn_to_server (const void *, size_t);
-
-unsigned int
-to_server_buffer_space ();
-
-#endif /* not _GVMD_COMM_H */
+main (int argc, char **argv)
+{
+  return gvmd (argc, argv);
+}

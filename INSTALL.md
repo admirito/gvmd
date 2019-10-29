@@ -1,5 +1,4 @@
-INSTALLATION INSTRUCTIONS FOR GREENBONE VULNERABILITY MANAGER
-=============================================================
+# INSTALLATION INSTRUCTIONS FOR GREENBONE VULNERABILITY MANAGER
 
 Please note: The reference system used by most of the developers is Debian
 GNU/Linux 'Stretch' 9. The build might fail on any other system. Also, it is
@@ -11,15 +10,14 @@ consider the section "Migrating to Version 8.0", unless you do not have
 an old setup on your system.
 
 
-Prerequisites for Greenbone Vulnerability Manager
--------------------------------------------------
+## Prerequisites for Greenbone Vulnerability Manager
 
 Prerequisites:
 * cmake >= 3.0
 * glib-2.0 >= 2.42
 * gnutls >= 3.2.15
-* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 10.0.0
-* sqlite3 library >= 3.8.3 or PostgreSQL database
+* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 11.0.0
+* PostgreSQL database
 * pkg-config
 * libical >= 1.0.0
 
@@ -34,18 +32,8 @@ Prerequisites for building documentation:
 Please see the section "Prerequisites for Optional Features" below additional
 optional prerequisites.
 
-Install prerequisites on Debian GNU/Linux 'Stretch' 9:
-For SQLite backend:
 
-    apt-get install libsqlite3-dev
-
-For PostgreSQL backend:
-
-    apt-get install libpq-dev postgresql-server-dev-9.6
-
-
-Compiling Greenbone Vulnerability Manager
------------------------------------------
+## Compiling Greenbone Vulnerability Manager
 
 If you have installed required libraries to a non-standard location, remember to
 set the `PKG_CONFIG_PATH` environment variable to the location of you pkg-config
@@ -83,8 +71,7 @@ To clean up the build environment, simply remove the contents of the `build`
 directory you created above.
 
 
-Choosing the Connection Type
------------------------------
+## Choosing the Connection Type
 
 Greenbone Vulnerability Manager can serve client connections on either a TCP
 socket or a UNIX domain socket.
@@ -102,8 +89,7 @@ To use a TCP socket, call gvmd with the --listen option, for example:
     gvmd --listen=127.0.0.1
 
 
-Certificate Generation
-----------------------
+## Certificate Generation
 
 All TCP-based communication with Greenbone Vulnerability Manager uses the TLS
 protocol to establish secure connections and for authentication and
@@ -128,22 +114,148 @@ certificates for scanners, please see also section `Updating Scanner
 Certificates`.
 
 
-Choosing the Database Backend
------------------------------
+## Configure PostgreSQL Database Backend
 
-Greenbone Vulnerability Manager can use either SQLite or PostgreSQL as the
-database backend.
+### Setting up the PostgreSQL database
 
-SQLite is the default and as a prerequisite you need to have
-the sqlite3 library installed. No further configuration
-is required, the database is created automatically.
+1.  Install Postgres.
 
-In order to use PostgreSQL as database backend, follow the
-instructions given in file [doc/postgres-HOWTO](doc/postgres-HOWTO).
+	  (Debian: postgresql, postgresql-contrib, postgresql-server-dev-9.6).
+
+    ```sh
+    apt install postgresql postgresql-contrib postgresql-server-dev-all
+    ```
+
+2.  Run cmake and build gvmd as usual.
+
+3.  Setup Postgres User and DB (`/usr/share/doc/postgresql-common/README.Debian.gz`)
+
+    ```sh
+    sudo -u postgres bash
+    createuser -DRS mattm       # mattm is your OS login name
+    createdb -O mattm gvmd
+    ```
+
+4.  Setup permissions.
+
+    ```sh
+    sudo -u postgres bash  # if you logged out after step 4
+    psql gvmd
+    create role dba with superuser noinherit;
+    grant dba to mattm;    # mattm is the user created in step 4
+    ```
+
+5.  Create DB extension (also necessary when the database got dropped).
+
+    ```sh
+    sudo -u postgres bash  # if you logged out after step 5
+    psql gvmd
+    create extension "uuid-ossp";
+    ```
+
+6.  Make Postgres aware of the gvm libraries if not installed
+    in a ld-aware directory. For example create file `/etc/ld.so.conf.d/gvm.conf`
+    with appropriate path and then run `ldconfig`.
+
+7.  If you wish to migrate from SQLite, follow the next section before running
+    Manager.
+
+8.  Run Manager as usual.
+
+9. To run SQL on the database.
+
+    ```sh
+    psql gvmd
+    ```
+
+### Migrating from SQLite to PostgreSQL
+
+GVM-10 was last release where gvmd supports SQLite. GVM-11
+supports exclusively PostgreSQL. If you worked with SQLite before
+and want to keep your data, you need to migrate the data to
+PostgreSQL. 
+
+1.  Run `gvm-migrate-to-postgres` into a clean newly created PostgreSQL database
+    like described above.
+
+    If you accidentally already rebuilt the database or for other reasons
+    want to start from scratch, drop the database and repeat the process
+    described above.  It is essentially important that you do not start
+    Manager before the migration as it would create a fresh one and therefore
+    prevent migration.
+
+    Note that the migrate script will modify the SQLite database to clean
+    up errors. So it's a good idea to make a backup in case anything goes
+    wrong.
+
+2.  Run `greenbone-scapdata-sync`.
+
+3.  Run `greenbone-certdata-sync`.
 
 
-Migrating to Version 8.0
-------------------------
+### Switching between releases
+
+There are two factors for developers to consider when switching between
+releases:
+
+1.  gvmd uses C server-side extensions that link to gvm-libs, so Postgres
+    needs to be able to find the version of gvm-libs that goes with gvmd.
+
+    One way to do this is to modify `ld.so.conf` and run `ldconfig` after
+    installing the desired gvmd version.
+
+2.  The Postgres database "gvmd" must be the version that is supported by
+    gvmd. If it is too high, gvmd will refuse to run.  If it is too low
+    gvmd will only run if the database is migrated to the higher version.
+
+    One way to handle this is to switch between different versions of the
+    database using RENAME:
+
+    ```sh
+    sudo -u postgres psql -q --command='ALTER DATABASE gvmd RENAME TO gvmd_10;'
+    sudo -u postgres psql -q --command='ALTER DATABASE gvmd_master RENAME TO gvmd;'
+    ```
+
+    Note that for OpenVAS-9 the database name is "tasks", so this step is not
+    necessary.
+
+
+### Analyzing the size of the tables
+
+In case the database grows in size and you want to understand
+which of the tables is responsible for it, there are two queries
+to check table sizes:
+
+Biggest relations:
+
+```sql
+SELECT nspname || '.' || relname AS "relation",
+    pg_size_pretty(pg_relation_size(C.oid)) AS "size"
+  FROM pg_class C
+  LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
+  WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY pg_relation_size(C.oid) DESC
+  LIMIT 20;
+```
+
+Biggest tables:
+
+```sql
+SELECT nspname || '.' || relname AS "relation",
+    pg_size_pretty(pg_total_relation_size(C.oid)) AS "total_size"
+  FROM pg_class C
+  LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
+  WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+    AND C.relkind <> 'i'
+    AND nspname !~ '^pg_toast'
+  ORDER BY pg_total_relation_size(C.oid) DESC
+  LIMIT 20;
+```
+
+These queries were taken from https://wiki.postgresql.org/wiki/Disk_Usage
+
+
+## Migrating to Version 8.0
 
 Before starting gvmd 8.0 for the first time you need to move some files to the
 new locations where they are expected now.  If you do not do this, the files are
@@ -161,8 +273,14 @@ properly.
    If the `gsf-access-key` file was already migrated for the `openvas-scanner`
    module it can be removed from the `$prefix/etc/openvas/` directory.
 
- - move ´$prefix/var/lib/openvas/scap-data`` to
-   $prefix/var/lib/gvm/scap-data
+ - move `$prefix/var/lib/openvas/scap-data/scap.db` to
+   `$prefix/var/lib/gvm/gvmd/scap/`
+
+ - move `$prefix/var/lib/openvas/cert-data/cert.db` to
+   `$prefix/var/lib/gvm/gvmd/cert/`
+
+ - move `$prefix/var/lib/openvas/scap-data` to
+   `$prefix/var/lib/gvm/scap-data`
 
  - move `$prefix/var/lib/openvas/cert-data` to
    `$prefix/var/lib/gvm/cert-data`
@@ -180,12 +298,13 @@ properly.
    `$prefix/var/lib/gvm/gvmd/gvmd.db`
 
  - (Postgres backend only) rename database to `gvmd`:
-       sudo -u postgres sh
-       psql --command='ALTER DATABASE tasks RENAME TO gvmd;'
+    ```
+    sudo -u postgres sh
+    psql --command='ALTER DATABASE tasks RENAME TO gvmd;'
+    ```
 
 
-Migrating the Database
-----------------------
+## Migrating the Database
 
 If you have used Manager before, you might need to migrate the database to the
 current data model. Use this command to run the migration:
@@ -193,8 +312,7 @@ current data model. Use this command to run the migration:
     gvmd --migrate
 
 
-Creating an administrator user for GVM
---------------------------------------
+## Creating an administrator user for GVM
 
 You can create an administrator user with the `--create-user` option of `gvmd`:
 
@@ -208,8 +326,7 @@ clients like the Greenbone Security Assistant (GSA).
 Also, the new user can change their password via GSA.
 
 
-Logging Configuration
----------------------
+## Logging Configuration
 
 By default, Manager writes logs to the file
 
@@ -253,8 +370,7 @@ Logging to `syslog` can be enabled in each domain like:
     level=128
 
 
-Optimizing the database
------------------------
+## Optimizing the database
 
 Greenbone Vulnerability Manager offers the command line option
 `--optimize=<name>` to run various optimization of the database. The currently
@@ -289,6 +405,12 @@ supported values for `<name>` are:
   format `telnet (23/tcp)`, reducing it to the new format `23/tcp`.
   This makes filtering results and delta reports more consistent.
 
+- `cleanup-report-formats`
+
+  This cleans up references to report formats that have been removed without
+  using the DELETE_REPORT_FORMAT GMP command, for example after a built-in
+  report format has been removed.
+
 - `cleanup-result-severities`
 
   This cleans up results with no severity by assigning the default
@@ -308,8 +430,7 @@ supported values for `<name>` are:
   that are not cached yet.
 
 
-Import/Update IANA Services Names
----------------------------------
+## Import/Update IANA Services Names
 
 If you want the Manager to resolve port names when outputting reports for
 instance, you need to import the information from a Services Names list.
@@ -333,8 +454,7 @@ update the information in the database from a newer list.
 Currently, the helper tool supports only the official IANA Services Names list.
 
 
-Encrypted Credentials
----------------------
+## Encrypted Credentials
 
 By default, the Manager stores private key and password parts of target
 credentials encrypted in the database.  This avoids leaking such keys
@@ -392,8 +512,7 @@ are not desired, the manager must _always_ be started with the option
 `--disable-encrypted-credentials`.
 
 
-Resetting Credentials Encryption Key
-------------------------------------
+## Resetting Credentials Encryption Key
 
 If you lost some part of the encryption key, neither a regular migration nor
 a simple creation might work.
@@ -421,8 +540,7 @@ Create a new key:
 Finally, reset all credentials, by hand.
 
 
-Migrating Encrypted Credentials from Manager prior version 6.0
---------------------------------------------------------------
+## Migrating Encrypted Credentials from Manager prior version 6.0
 
 Please consult the INSTALL file of version 6.0 for detailed
 information about the migration of encrypted credentials.
@@ -430,8 +548,7 @@ information about the migration of encrypted credentials.
 From version 6.0 on the migration is seamless.
 
 
-Updating Scanner Certificates
------------------------------
+## Updating Scanner Certificates
 
 If you have changed the CA certificate used to sign the server and client
 certificates or the client certificate itself you will need to update the
@@ -480,8 +597,7 @@ UUID is the fixed one of the immutable global setting for the default
 CA certificate and thus does not need to be changed.
 
 
-Changing the Maximum Number of Rows per Page
---------------------------------------------
+## Changing the Maximum Number of Rows per Page
 
 The maximum number of rows returned by the GMP `GET` commands, like `GET_TARGETS`,
 is controlled by the GMP setting "Max Rows Per Page".  This setting is an upper
@@ -501,13 +617,18 @@ Adding `--user` to the command will set a value for maximum rows only for that
 user.
 
 
-Prerequisites for Optional Features
------------------------------------
+## Prerequisites for Optional Features
 
 Certain features of the Manager also require some programs at run time:
 
 Prerequisites for generating PDF reports:
 * pdflatex
+
+  On Debian GNU/Linux 'Stretch' 9 the following packages can be installed to
+  fulfill this prerequisite:
+
+      apt-get install texlive-latex-extra --no-install-recommends
+      apt-get install texlive-fonts-recommended
 
 Prerequisites for generating HTML reports:
 * xsltproc
@@ -578,8 +699,7 @@ Prerequisites for key generation on systems with low entropy:
 * haveged (or a similar tool)
 
 
-Static code analysis with the Clang Static Analyzer
----------------------------------------------------
+## Static code analysis with the Clang Static Analyzer
 
 If you want to use the Clang Static Analyzer (https://clang-analyzer.llvm.org/)
 to do a static code analysis, you can do so by prefixing the configuration and

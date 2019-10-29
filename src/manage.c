@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2018 Greenbone Networks GmbH
+/* Copyright (C) 2009-2019 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
@@ -19,15 +19,18 @@
 
 /**
  * @file  manage.c
- * @brief The Greenbone Vulnerability Manager management library.
+ * @brief The Greenbone Vulnerability Manager management layer.
  *
- * This file defines a management library, for implementing
+ * This file defines a management layer, for implementing
  * Managers such as the Greenbone Vulnerability Manager daemon.
  *
- * This library provides facilities for storing and manipulating credential
- * and task information, and manipulating reports.  Task manipulation
- * includes sending task commands to the OTP server (the "scanner") that is
- * running the tasks.
+ * This layer provides facilities for storing and manipulating user
+ * data (credentials, targets, tasks, reports, schedules, roles, etc)
+ * and general security data (NVTs, CVEs, etc).
+ * Task manipulation includes controlling external facilities such as
+ * OSP scanners.
+ *
+ * Simply put, the daemon's GMP implementation uses this layer to do the work.
  */
 
 /**
@@ -45,32 +48,23 @@
 #define _GNU_SOURCE
 
 #include "manage.h"
-
-#include "comm.h"
 #include "manage_acl.h"
 #include "manage_sql.h"
-#include "manage_sql_nvts.h"
 #include "manage_sql_secinfo.h"
+#include "manage_sql_nvts.h"
 #include "manage_sql_tickets.h"
-#include "scanner.h"
+#include "manage_sql_tls_certificates.h"
 #include "utils.h"
 
 #include <assert.h>
 #include <ctype.h>
-#include <dirent.h>
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <glib.h>
 #include <gnutls/x509.h> /* for gnutls_x509_crt_... */
-#include <gvm/base/cvss.h>
-#include <gvm/base/hosts.h>
-#include <gvm/base/proctitle.h>
-#include <gvm/gmp/gmp.h>
-#include <gvm/util/fileutils.h>
-#include <gvm/util/serverutils.h>
-#include <gvm/util/uuidutils.h>
-#include <locale.h>
 #include <math.h>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,6 +75,14 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <gvm/base/hosts.h>
+#include <gvm/base/proctitle.h>
+#include <gvm/osp/osp.h>
+#include <gvm/util/fileutils.h>
+#include <gvm/util/serverutils.h>
+#include <gvm/util/uuidutils.h>
+#include <gvm/gmp/gmp.h>
 
 #undef G_LOG_DOMAIN
 /**
@@ -163,10 +165,16 @@
 extern volatile int termination_signal;
 
 /**
+ * @brief Path to the relay mapper executable, NULL to disable relays.
+ */
+static gchar *relay_mapper_path = NULL;
+
+/**
  * @brief Number of minutes before overdue tasks timeout.
  */
 static int schedule_timeout = SCHEDULE_TIMEOUT_DEFAULT;
 
+
 /* Certificate and key management. */
 
 /**
@@ -177,7 +185,7 @@ static int schedule_timeout = SCHEDULE_TIMEOUT_DEFAULT;
  * @return  The truncated certificate as a newly allocated string or NULL.
  */
 gchar *
-truncate_certificate (const gchar *certificate)
+truncate_certificate (const gchar* certificate)
 {
   GString *cert_buffer;
   gchar *current_pos, *cert_start, *cert_end;
@@ -189,10 +197,12 @@ truncate_certificate (const gchar *certificate)
     {
       cert_start = NULL;
       cert_end = NULL;
-      if (g_str_has_prefix (current_pos, "-----BEGIN CERTIFICATE-----"))
+      if (g_str_has_prefix (current_pos,
+                            "-----BEGIN CERTIFICATE-----"))
         {
           cert_start = current_pos;
-          cert_end = strstr (cert_start, "-----END CERTIFICATE-----");
+          cert_end = strstr (cert_start,
+                             "-----END CERTIFICATE-----");
           if (cert_end)
             cert_end += strlen ("-----END CERTIFICATE-----");
           else
@@ -202,16 +212,19 @@ truncate_certificate (const gchar *certificate)
                                  "-----BEGIN TRUSTED CERTIFICATE-----"))
         {
           cert_start = current_pos;
-          cert_end = strstr (cert_start, "-----END TRUSTED CERTIFICATE-----");
+          cert_end = strstr (cert_start,
+                             "-----END TRUSTED CERTIFICATE-----");
           if (cert_end)
             cert_end += strlen ("-----END TRUSTED CERTIFICATE-----");
           else
             done = TRUE;
         }
-      else if (g_str_has_prefix (current_pos, "-----BEGIN PKCS7-----"))
+      else if (g_str_has_prefix (current_pos,
+                                 "-----BEGIN PKCS7-----"))
         {
           cert_start = current_pos;
-          cert_end = strstr (cert_start, "-----END PKCS7-----");
+          cert_end = strstr (cert_start,
+                             "-----END PKCS7-----");
           if (cert_end)
             cert_end += strlen ("-----END PKCS7-----");
           else
@@ -237,7 +250,7 @@ truncate_certificate (const gchar *certificate)
  * @return  The truncated private key as a newly allocated string or NULL.
  */
 gchar *
-truncate_private_key (const gchar *private_key)
+truncate_private_key (const gchar* private_key)
 {
   gchar *key_start, *key_end;
   key_end = NULL;
@@ -292,67 +305,109 @@ truncate_private_key (const gchar *private_key)
 /**
  * @brief Gathers info from a certificate.
  *
- * @param[in]  certificate      The certificate to get data from.
- * @param[out] activation_time  Pointer to write activation time to.
- * @param[out] expiration_time  Pointer to write expiration time to.
- * @param[out] fingerprint      Pointer for newly allocated fingerprint.
- * @param[out] issuer           Pointer for newly allocated issuer DN.
+ * @param[in]  certificate        The certificate to get data from.
+ * @param[in]  certificate_len    Length of certificate, -1: null-terminated
+ * @param[out] activation_time    Pointer to write activation time to.
+ * @param[out] expiration_time    Pointer to write expiration time to.
+ * @param[out] md5_fingerprint    Pointer for newly allocated MD5 fingerprint.
+ * @param[out] sha256_fingerprint Pointer for newly allocated SHA-256
+ *                                fingerprint.
+ * @param[out] subject            Pointer for newly allocated subject DN.
+ * @param[out] issuer             Pointer for newly allocated issuer DN.
+ * @param[out] serial             Pointer for newly allocated serial.
+ * @param[out] certificate_format Pointer to certificate format.
  *
  * @return 0 success, -1 error.
  */
 int
-get_certificate_info (const gchar *certificate,
-                      time_t *activation_time,
-                      time_t *expiration_time,
-                      gchar **fingerprint,
-                      gchar **issuer)
+get_certificate_info (const gchar* certificate, gssize certificate_len,
+                      time_t* activation_time, time_t* expiration_time,
+                      gchar** md5_fingerprint, gchar **sha256_fingerprint,
+                      gchar **subject, gchar** issuer, gchar **serial,
+                      gnutls_x509_crt_fmt_t *certificate_format)
 {
   gchar *cert_truncated;
+  gnutls_x509_crt_fmt_t certificate_format_internal;
 
   cert_truncated = NULL;
   if (activation_time)
     *activation_time = -1;
   if (expiration_time)
     *expiration_time = -1;
-  if (fingerprint)
-    *fingerprint = NULL;
+  if (md5_fingerprint)
+    *md5_fingerprint = NULL;
+  if (sha256_fingerprint)
+    *sha256_fingerprint = NULL;
+  if (subject)
+    *subject = NULL;
   if (issuer)
     *issuer = NULL;
+  if (serial)
+    *serial = NULL;
+  if (certificate_format)
+    *certificate_format = GNUTLS_X509_FMT_DER;
 
   if (certificate)
     {
       int err;
       gnutls_datum_t cert_datum;
       gnutls_x509_crt_t gnutls_cert;
+      static const gchar* begin_str = "-----BEGIN ";
 
-      cert_truncated = truncate_certificate (certificate);
-      if (cert_truncated == NULL)
+      if (g_strstr_len (certificate, certificate_len, begin_str))
         {
-          return -1;
+          cert_truncated = truncate_certificate (certificate);
+          if (cert_truncated == NULL)
+            {
+              return -1;
+            }
+          certificate_format_internal = GNUTLS_X509_FMT_PEM;
         }
-      cert_datum.data = (unsigned char *) cert_truncated;
-      cert_datum.size = strlen (cert_truncated);
+      else
+        {
+          if (certificate_len < 0)
+            {
+              g_warning ("%s: PEM encoded certificate expected if"
+                         " certificate_length is negative",
+                         __FUNCTION__);
+              return -1;
+            }
+
+          cert_truncated = g_memdup (certificate, certificate_len);
+          certificate_format_internal = GNUTLS_X509_FMT_DER;
+        }
+
+      cert_datum.data = (unsigned char*) cert_truncated;
+      if (certificate_len < 0)
+        cert_datum.size = strlen (cert_truncated);
+      else
+        cert_datum.size = certificate_len;
 
       gnutls_x509_crt_init (&gnutls_cert);
-      err =
-        gnutls_x509_crt_import (gnutls_cert, &cert_datum, GNUTLS_X509_FMT_PEM);
+      err = gnutls_x509_crt_import (gnutls_cert, &cert_datum,
+                                    certificate_format_internal);
       if (err)
         {
           g_free (cert_truncated);
           return -1;
         }
 
+      if (certificate_format)
+        *certificate_format = certificate_format_internal;
+
       if (activation_time)
         {
-          *activation_time = gnutls_x509_crt_get_activation_time (gnutls_cert);
+          *activation_time
+            = gnutls_x509_crt_get_activation_time (gnutls_cert);
         }
 
       if (expiration_time)
         {
-          *expiration_time = gnutls_x509_crt_get_expiration_time (gnutls_cert);
+          *expiration_time
+            = gnutls_x509_crt_get_expiration_time (gnutls_cert);
         }
 
-      if (fingerprint)
+      if (md5_fingerprint)
         {
           int i;
           size_t buffer_size = 16;
@@ -361,8 +416,8 @@ get_certificate_info (const gchar *certificate,
 
           string = g_string_new ("");
 
-          gnutls_x509_crt_get_fingerprint (
-            gnutls_cert, GNUTLS_DIG_MD5, buffer, &buffer_size);
+          gnutls_x509_crt_get_fingerprint (gnutls_cert, GNUTLS_DIG_MD5,
+                                           buffer, &buffer_size);
 
           for (i = 0; i < buffer_size; i++)
             {
@@ -373,19 +428,73 @@ get_certificate_info (const gchar *certificate,
               g_string_append_printf (string, "%02x", buffer[i]);
             }
 
-          *fingerprint = string->str;
+          *md5_fingerprint = string->str;
           g_string_free (string, FALSE);
+        }
+
+      if (sha256_fingerprint)
+        {
+          int i;
+          size_t buffer_size = 32;
+          unsigned char buffer[buffer_size];
+          GString *string;
+
+          string = g_string_new ("");
+
+          gnutls_x509_crt_get_fingerprint (gnutls_cert, GNUTLS_DIG_SHA256,
+                                           buffer, &buffer_size);
+
+          for (i = 0; i < buffer_size; i++)
+            {
+              g_string_append_printf (string, "%02X", buffer[i]);
+            }
+
+          *sha256_fingerprint = string->str;
+          g_string_free (string, FALSE);
+        }
+
+      if (subject)
+        {
+          size_t buffer_size = 0;
+          gchar *buffer;
+          gnutls_x509_crt_get_dn (gnutls_cert, NULL, &buffer_size);
+          buffer = g_malloc (buffer_size);
+          gnutls_x509_crt_get_dn (gnutls_cert, buffer, &buffer_size);
+
+          *subject = buffer;
         }
 
       if (issuer)
         {
-          size_t buffer_size;
+          size_t buffer_size = 0;
           gchar *buffer;
           gnutls_x509_crt_get_issuer_dn (gnutls_cert, NULL, &buffer_size);
           buffer = g_malloc (buffer_size);
           gnutls_x509_crt_get_issuer_dn (gnutls_cert, buffer, &buffer_size);
 
           *issuer = buffer;
+        }
+
+      if (serial)
+        {
+          int i;
+          size_t buffer_size = 0;
+          gchar* buffer;
+          GString *string;
+
+          string = g_string_new ("");
+
+          gnutls_x509_crt_get_serial (gnutls_cert, NULL, &buffer_size);
+          buffer = g_malloc (buffer_size);
+          gnutls_x509_crt_get_serial (gnutls_cert, buffer, &buffer_size);
+
+          for (i = 0; i < buffer_size; i++)
+            {
+              g_string_append_printf (string, "%02X", buffer[i]);
+            }
+
+          *serial = string->str;
+          g_string_free (string, FALSE);
         }
 
       gnutls_x509_crt_deinit (gnutls_cert);
@@ -436,6 +545,7 @@ certificate_time_status (time_t activates, time_t expires)
     return "valid";
 }
 
+
 /* Helpers. */
 
 /**
@@ -476,14 +586,15 @@ truncate_text (gchar *string, size_t max_len, gboolean xml, const char *suffix)
           //  move the offset to the start of that entity.
           ssize_t entity_start_offset = offset;
 
-          while (entity_start_offset >= 0 && string[entity_start_offset] != '&')
+          while (entity_start_offset >= 0 
+                 && string[entity_start_offset] != '&')
             {
-              entity_start_offset--;
+              entity_start_offset --;
             }
 
           if (entity_start_offset >= 0)
             {
-              char *entity_end = strchr (string + entity_start_offset, ';');
+              char *entity_end = strchr(string + entity_start_offset, ';');
               if (entity_end && (entity_end - string) >= offset)
                 offset = entity_start_offset;
             }
@@ -510,8 +621,7 @@ truncate_text (gchar *string, size_t max_len, gboolean xml, const char *suffix)
  * @return Newly allocated string with XML escaped, truncated text.
  */
 gchar *
-xml_escape_text_truncated (const char *string,
-                           size_t max_len,
+xml_escape_text_truncated (const char *string, size_t max_len,
                            const char *suffix)
 {
   gchar *escaped;
@@ -525,30 +635,14 @@ xml_escape_text_truncated (const char *string,
       gchar *offset_next;
       ssize_t offset;
 
-      offset_next = g_utf8_find_next_char (string + max_len, string + orig_len);
+      offset_next = g_utf8_find_next_char (string + max_len,
+                                           string + orig_len);
       offset = offset_next - string;
       escaped = g_markup_escape_text (string, offset);
     }
 
   truncate_text (escaped, max_len, TRUE, suffix);
   return escaped;
-}
-
-/**
- * @brief Free an slist of pointers, including the pointers.
- *
- * @param[in]  list  The list.
- */
-static void
-slist_free (GSList *list)
-{
-  GSList *head = list;
-  while (list)
-    {
-      g_free (list->data);
-      list = g_slist_next (list);
-    }
-  g_slist_free (head);
 }
 
 /**
@@ -559,7 +653,7 @@ slist_free (GSList *list)
  * @return Plural name of type.
  */
 const char *
-type_name_plural (const char *type)
+type_name_plural (const char* type)
 {
   if (type == NULL)
     return "ERROR";
@@ -588,7 +682,7 @@ type_name_plural (const char *type)
  * @return Name of type.
  */
 const char *
-type_name (const char *type)
+type_name (const char* type)
 {
   if (type == NULL)
     return "ERROR";
@@ -617,9 +711,10 @@ type_name (const char *type)
  * @return Name of type.
  */
 int
-type_is_scap (const char *type)
+type_is_scap (const char* type)
 {
-  return (strcasecmp (type, "cpe") == 0) || (strcasecmp (type, "cve") == 0)
+  return (strcasecmp (type, "cpe") == 0)
+         || (strcasecmp (type, "cve") == 0)
          || (strcasecmp (type, "ovaldef") == 0);
 }
 
@@ -633,8 +728,7 @@ type_is_scap (const char *type)
  * @return 0 success, -1 error, 99 permission denied.
  */
 static int
-check_available (const gchar *type,
-                 resource_t resource,
+check_available (const gchar *type, resource_t resource,
                  const gchar *permission)
 {
   if (resource)
@@ -658,6 +752,7 @@ check_available (const gchar *type,
   return -1;
 }
 
+
 /* Severity related functions. */
 
 /**
@@ -761,30 +856,11 @@ severity_in_level (double severity, const char *level)
         return severity >= 4 && severity < 7;
       else if (strcmp (level, "low") == 0)
         return severity > 0 && severity < 4;
-      else if (strcmp (level, "none") == 0 || strcmp (level, "log") == 0)
+      else if (strcmp (level, "none") == 0  || strcmp (level, "log") == 0)
         return severity == 0;
       else
         return 0;
     }
-}
-
-/**
- * @brief Check whether a severity matches an override's severity.
- *
- * Only used by SQLite backend.
- *
- * @param[in] severity     severity score
- * @param[in] ov_severity  override severity score to match
- *
- * @return 1 if matches, else 0.
- */
-int
-severity_matches_ov (double severity, double ov_severity)
-{
-  if (ov_severity <= 0.0)
-    return severity == ov_severity;
-  else
-    return severity >= ov_severity;
 }
 
 /**
@@ -795,7 +871,7 @@ severity_matches_ov (double severity, double ov_severity)
  *
  * @return the level as a static string
  */
-const char *
+const char*
 severity_to_level (double severity, int mode)
 {
   if (severity == SEVERITY_LOG)
@@ -821,8 +897,8 @@ severity_to_level (double severity, int mode)
     }
   else
     {
-      g_warning (
-        "%s: Invalid severity score given: %f", __FUNCTION__, severity);
+      g_warning ("%s: Invalid severity score given: %f",
+                 __FUNCTION__, severity);
       return (NULL);
     }
 }
@@ -834,7 +910,7 @@ severity_to_level (double severity, int mode)
  *
  * @return the message type as a static string
  */
-const char *
+const char*
 severity_to_type (double severity)
 {
   if (severity == SEVERITY_LOG)
@@ -849,12 +925,13 @@ severity_to_type (double severity)
     return "Alarm";
   else
     {
-      g_warning (
-        "%s: Invalid severity score given: %f", __FUNCTION__, severity);
+      g_warning ("%s: Invalid severity score given: %f",
+                 __FUNCTION__, severity);
       return (NULL);
     }
 }
 
+
 /* Credentials. */
 
 /**
@@ -862,6 +939,7 @@ severity_to_type (double severity)
  */
 credentials_t current_credentials;
 
+
 /* Reports. */
 
 /**
@@ -902,20 +980,15 @@ delete_reports (task_t task)
  * @return Filter term.
  */
 static gchar *
-report_results_filter_term (int first,
-                            int rows,
-                            int apply_overrides,
-                            int autofp,
-                            int min_qod)
+report_results_filter_term (int first, int rows,
+                            int apply_overrides, int autofp, int min_qod)
 {
   return g_strdup_printf ("first=%d rows=%d"
                           " apply_overrides=%d autofp=%d min_qod=%d",
-                          first,
-                          rows,
-                          apply_overrides,
-                          autofp,
-                          min_qod);
+                          first, rows,
+                          apply_overrides, autofp, min_qod);
 }
+
 
 /**
  * @brief Create a new basic get_data_t struct to get report results.
@@ -928,18 +1001,15 @@ report_results_filter_term (int first,
  *
  * @return GET data struct.
  */
-get_data_t *
-report_results_get_data (int first,
-                         int rows,
-                         int apply_overrides,
-                         int autofp,
-                         int min_qod)
+get_data_t*
+report_results_get_data (int first, int rows,
+                         int apply_overrides, int autofp, int min_qod)
 {
-  get_data_t *get = g_malloc (sizeof (get_data_t));
+  get_data_t* get = g_malloc (sizeof (get_data_t));
   memset (get, 0, sizeof (get_data_t));
   get->type = g_strdup ("result");
-  get->filter =
-    report_results_filter_term (first, rows, apply_overrides, autofp, min_qod);
+  get->filter = report_results_filter_term (first, rows,
+                                            apply_overrides, autofp, min_qod);
 
   return get;
 }
@@ -961,11 +1031,10 @@ severity_data_index (double severity)
 {
   int ret;
   if (severity >= 0.0)
-    ret =
-      (int) (round (severity * SEVERITY_SUBDIVISIONS)) + ZERO_SEVERITY_INDEX;
+    ret = (int)(round (severity * SEVERITY_SUBDIVISIONS)) + ZERO_SEVERITY_INDEX;
   else if (severity == SEVERITY_FP || severity == SEVERITY_DEBUG
            || severity == SEVERITY_ERROR)
-    ret = (int) (round (severity)) + ZERO_SEVERITY_INDEX;
+    ret = (int)(round (severity)) + ZERO_SEVERITY_INDEX;
   else
     ret = 0;
 
@@ -985,8 +1054,8 @@ severity_data_value (int index)
   double ret;
   if (index <= ZERO_SEVERITY_INDEX && index > 0)
     ret = ((double) index) - ZERO_SEVERITY_INDEX;
-  else if (index
-           <= (ZERO_SEVERITY_INDEX + (SEVERITY_SUBDIVISIONS * SEVERITY_MAX)))
+  else if (index <= (ZERO_SEVERITY_INDEX
+                     + (SEVERITY_SUBDIVISIONS * SEVERITY_MAX)))
     ret = (((double) (index - ZERO_SEVERITY_INDEX)) / SEVERITY_SUBDIVISIONS);
   else
     ret = SEVERITY_MISSING;
@@ -1000,7 +1069,7 @@ severity_data_value (int index)
  * @param[in] data  The data structure to initialize.
  */
 void
-init_severity_data (severity_data_t *data)
+init_severity_data (severity_data_t* data)
 {
   int max_i;
   max_i = ZERO_SEVERITY_INDEX + (SEVERITY_SUBDIVISIONS * SEVERITY_MAX);
@@ -1017,7 +1086,7 @@ init_severity_data (severity_data_t *data)
  * @param[in] data  The data structure to initialize.
  */
 void
-cleanup_severity_data (severity_data_t *data)
+cleanup_severity_data (severity_data_t* data)
 {
   g_free (data->counts);
 }
@@ -1029,7 +1098,7 @@ cleanup_severity_data (severity_data_t *data)
  * @param[in]   severity        The severity to add.
  */
 void
-severity_data_add (severity_data_t *severity_data, double severity)
+severity_data_add (severity_data_t* severity_data, double severity)
 {
   (severity_data->counts)[severity_data_index (severity)]++;
 
@@ -1040,16 +1109,14 @@ severity_data_add (severity_data_t *severity_data, double severity)
 }
 
 /**
- * @brief Add a multiple severity occurrences to the counts of a
- * severity_data_t.
+ * @brief Add a multiple severity occurrences to the counts of a severity_data_t.
  *
  * @param[in]   severity_data   The severity count struct to add to.
  * @param[in]   severity        The severity to add.
  * @param[in]   count           The number of occurrences to add.
  */
 void
-severity_data_add_count (severity_data_t *severity_data,
-                         double severity,
+severity_data_add_count (severity_data_t* severity_data, double severity,
                          int count)
 {
   (severity_data->counts)[severity_data_index (severity)] += count;
@@ -1070,16 +1137,17 @@ severity_data_add_count (severity_data_t *severity_data,
  * @return     The total of severity counts in the specified range.
  */
 static int
-severity_data_range_count (const severity_data_t *severity_data,
-                           double min_severity,
-                           double max_severity)
+severity_data_range_count (const severity_data_t* severity_data,
+                           double min_severity, double max_severity)
 {
   int i, i_max, count;
 
   i_max = severity_data_index (max_severity);
   count = 0;
 
-  for (i = severity_data_index (min_severity); i <= i_max; i++)
+  for (i = severity_data_index (min_severity);
+       i <= i_max;
+       i++)
     {
       count += (severity_data->counts)[i];
     }
@@ -1102,57 +1170,67 @@ severity_data_range_count (const severity_data_t *severity_data,
 void
 severity_data_level_counts (const severity_data_t *severity_data,
                             const gchar *severity_class,
-                            int *errors,
-                            int *debugs,
-                            int *false_positives,
-                            int *logs,
-                            int *lows,
-                            int *mediums,
-                            int *highs)
+                            int *errors, int *debugs, int *false_positives,
+                            int *logs, int *lows, int *mediums, int *highs)
 {
   if (errors)
-    *errors =
-      severity_data_range_count (severity_data,
-                                 level_min_severity ("Error", severity_class),
-                                 level_max_severity ("Error", severity_class));
+    *errors
+      = severity_data_range_count (severity_data,
+                                   level_min_severity ("Error",
+                                                       severity_class),
+                                   level_max_severity ("Error",
+                                                       severity_class));
 
   if (debugs)
-    *debugs =
-      severity_data_range_count (severity_data,
-                                 level_min_severity ("Debug", severity_class),
-                                 level_max_severity ("Debug", severity_class));
+    *debugs
+      = severity_data_range_count (severity_data,
+                                   level_min_severity ("Debug",
+                                                       severity_class),
+                                   level_max_severity ("Debug",
+                                                       severity_class));
 
   if (false_positives)
-    *false_positives = severity_data_range_count (
-      severity_data,
-      level_min_severity ("False Positive", severity_class),
-      level_max_severity ("False Positive", severity_class));
+    *false_positives
+      = severity_data_range_count (severity_data,
+                                   level_min_severity ("False Positive",
+                                                       severity_class),
+                                   level_max_severity ("False Positive",
+                                                       severity_class));
 
   if (logs)
-    *logs =
-      severity_data_range_count (severity_data,
-                                 level_min_severity ("Log", severity_class),
-                                 level_max_severity ("Log", severity_class));
+    *logs
+      = severity_data_range_count (severity_data,
+                                   level_min_severity ("Log",
+                                                       severity_class),
+                                   level_max_severity ("Log",
+                                                       severity_class));
 
   if (lows)
-    *lows =
-      severity_data_range_count (severity_data,
-                                 level_min_severity ("low", severity_class),
-                                 level_max_severity ("low", severity_class));
+    *lows
+      = severity_data_range_count (severity_data,
+                                   level_min_severity ("low",
+                                                       severity_class),
+                                   level_max_severity ("low",
+                                                       severity_class));
 
   if (mediums)
-    *mediums =
-      severity_data_range_count (severity_data,
-                                 level_min_severity ("medium", severity_class),
-                                 level_max_severity ("medium", severity_class));
+    *mediums
+      = severity_data_range_count (severity_data,
+                                   level_min_severity ("medium",
+                                                       severity_class),
+                                   level_max_severity ("medium",
+                                                       severity_class));
 
   if (highs)
-    *highs =
-      severity_data_range_count (severity_data,
-                                 level_min_severity ("high", severity_class),
-                                 level_max_severity ("high", severity_class));
+    *highs
+      = severity_data_range_count (severity_data,
+                                   level_min_severity ("high",
+                                                       severity_class),
+                                   level_max_severity ("high",
+                                                       severity_class));
 }
 
+
 /* Task globals. */
 
 /**
@@ -1165,6 +1243,7 @@ task_t current_scanner_task = (task_t) 0;
  */
 report_t global_current_report = (report_t) 0;
 
+
 /* Alerts. */
 
 /**
@@ -1208,23 +1287,23 @@ alert_report_data_reset (alert_report_data_t *data)
  *
  * @return The name of the condition (for example, "Always").
  */
-const char *
+const char*
 alert_condition_name (alert_condition_t condition)
 {
   switch (condition)
     {
-    case ALERT_CONDITION_ALWAYS:
-      return "Always";
-    case ALERT_CONDITION_FILTER_COUNT_AT_LEAST:
-      return "Filter count at least";
-    case ALERT_CONDITION_FILTER_COUNT_CHANGED:
-      return "Filter count changed";
-    case ALERT_CONDITION_SEVERITY_AT_LEAST:
-      return "Severity at least";
-    case ALERT_CONDITION_SEVERITY_CHANGED:
-      return "Severity changed";
-    default:
-      return "Internal Error";
+      case ALERT_CONDITION_ALWAYS:
+        return "Always";
+      case ALERT_CONDITION_FILTER_COUNT_AT_LEAST:
+        return "Filter count at least";
+      case ALERT_CONDITION_FILTER_COUNT_CHANGED:
+        return "Filter count changed";
+      case ALERT_CONDITION_SEVERITY_AT_LEAST:
+        return "Severity at least";
+      case ALERT_CONDITION_SEVERITY_CHANGED:
+        return "Severity changed";
+      default:
+        return "Internal Error";
     }
 }
 
@@ -1235,25 +1314,18 @@ alert_condition_name (alert_condition_t condition)
  *
  * @return The name of the event (for example, "Run status changed").
  */
-const char *
+const char*
 event_name (event_t event)
 {
   switch (event)
     {
-    case EVENT_TASK_RUN_STATUS_CHANGED:
-      return "Task run status changed";
-    case EVENT_NEW_SECINFO:
-      return "New SecInfo arrived";
-    case EVENT_UPDATED_SECINFO:
-      return "Updated SecInfo arrived";
-    case EVENT_TICKET_RECEIVED:
-      return "Ticket received";
-    case EVENT_ASSIGNED_TICKET_CHANGED:
-      return "Assigned ticket changed";
-    case EVENT_OWNED_TICKET_CHANGED:
-      return "Owned ticket changed";
-    default:
-      return "Internal Error";
+      case EVENT_TASK_RUN_STATUS_CHANGED: return "Task run status changed";
+      case EVENT_NEW_SECINFO:             return "New SecInfo arrived";
+      case EVENT_UPDATED_SECINFO:         return "Updated SecInfo arrived";
+      case EVENT_TICKET_RECEIVED:         return "Ticket received";
+      case EVENT_ASSIGNED_TICKET_CHANGED: return "Assigned ticket changed";
+      case EVENT_OWNED_TICKET_CHANGED:    return "Owned ticket changed";
+      default:                            return "Internal Error";
     }
 }
 
@@ -1265,42 +1337,45 @@ event_name (event_t event)
  *
  * @return Freshly allocated description of condition.
  */
-gchar *
-alert_condition_description (alert_condition_t condition, alert_t alert)
+gchar*
+alert_condition_description (alert_condition_t condition,
+                             alert_t alert)
 {
   switch (condition)
     {
-    case ALERT_CONDITION_ALWAYS:
-      return g_strdup ("Always");
-    case ALERT_CONDITION_FILTER_COUNT_AT_LEAST:
-      {
-        char *level;
-        gchar *ret;
+      case ALERT_CONDITION_ALWAYS:
+        return g_strdup ("Always");
+      case ALERT_CONDITION_FILTER_COUNT_AT_LEAST:
+        {
+          char *level;
+          gchar *ret;
 
-        level = alert_data (alert, "condition", "severity");
-        ret = g_strdup_printf ("Filter count at least %s", level ? level : "0");
-        free (level);
-        return ret;
-      }
-    case ALERT_CONDITION_FILTER_COUNT_CHANGED:
-      return g_strdup ("Filter count changed");
-    case ALERT_CONDITION_SEVERITY_AT_LEAST:
-      {
-        char *level = alert_data (alert, "condition", "severity");
-        gchar *ret = g_strdup_printf ("Task severity is at least '%s'", level);
-        free (level);
-        return ret;
-      }
-    case ALERT_CONDITION_SEVERITY_CHANGED:
-      {
-        char *direction;
-        direction = alert_data (alert, "condition", "direction");
-        gchar *ret = g_strdup_printf ("Task severity %s", direction);
-        free (direction);
-        return ret;
-      }
-    default:
-      return g_strdup ("Internal Error");
+          level = alert_data (alert, "condition", "severity");
+          ret = g_strdup_printf ("Filter count at least %s",
+                                 level ? level : "0");
+          free (level);
+          return ret;
+        }
+      case ALERT_CONDITION_FILTER_COUNT_CHANGED:
+        return g_strdup ("Filter count changed");
+      case ALERT_CONDITION_SEVERITY_AT_LEAST:
+        {
+          char *level = alert_data (alert, "condition", "severity");
+          gchar *ret = g_strdup_printf ("Task severity is at least '%s'",
+                                        level);
+          free (level);
+          return ret;
+        }
+      case ALERT_CONDITION_SEVERITY_CHANGED:
+        {
+          char *direction;
+          direction = alert_data (alert, "condition", "direction");
+          gchar *ret = g_strdup_printf ("Task severity %s", direction);
+          free (direction);
+          return ret;
+        }
+      default:
+        return g_strdup ("Internal Error");
     }
 }
 
@@ -1313,37 +1388,37 @@ alert_condition_description (alert_condition_t condition, alert_t alert)
  *
  * @return Freshly allocated description of event.
  */
-gchar *
+gchar*
 event_description (event_t event, const void *event_data, const char *task_name)
 {
   switch (event)
     {
-    case EVENT_TASK_RUN_STATUS_CHANGED:
-      if (task_name)
-        return g_strdup_printf (
-          "The security scan task '%s' changed status to '%s'",
-          task_name,
-          run_status_name ((task_status_t) event_data));
-      return g_strdup_printf ("Task status changed to '%s'",
-                              run_status_name ((task_status_t) event_data));
-      break;
-    case EVENT_NEW_SECINFO:
-      return g_strdup_printf ("New SecInfo arrived");
-      break;
-    case EVENT_UPDATED_SECINFO:
-      return g_strdup_printf ("Updated SecInfo arrived");
-      break;
-    case EVENT_TICKET_RECEIVED:
-      return g_strdup_printf ("Ticket received");
-      break;
-    case EVENT_ASSIGNED_TICKET_CHANGED:
-      return g_strdup_printf ("Assigned ticket changed");
-      break;
-    case EVENT_OWNED_TICKET_CHANGED:
-      return g_strdup_printf ("Owned ticket changed");
-      break;
-    default:
-      return g_strdup ("Internal Error");
+      case EVENT_TASK_RUN_STATUS_CHANGED:
+        if (task_name)
+          return g_strdup_printf
+                  ("The security scan task '%s' changed status to '%s'",
+                   task_name,
+                   run_status_name ((task_status_t) event_data));
+        return g_strdup_printf ("Task status changed to '%s'",
+                                run_status_name ((task_status_t) event_data));
+        break;
+      case EVENT_NEW_SECINFO:
+        return g_strdup_printf ("New SecInfo arrived");
+        break;
+      case EVENT_UPDATED_SECINFO:
+        return g_strdup_printf ("Updated SecInfo arrived");
+        break;
+      case EVENT_TICKET_RECEIVED:
+        return g_strdup_printf ("Ticket received");
+        break;
+      case EVENT_ASSIGNED_TICKET_CHANGED:
+        return g_strdup_printf ("Assigned ticket changed");
+        break;
+      case EVENT_OWNED_TICKET_CHANGED:
+        return g_strdup_printf ("Owned ticket changed");
+        break;
+      default:
+        return g_strdup ("Internal Error");
     }
 }
 
@@ -1354,37 +1429,24 @@ event_description (event_t event, const void *event_data, const char *task_name)
  *
  * @return The name of the method (for example, "Email" or "SNMP").
  */
-const char *
+const char*
 alert_method_name (alert_method_t method)
 {
   switch (method)
     {
-    case ALERT_METHOD_EMAIL:
-      return "Email";
-    case ALERT_METHOD_HTTP_GET:
-      return "HTTP Get";
-    case ALERT_METHOD_SCP:
-      return "SCP";
-    case ALERT_METHOD_SEND:
-      return "Send";
-    case ALERT_METHOD_SMB:
-      return "SMB";
-    case ALERT_METHOD_SNMP:
-      return "SNMP";
-    case ALERT_METHOD_SOURCEFIRE:
-      return "Sourcefire Connector";
-    case ALERT_METHOD_START_TASK:
-      return "Start Task";
-    case ALERT_METHOD_SYSLOG:
-      return "Syslog";
-    case ALERT_METHOD_TIPPINGPOINT:
-      return "TippingPoint SMS";
-    case ALERT_METHOD_VERINICE:
-      return "verinice Connector";
-    case ALERT_METHOD_VFIRE:
-      return "Alemba vFire";
-    default:
-      return "Internal Error";
+      case ALERT_METHOD_EMAIL:       return "Email";
+      case ALERT_METHOD_HTTP_GET:    return "HTTP Get";
+      case ALERT_METHOD_SCP:         return "SCP";
+      case ALERT_METHOD_SEND:        return "Send";
+      case ALERT_METHOD_SMB:         return "SMB";
+      case ALERT_METHOD_SNMP:        return "SNMP";
+      case ALERT_METHOD_SOURCEFIRE:  return "Sourcefire Connector";
+      case ALERT_METHOD_START_TASK:  return "Start Task";
+      case ALERT_METHOD_SYSLOG:      return "Syslog";
+      case ALERT_METHOD_TIPPINGPOINT:return "TippingPoint SMS";
+      case ALERT_METHOD_VERINICE:    return "verinice Connector";
+      case ALERT_METHOD_VFIRE:       return "Alemba vFire";
+      default:                       return "Internal Error";
     }
 }
 
@@ -1396,7 +1458,7 @@ alert_method_name (alert_method_t method)
  * @return The condition.
  */
 alert_condition_t
-alert_condition_from_name (const char *name)
+alert_condition_from_name (const char* name)
 {
   if (strcasecmp (name, "Always") == 0)
     return ALERT_CONDITION_ALWAYS;
@@ -1419,7 +1481,7 @@ alert_condition_from_name (const char *name)
  * @return The event.
  */
 event_t
-event_from_name (const char *name)
+event_from_name (const char* name)
 {
   if (strcasecmp (name, "Task run status changed") == 0)
     return EVENT_TASK_RUN_STATUS_CHANGED;
@@ -1444,7 +1506,7 @@ event_from_name (const char *name)
  * @return The method.
  */
 alert_method_t
-alert_method_from_name (const char *name)
+alert_method_from_name (const char* name)
 {
   if (strcasecmp (name, "Email") == 0)
     return ALERT_METHOD_EMAIL;
@@ -1473,6 +1535,7 @@ alert_method_from_name (const char *name)
   return ALERT_METHOD_ERROR;
 }
 
+
 /* General task facilities. */
 
 /**
@@ -1482,37 +1545,31 @@ alert_method_from_name (const char *name)
  *
  * @return The name of the status (for example, "Done" or "Running").
  */
-const char *
+const char*
 run_status_name (task_status_t status)
 {
   switch (status)
     {
-    case TASK_STATUS_DELETE_REQUESTED:
-    case TASK_STATUS_DELETE_WAITING:
-      return "Delete Requested";
-    case TASK_STATUS_DELETE_ULTIMATE_REQUESTED:
-    case TASK_STATUS_DELETE_ULTIMATE_WAITING:
-      return "Ultimate Delete Requested";
-    case TASK_STATUS_DONE:
-      return "Done";
-    case TASK_STATUS_NEW:
-      return "New";
+      case TASK_STATUS_DELETE_REQUESTED:
+      case TASK_STATUS_DELETE_WAITING:
+        return "Delete Requested";
+      case TASK_STATUS_DELETE_ULTIMATE_REQUESTED:
+      case TASK_STATUS_DELETE_ULTIMATE_WAITING:
+        return "Ultimate Delete Requested";
+      case TASK_STATUS_DONE:             return "Done";
+      case TASK_STATUS_NEW:              return "New";
 
-    case TASK_STATUS_REQUESTED:
-      return "Requested";
+      case TASK_STATUS_REQUESTED:        return "Requested";
 
-    case TASK_STATUS_RUNNING:
-      return "Running";
+      case TASK_STATUS_RUNNING:          return "Running";
 
-    case TASK_STATUS_STOP_REQUESTED_GIVEUP:
-    case TASK_STATUS_STOP_REQUESTED:
-    case TASK_STATUS_STOP_WAITING:
-      return "Stop Requested";
+      case TASK_STATUS_STOP_REQUESTED_GIVEUP:
+      case TASK_STATUS_STOP_REQUESTED:
+      case TASK_STATUS_STOP_WAITING:
+        return "Stop Requested";
 
-    case TASK_STATUS_STOPPED:
-      return "Stopped";
-    default:
-      return "Interrupted";
+      case TASK_STATUS_STOPPED:          return "Stopped";
+      default:                           return "Interrupted";
     }
 }
 
@@ -1523,651 +1580,41 @@ run_status_name (task_status_t status)
  *
  * @return The name of the status (for example, "Done" or "Running").
  */
-const char *
+const char*
 run_status_name_internal (task_status_t status)
 {
   switch (status)
     {
-    case TASK_STATUS_DELETE_REQUESTED:
-      return "Delete Requested";
-    case TASK_STATUS_DELETE_ULTIMATE_REQUESTED:
-      return "Ultimate Delete Requested";
-    case TASK_STATUS_DELETE_ULTIMATE_WAITING:
-      return "Ultimate Delete Waiting";
-    case TASK_STATUS_DELETE_WAITING:
-      return "Delete Waiting";
-    case TASK_STATUS_DONE:
-      return "Done";
-    case TASK_STATUS_NEW:
-      return "New";
+      case TASK_STATUS_DELETE_REQUESTED: return "Delete Requested";
+      case TASK_STATUS_DELETE_ULTIMATE_REQUESTED:
+        return "Ultimate Delete Requested";
+      case TASK_STATUS_DELETE_ULTIMATE_WAITING:
+        return "Ultimate Delete Waiting";
+      case TASK_STATUS_DELETE_WAITING:   return "Delete Waiting";
+      case TASK_STATUS_DONE:             return "Done";
+      case TASK_STATUS_NEW:              return "New";
 
-    case TASK_STATUS_REQUESTED:
-      return "Requested";
+      case TASK_STATUS_REQUESTED:        return "Requested";
 
-    case TASK_STATUS_RUNNING:
-      return "Running";
+      case TASK_STATUS_RUNNING:          return "Running";
 
-    case TASK_STATUS_STOP_REQUESTED_GIVEUP:
-    case TASK_STATUS_STOP_REQUESTED:
-      return "Stop Requested";
+      case TASK_STATUS_STOP_REQUESTED_GIVEUP:
+      case TASK_STATUS_STOP_REQUESTED:
+        return "Stop Requested";
 
-    case TASK_STATUS_STOP_WAITING:
-      return "Stop Waiting";
+      case TASK_STATUS_STOP_WAITING:
+        return "Stop Waiting";
 
-    case TASK_STATUS_STOPPED:
-      return "Stopped";
-    default:
-      return "Interrupted";
+      case TASK_STATUS_STOPPED:          return "Stopped";
+      default:                           return "Interrupted";
     }
 }
 
-/**
- * @brief Get files to send.
- *
- * @param  task  Task of interest.
- *
- * @return List of files to send, (NULL if none), data has to be freed with
- *         g_free.
- */
-static GSList *
-get_files_to_send (task_t task)
-{
-  iterator_t files;
-  GSList *filelist = NULL;
-
-  init_task_file_iterator (&files, task, NULL);
-  while (next (&files))
-    {
-      const gchar *file_path = task_file_iterator_name (&files);
-      filelist = g_slist_append (filelist, g_strdup (file_path));
-    }
-  cleanup_iterator (&files);
-
-  return filelist;
-}
-
-/**
- * @brief Return the plugins of a config, as a semicolon separated string.
- *
- * @param[in]  config  Config.
- *
- * @return A string of semi-colon separated plugin IDS.
- */
-static gchar *
-nvt_selector_plugins (config_t config)
-{
-  GString *plugins;
-  iterator_t families, nvts;
-  gboolean first;
-
-  first = TRUE;
-  plugins = g_string_new ("");
-
-  init_family_iterator (&families, 0, NULL, 1);
-  while (next (&families))
-    {
-      const char *family = family_iterator_name (&families);
-      if (family)
-        {
-          init_nvt_iterator (&nvts, 0, config, family, NULL, 1, NULL);
-          while (next (&nvts))
-            {
-              if (first)
-                first = FALSE;
-              else
-                g_string_append_c (plugins, ';');
-              g_string_append (plugins, nvt_iterator_oid (&nvts));
-            }
-          cleanup_iterator (&nvts);
-        }
-    }
-  cleanup_iterator (&families);
-
-  return g_string_free (plugins, FALSE);
-}
-
-/**
- * @brief Return the real value of a preference.
- *
- * Take care of radio button options.
- *
- * @param[in]  name        Name of preference.
- * @param[in]  full_value  Entire value of preference.
- *
- * @return Real value of the preference.
- */
-static gchar *
-preference_value (const char *name, const char *full_value)
-{
-  char *bracket = strchr (name, '[');
-  if (bracket)
-    {
-      if (strncmp (bracket, "[radio]:", strlen ("[radio]:")) == 0)
-        {
-          char *semicolon = strchr (full_value, ';');
-          if (semicolon)
-            return g_strndup (full_value, semicolon - full_value);
-        }
-    }
-  return g_strdup (full_value);
-}
-
-/**
- * @brief Send the preferences from a config to the scanner.
- *
- * @param[in]  config        Config.
- * @param[in]  section_name  Name of preference section to send.
- * @param[in]  task_files    Files associated with the task.
- * @param[out] pref_files    Files associated with config (UUID, contents, ...).
- *
- * @return 0 on success, -1 on failure.
- */
-static int
-send_config_preferences (config_t config,
-                         const char *section_name,
-                         GSList *task_files,
-                         GPtrArray *pref_files)
-{
-  iterator_t prefs;
-
-  init_otp_pref_iterator (&prefs, config, section_name);
-  while (next (&prefs))
-    {
-      const char *pref_name = otp_pref_iterator_name (&prefs);
-      char *value;
-
-      if (strcmp (pref_name, "port_range") == 0)
-        continue;
-
-      if (send_to_server (pref_name))
-        {
-          cleanup_iterator (&prefs);
-          return -1;
-        }
-
-      if (sendn_to_server (" <|> ", 5))
-        {
-          cleanup_iterator (&prefs);
-          return -1;
-        }
-
-      value = preference_value (pref_name, otp_pref_iterator_value (&prefs));
-
-      if (pref_files)
-        {
-          int type_start = -1, type_end = -1, count;
-
-          /* LDAPsearch[entry]:Timeout value */
-          count =
-            sscanf (pref_name, "%*[^[][%n%*[^]]%n]:", &type_start, &type_end);
-          if (count == 0 && type_start > 0 && type_end > 0
-              && (strncmp (
-                    pref_name + type_start, "file", type_end - type_start)
-                  == 0))
-            {
-              GSList *head;
-              char *uuid;
-
-              /* A "file" preference.
-               *
-               * If the value of the preference is empty, then send an empty
-               * value.
-               *
-               * If the value of the preference is the name of a task file,
-               * then just send the preference value, otherwise send a UUID and
-               * add the value to the list of preference files (pref_files). */
-
-              if (strcmp (value, "") == 0)
-                {
-                  g_free (value);
-                  if (sendn_to_server ("\n", 1))
-                    {
-                      cleanup_iterator (&prefs);
-                      return -1;
-                    }
-                  continue;
-                }
-
-              head = task_files;
-              while (head)
-                {
-                  if (strcmp (head->data, value) == 0)
-                    break;
-                  head = g_slist_next (head);
-                }
-
-              if (head == NULL)
-                {
-                  uuid = gvm_uuid_make ();
-                  if (uuid == NULL)
-                    {
-                      g_free (value);
-                      cleanup_iterator (&prefs);
-                      return -1;
-                    }
-
-                  g_ptr_array_add (pref_files, (gpointer) uuid);
-                  g_ptr_array_add (pref_files, (gpointer) value);
-
-                  if (send_to_server (uuid))
-                    {
-                      free (uuid);
-                      g_free (value);
-                      cleanup_iterator (&prefs);
-                      return -1;
-                    }
-
-                  if (sendn_to_server ("\n", 1))
-                    {
-                      free (uuid);
-                      g_free (value);
-                      cleanup_iterator (&prefs);
-                      return -1;
-                    }
-
-                  continue;
-                }
-            }
-        }
-
-      if (send_to_server (value))
-        {
-          g_free (value);
-          cleanup_iterator (&prefs);
-          return -1;
-        }
-      g_free (value);
-
-      if (sendn_to_server ("\n", 1))
-        {
-          cleanup_iterator (&prefs);
-          return -1;
-        }
-    }
-  cleanup_iterator (&prefs);
-  return 0;
-}
-
-/**
- * @brief Send task preferences to the scanner.
- *
- * @param[in]  task  Task.
- *
- * @return 0 on success, -1 on failure.
- */
-static int
-send_task_preferences (task_t task)
-{
-  gchar *value;
-
-  value = task_preference_value (task, "max_checks");
-  if (sendf_to_server ("max_checks <|> %s\n",
-                       value ? value : MAX_CHECKS_DEFAULT))
-    {
-      g_free (value);
-      return -1;
-    }
-  g_free (value);
-
-  value = task_preference_value (task, "max_hosts");
-  if (sendf_to_server ("max_hosts <|> %s\n", value ? value : MAX_HOSTS_DEFAULT))
-    {
-      g_free (value);
-      return -1;
-    }
-  g_free (value);
-
-  value = task_preference_value (task, "source_iface");
-  if (value && sendf_to_server ("source_iface <|> %s\n", value))
-    {
-      g_free (value);
-      return -1;
-    }
-  g_free (value);
-
-  return 0;
-}
-
-/**
- * @brief Send ifaces_allow and ifaces_deny preferences to scanner.
- *
- * @return 0 on success, -1 on failure.
- */
-static int
-send_ifaces_access_preferences (void)
-{
-  char *ifaces;
-  int ifaces_allow;
-
-  ifaces = user_ifaces (current_credentials.uuid);
-  ifaces_allow = user_ifaces_allow (current_credentials.uuid);
-
-  if (ifaces && strlen (ifaces))
-    {
-      char *pref;
-
-      if (ifaces_allow == 1)
-        pref = "ifaces_allow";
-      else if (ifaces_allow == 0)
-        pref = "ifaces_deny";
-      else
-        {
-          g_free (ifaces);
-          return 0;
-        }
-
-      if (sendf_to_server ("%s <|> %s\n", pref, ifaces))
-        {
-          g_free (ifaces);
-          return -1;
-        }
-    }
-  g_free (ifaces);
-  return 0;
-}
-
-/**
- * @brief Send ifaces_allow and ifaces_deny preferences to scanner.
- *
- * @return 0 on success, -1 on failure.
- */
-static int
-send_hosts_access_preferences (void)
-{
-  char *hosts;
-  int hosts_allow;
-
-  hosts = user_hosts (current_credentials.uuid);
-  hosts_allow = user_hosts_allow (current_credentials.uuid);
-
-  if (hosts && strlen (hosts))
-    {
-      char *pref;
-
-      if (hosts_allow == 1)
-        pref = "hosts_allow";
-      else if (hosts_allow == 0)
-        pref = "hosts_deny";
-      else
-        {
-          g_free (hosts);
-          return 0;
-        }
-
-      if (sendf_to_server ("%s <|> %s\n", pref, hosts))
-        {
-          g_free (hosts);
-          return -1;
-        }
-    }
-  g_free (hosts);
-  return 0;
-}
-
-/**
- * @brief Gives a comma-separated list of a report's finished hosts.
- *
- * @param[in]  stopped_report  Report.
- *
- * @return String of finished hosts if found, NULL otherwise.
- */
-static char *
-finished_hosts_str (report_t stopped_report)
-{
-  iterator_t hosts;
-  char *str = NULL;
-
-  if (stopped_report == 0)
-    return NULL;
-  init_report_host_iterator (&hosts, stopped_report, NULL, 0);
-  while (next (&hosts))
-    {
-      const char *end_time = host_iterator_end_time (&hosts);
-
-      if (end_time && strlen (end_time))
-        {
-          char *new_str =
-            str ? g_strdup_printf ("%s, %s", str, host_iterator_host (&hosts))
-                : g_strdup_printf ("%s", host_iterator_host (&hosts));
-          g_free (str);
-          str = new_str;
-        }
-    }
-  return str;
-}
-
-/**
- * @brief Send some scanner preferences to the scanner.
- *
- * @param[in]  task            Task.
- * @param[in]  target          Scan target.
- * @param[in]  stopped_report  Previously stopped report, if any, else 0.
- *
- * @return 0 on success, -1 on failure.
- */
-static int
-send_scanner_preferences (task_t task, target_t target, report_t stopped_report)
-{
-  char *hosts_ordering, *exclude_hosts, *reverse_lookup_only;
-  char *reverse_lookup_unify;
-
-  /* Send ifaces_allow / ifaces_deny preferences. */
-  if (send_ifaces_access_preferences ())
-    return -1;
-
-  /* Send hosts_allow / hosts_deny preferences. */
-  if (send_hosts_access_preferences ())
-    return -1;
-
-  /* Send hosts_ordering preference. */
-  hosts_ordering = task_hosts_ordering (task);
-  if (hosts_ordering)
-    {
-      if (sendf_to_server ("hosts_ordering <|> %s\n", hosts_ordering))
-        {
-          free (hosts_ordering);
-          return -1;
-        }
-      free (hosts_ordering);
-    }
-
-  /* Send exclude_hosts preference. */
-  exclude_hosts = target_exclude_hosts (target);
-  if (exclude_hosts)
-    {
-      char *finished, *str;
-
-      finished = finished_hosts_str (stopped_report);
-      if (finished)
-        {
-          str = g_strdup_printf ("%s, %s", exclude_hosts, finished);
-          g_free (exclude_hosts);
-          g_free (finished);
-          exclude_hosts = str;
-        }
-    }
-  else
-    exclude_hosts = finished_hosts_str (stopped_report);
-
-  if (exclude_hosts)
-    {
-      if (sendf_to_server ("exclude_hosts <|> %s\n", exclude_hosts))
-        {
-          free (exclude_hosts);
-          return -1;
-        }
-      free (exclude_hosts);
-    }
-
-  /* Send reverse_lookup_only preference. */
-  reverse_lookup_only = target_reverse_lookup_only (target);
-  if (reverse_lookup_only == NULL || strcmp (reverse_lookup_only, "0") == 0)
-    reverse_lookup_only = "no";
-  else
-    reverse_lookup_only = "yes";
-  if (sendf_to_server ("reverse_lookup_only <|> %s\n", reverse_lookup_only))
-    return -1;
-
-  /* Send reverse_lookup_unify preference. */
-  reverse_lookup_unify = target_reverse_lookup_unify (target);
-  if (reverse_lookup_unify == NULL || strcmp (reverse_lookup_unify, "0") == 0)
-    reverse_lookup_unify = "no";
-  else
-    reverse_lookup_unify = "yes";
-  if (sendf_to_server ("reverse_lookup_unify <|> %s\n", reverse_lookup_unify))
-    return -1;
-
-  return 0;
-}
-
-/**
- * @brief Send a file to the scanner.
- *
- * @param[in]  name     File name.
- * @param[in]  content  File contents.
- *
- * @return 0 on success, -1 on failure.
- */
-static int
-send_file (const char *name, const char *content)
-{
-  size_t content_len = strlen (content);
-
-  if (sendf_to_server ("CLIENT <|> ATTACHED_FILE\n"
-                       "name: %s\n"
-                       "content: octet/stream\n"
-                       "bytes: %i\n",
-                       name,
-                       content_len))
-    return -1;
-
-  if (sendn_to_server (content, content_len))
-    return -1;
-
-  return 0;
-}
-
-/**
- * @brief Send a file from a task to the scanner.
- *
- * @param[in]  task  The task.
- * @param[in]  file  File name.
- *
- * @return 0 on success, -1 on failure.
- */
-static int
-send_task_file (task_t task, const char *file)
-{
-  iterator_t files;
-
-  init_task_file_iterator (&files, task, file);
-  while (next (&files))
-    {
-      gsize content_len;
-      guchar *content;
-      const char *content_64 = task_file_iterator_content (&files);
-
-      content = g_base64_decode (content_64, &content_len);
-
-      if (sendf_to_server ("CLIENT <|> ATTACHED_FILE\n"
-                           "name: %s\n"
-                           "content: octet/stream\n"
-                           "bytes: %i\n",
-                           file,
-                           content_len))
-        {
-          g_free (content);
-          cleanup_iterator (&files);
-          return -1;
-        }
-
-      if (sendn_to_server (content, content_len))
-        {
-          g_free (content);
-          cleanup_iterator (&files);
-          return -1;
-        }
-      g_free (content);
-    }
-  cleanup_iterator (&files);
-  return 0;
-}
-
-/**
- * @brief Send target "Alive Test" preferences to the scanner.
- *
- * @param[in]  target   Scan target.
- *
- * @return 0 on success, -1 on failure.
- */
-static int
-send_alive_test_preferences (target_t target)
-{
-  alive_test_t alive_test;
-
-  alive_test = target_alive_tests (target);
-
-  if (alive_test == 0)
-    return 0;
-
-  if (sendf_to_server ("Ping Host[checkbox]:Do a TCP ping <|> %s\n",
-                       alive_test & ALIVE_TEST_TCP_ACK_SERVICE
-                           || alive_test & ALIVE_TEST_TCP_SYN_SERVICE
-                         ? "yes"
-                         : "no"))
-    return -1;
-
-  if (sendf_to_server ("Ping Host[checkbox]:TCP ping tries also TCP-SYN ping"
-                       " <|> %s\n",
-                       ((alive_test & ALIVE_TEST_TCP_SYN_SERVICE)
-                        && (alive_test & ALIVE_TEST_TCP_ACK_SERVICE))
-                         ? "yes"
-                         : "no"))
-    return -1;
-
-  if (sendf_to_server ("Ping Host[checkbox]:TCP ping tries only TCP-SYN ping"
-                       " <|> %s\n",
-                       ((alive_test & ALIVE_TEST_TCP_SYN_SERVICE)
-                        && !(alive_test & ALIVE_TEST_TCP_ACK_SERVICE))
-                         ? "yes"
-                         : "no"))
-    return -1;
-
-  if (sendf_to_server ("Ping Host[checkbox]:Do an ICMP ping <|> %s\n",
-                       (alive_test & ALIVE_TEST_ICMP) ? "yes" : "no"))
-    return -1;
-
-  if (sendf_to_server ("Ping Host[checkbox]:Use ARP <|> %s\n",
-                       (alive_test & ALIVE_TEST_ARP) ? "yes" : "no"))
-    return -1;
-
-  if (sendf_to_server ("Ping Host[checkbox]:"
-                       "Mark unrechable Hosts as dead (not scanning) <|> %s\n",
-                       (alive_test & ALIVE_TEST_CONSIDER_ALIVE) ? "no" : "yes"))
-    return -1;
-
-  if (alive_test == ALIVE_TEST_CONSIDER_ALIVE)
-    {
-      /* Also select a method, otherwise Ping Host logs a warning. */
-      if (sendf_to_server ("Ping Host[checkbox]:Do a TCP ping <|> yes\n"))
-        return -1;
-    }
-
-  return 0;
-}
-
-/** @todo g_convert back to ISO-8559-1 for scanner? */
-
+
 /* Slave tasks. */
 
 /* Defined in gmp.c. */
-void
-buffer_config_preference_xml (GString *, iterator_t *, config_t, int);
-
-/**
- * @brief Number of seconds to sleep between polls to slave.
- */
-#define RUN_SLAVE_TASK_SLEEP_SECONDS 25
+void buffer_config_preference_xml (GString *, iterator_t *, config_t, int);
 
 /**
  * @brief Slave credential UUID.
@@ -2317,14 +1764,14 @@ slave_connect (gvm_connection_t *connection)
     ca_cert = manage_default_ca_cert ();
   else
     ca_cert = NULL;
-  connection->socket =
-    gvm_server_open_verify (&connection->session,
-                            connection->host_string,
-                            connection->port,
-                            ca_cert ? ca_cert : connection->ca_cert,
-                            connection->pub_key,
-                            connection->priv_key,
-                            1);
+  connection->socket = gvm_server_open_verify
+                        (&connection->session,
+                         connection->host_string,
+                         connection->port,
+                         ca_cert ? ca_cert : connection->ca_cert,
+                         connection->pub_key,
+                         connection->priv_key,
+                         1);
   if (connection->socket == -1)
     {
       g_warning ("%s: failed to open connection to %s on %i",
@@ -2337,8 +1784,9 @@ slave_connect (gvm_connection_t *connection)
   {
     int optval;
     optval = 1;
-    if (setsockopt (
-          connection->socket, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof (int)))
+    if (setsockopt (connection->socket,
+                    SOL_SOCKET, SO_KEEPALIVE,
+                    &optval, sizeof (int)))
       {
         g_warning ("%s: failed to set SO_KEEPALIVE on slave socket: %s",
                    __FUNCTION__,
@@ -2386,9 +1834,9 @@ slave_sleep_connect (gvm_connection_t *connection, task_t task)
           set_task_run_status (current_scanner_task, TASK_STATUS_STOPPED);
           return 3;
         }
-      g_debug (
-        "   %s: sleeping for %i", __FUNCTION__, RUN_SLAVE_TASK_SLEEP_SECONDS);
-      gvm_sleep (RUN_SLAVE_TASK_SLEEP_SECONDS);
+      g_debug ("   %s: sleeping for %i", __FUNCTION__,
+               manage_slave_check_period ());
+      gvm_sleep (manage_slave_check_period ());
     }
   while (slave_connect (connection));
   g_debug ("   %s: connected", __FUNCTION__);
@@ -2417,8 +1865,7 @@ update_end_times (entity_t report)
         {
           char *text;
           text = entity_text (end);
-          while (*text && isspace (*text))
-            text++;
+          while (*text && isspace (*text)) text++;
           if (*text == '\0')
             break;
           set_task_end_time (current_scanner_task,
@@ -2429,7 +1876,7 @@ update_end_times (entity_t report)
       entities = next_entities (entities);
     }
 
-  /* Add host details and set the host end times. */
+  /* Add host details, create assets and set the host end times. */
 
   entities = report->entities;
   while ((end = first_entity (entities)))
@@ -2448,16 +1895,19 @@ update_end_times (entity_t report)
             return -1;
 
           text = entity_text (time);
-          while (*text && isspace (*text))
-            text++;
+          while (*text && isspace (*text)) text++;
           if ((*text != '\0')
-              && (scan_host_end_time (global_current_report, entity_text (ip))
-                  == 0))
+              && (scan_host_end_time (global_current_report, entity_text (ip)) == 0))
             {
-              set_scan_host_end_time (
-                global_current_report, entity_text (ip), entity_text (time));
-              if (manage_report_host_details (
-                    global_current_report, entity_text (ip), end))
+              set_scan_host_end_time (global_current_report,
+                                      entity_text (ip),
+                                      entity_text (time));
+              if (manage_report_host_details (global_current_report,
+                                              entity_text (ip),
+                                              end))
+                return -1;
+              if (add_assets_from_host_in_report (global_current_report,
+                                                  entity_text (ip)))
                 return -1;
             }
         }
@@ -2539,14 +1989,10 @@ get_tasks_last_report (entity_t get_tasks)
  * @return 0 success, 1 giveup.
  */
 static int
-setup_ids (gvm_connection_t *connection,
-           task_t task,
-           entity_t get_tasks,
-           gchar **slave_config_uuid,
-           gchar **slave_target_uuid,
-           gchar **slave_port_list_uuid,
-           gchar **slave_ssh_credential_uuid,
-           gchar **slave_smb_credential_uuid,
+setup_ids (gvm_connection_t *connection, task_t task,
+           entity_t get_tasks, gchar **slave_config_uuid,
+           gchar **slave_target_uuid, gchar **slave_port_list_uuid,
+           gchar **slave_ssh_credential_uuid, gchar **slave_smb_credential_uuid,
            gchar **slave_esxi_credential_uuid,
            gchar **slave_snmp_credential_uuid)
 {
@@ -2578,9 +2024,9 @@ setup_ids (gvm_connection_t *connection,
           entity_t get_targets;
           int ret;
 
-          while (
-            (ret = gmp_get_targets (
-               &connection->session, *slave_target_uuid, 0, 0, &get_targets)))
+          while ((ret = gmp_get_targets (&connection->session,
+                                         *slave_target_uuid, 0, 0,
+                                         &get_targets)))
             {
               if (ret == 404)
                 {
@@ -2603,28 +2049,28 @@ setup_ids (gvm_connection_t *connection,
                 {
                   entity = entity_child (target, "port_list");
                   if (entity && entity_attribute (entity, "id"))
-                    *slave_port_list_uuid =
-                      g_strdup (entity_attribute (entity, "id"));
+                    *slave_port_list_uuid = g_strdup (entity_attribute
+                                                       (entity, "id"));
 
                   entity = entity_child (target, "ssh_credential");
                   if (entity && entity_attribute (entity, "id"))
-                    *slave_ssh_credential_uuid =
-                      g_strdup (entity_attribute (entity, "id"));
+                    *slave_ssh_credential_uuid = g_strdup (entity_attribute
+                                                            (entity, "id"));
 
                   entity = entity_child (target, "smb_credential");
                   if (entity && entity_attribute (entity, "id"))
-                    *slave_smb_credential_uuid =
-                      g_strdup (entity_attribute (entity, "id"));
+                    *slave_smb_credential_uuid = g_strdup (entity_attribute
+                                                            (entity, "id"));
 
                   entity = entity_child (target, "esxi_credential");
                   if (entity && entity_attribute (entity, "id"))
-                    *slave_esxi_credential_uuid =
-                      g_strdup (entity_attribute (entity, "id"));
+                    *slave_esxi_credential_uuid = g_strdup (entity_attribute
+                                                             (entity, "id"));
 
                   entity = entity_child (target, "snmp_credential");
                   if (entity && entity_attribute (entity, "id"))
-                    *slave_snmp_credential_uuid =
-                      g_strdup (entity_attribute (entity, "id"));
+                    *slave_snmp_credential_uuid = g_strdup (entity_attribute
+                                                             (entity, "id"));
                 }
               free_entity (get_targets);
             }
@@ -2669,11 +2115,8 @@ set_task_interrupted (task_t task, const gchar *message)
  * @return 0 success, 1 retry, 3 giveup.
  */
 static int
-slave_setup (gvm_connection_t *connection,
-             const char *name,
-             task_t task,
-             target_t target,
-             credential_t target_ssh_credential,
+slave_setup (gvm_connection_t *connection, const char *name, task_t task,
+             target_t target, credential_t target_ssh_credential,
              credential_t target_smb_credential,
              credential_t target_esxi_credential,
              credential_t target_snmp_credential,
@@ -2718,15 +2161,14 @@ slave_setup (gvm_connection_t *connection,
 
           /* Check if the task is running or complete on the slave. */
 
-          while (
-            (ret = gmp_get_tasks (
-               &connection->session, global_slave_task_uuid, 0, 0, &get_tasks)))
+          while ((ret = gmp_get_tasks (&connection->session, global_slave_task_uuid,
+                                       0, 0, &get_tasks)))
             {
               if (ret == 404)
                 {
-                  /* Task missing.  Perhaps someone removed the task on the
-                   * slave. Clear all the report results and start the task from
-                   * the beginning. */
+                  /* Task missing.  Perhaps someone removed the task on the slave.
+                   * Clear all the report results and start the task from the
+                   * beginning. */
                   trim_report (last_stopped_report);
                   last_stopped_report = 0;
                   break;
@@ -2759,16 +2201,13 @@ slave_setup (gvm_connection_t *connection,
                   global_slave_report_uuid = get_tasks_last_report (get_tasks);
                   if (global_slave_report_uuid == NULL)
                     {
-                      g_warning ("%s: slave report %s missing UUID",
-                                 __FUNCTION__,
+                      g_warning ("%s: slave report %s missing UUID", __FUNCTION__,
                                  global_slave_task_uuid);
                       goto fail;
                     }
 
-                  setup_ids (connection,
-                             task,
-                             get_tasks,
-                             &global_slave_config_uuid,
+                  setup_ids (connection, task,
+                             get_tasks, &global_slave_config_uuid,
                              &global_slave_target_uuid,
                              &global_slave_port_list_uuid,
                              &global_slave_ssh_credential_uuid,
@@ -2783,36 +2222,33 @@ slave_setup (gvm_connection_t *connection,
                                                   global_slave_task_uuid,
                                                   &global_slave_report_uuid))
                     {
-                    case 0:
-                      if (global_slave_report_uuid == NULL)
+                      case 0:
+                        if (global_slave_report_uuid == NULL)
+                          goto fail;
+                        setup_ids (connection, task,
+                                   get_tasks, &global_slave_config_uuid,
+                                   &global_slave_target_uuid,
+                                   &global_slave_port_list_uuid,
+                                   &global_slave_ssh_credential_uuid,
+                                   &global_slave_smb_credential_uuid,
+                                   &global_slave_esxi_credential_uuid,
+                                   &global_slave_snmp_credential_uuid);
+                        set_task_run_status (task, TASK_STATUS_REQUESTED);
+                        break;
+                      case 1:
+                        /* The resume may have failed because the task slave changed or
+                         * because someone removed the task on the slave.  Clear all the
+                         * report results and start the task from the beginning.
+                         *
+                         * This and the if above both "leak" the resources on the slave,
+                         * because on the report these resources are replaced with the new
+                         * resources. */
+                        trim_report (last_stopped_report);
+                        last_stopped_report = 0;
+                        break;
+                      default:
+                        free (global_slave_task_uuid);
                         goto fail;
-                      setup_ids (connection,
-                                 task,
-                                 get_tasks,
-                                 &global_slave_config_uuid,
-                                 &global_slave_target_uuid,
-                                 &global_slave_port_list_uuid,
-                                 &global_slave_ssh_credential_uuid,
-                                 &global_slave_smb_credential_uuid,
-                                 &global_slave_esxi_credential_uuid,
-                                 &global_slave_snmp_credential_uuid);
-                      set_task_run_status (task, TASK_STATUS_REQUESTED);
-                      break;
-                    case 1:
-                      /* The resume may have failed because the task slave
-                       * changed or because someone removed the task on the
-                       * slave.  Clear all the report results and start the task
-                       * from the beginning.
-                       *
-                       * This and the if above both "leak" the resources on the
-                       * slave, because on the report these resources are
-                       * replaced with the new resources. */
-                      trim_report (last_stopped_report);
-                      last_stopped_report = 0;
-                      break;
-                    default:
-                      free (global_slave_task_uuid);
-                      goto fail;
                     }
                 }
             }
@@ -2825,7 +2261,8 @@ slave_setup (gvm_connection_t *connection,
 
       if (target_ssh_credential)
         {
-          init_credential_iterator_one (&credentials, target_ssh_credential);
+          init_credential_iterator_one (&credentials,
+                                            target_ssh_credential);
           if (next (&credentials))
             {
               int ret;
@@ -2837,7 +2274,8 @@ slave_setup (gvm_connection_t *connection,
               password = credential_iterator_password (&credentials);
               private_key = credential_iterator_private_key (&credentials);
 
-              if (user == NULL || (private_key == NULL && password == NULL))
+              if (user == NULL
+                  || (private_key == NULL && password == NULL))
                 {
                   cleanup_iterator (&credentials);
                   global_slave_ssh_credential_uuid = NULL;
@@ -2865,10 +2303,10 @@ slave_setup (gvm_connection_t *connection,
 
                   cleanup_iterator (&credentials);
 
-                  ret = gmp_create_lsc_credential_ext (
-                    &connection->session,
-                    opts,
-                    &global_slave_ssh_credential_uuid);
+                  ret = gmp_create_lsc_credential_ext
+                         (&connection->session,
+                          opts,
+                          &global_slave_ssh_credential_uuid);
 
                   g_free (user_copy);
                   g_free (password_copy);
@@ -2888,7 +2326,8 @@ slave_setup (gvm_connection_t *connection,
 
       if (target_smb_credential)
         {
-          init_credential_iterator_one (&credentials, target_smb_credential);
+          init_credential_iterator_one (&credentials,
+                                        target_smb_credential);
           if (next (&credentials))
             {
               int ret;
@@ -2921,10 +2360,10 @@ slave_setup (gvm_connection_t *connection,
 
                   cleanup_iterator (&credentials);
 
-                  ret = gmp_create_lsc_credential_ext (
-                    &connection->session,
-                    opts,
-                    &global_slave_smb_credential_uuid);
+                  ret = gmp_create_lsc_credential_ext
+                           (&connection->session,
+                            opts,
+                            &global_slave_smb_credential_uuid);
 
                   g_free (smb_name);
                   g_free (user_copy);
@@ -2944,7 +2383,8 @@ slave_setup (gvm_connection_t *connection,
 
       if (target_esxi_credential)
         {
-          init_credential_iterator_one (&credentials, target_esxi_credential);
+          init_credential_iterator_one (&credentials,
+                                        target_esxi_credential);
           if (next (&credentials))
             {
               int ret;
@@ -2977,10 +2417,10 @@ slave_setup (gvm_connection_t *connection,
 
                   cleanup_iterator (&credentials);
 
-                  ret = gmp_create_lsc_credential_ext (
-                    &connection->session,
-                    opts,
-                    &global_slave_esxi_credential_uuid);
+                  ret = gmp_create_lsc_credential_ext
+                           (&connection->session,
+                            opts,
+                            &global_slave_esxi_credential_uuid);
 
                   g_free (esxi_name);
                   g_free (user_copy);
@@ -2999,7 +2439,8 @@ slave_setup (gvm_connection_t *connection,
 
       if (target_snmp_credential)
         {
-          init_credential_iterator_one (&credentials, target_snmp_credential);
+          init_credential_iterator_one (&credentials,
+                                        target_snmp_credential);
           if (next (&credentials))
             {
               int ret;
@@ -3013,12 +2454,12 @@ slave_setup (gvm_connection_t *connection,
               community = credential_iterator_community (&credentials);
               user = credential_iterator_login (&credentials);
               password = credential_iterator_password (&credentials);
-              auth_algorithm =
-                credential_iterator_auth_algorithm (&credentials);
-              privacy_password =
-                credential_iterator_privacy_password (&credentials);
-              privacy_algorithm =
-                credential_iterator_privacy_algorithm (&credentials);
+              auth_algorithm
+                = credential_iterator_auth_algorithm (&credentials);
+              privacy_password
+                = credential_iterator_privacy_password (&credentials);
+              privacy_algorithm
+                = credential_iterator_privacy_algorithm (&credentials);
 
               if (password && strcmp (password, "")
                   && (auth_algorithm == NULL || strcmp (auth_algorithm, "")))
@@ -3033,7 +2474,8 @@ slave_setup (gvm_connection_t *connection,
               else if (((privacy_password && strcmp (privacy_password, ""))
                         || (privacy_algorithm
                             && strcmp (privacy_algorithm, "")))
-                       && (password == NULL || auth_algorithm == NULL
+                       && (password == NULL
+                           || auth_algorithm == NULL
                            || privacy_password == NULL
                            || privacy_algorithm == NULL))
                 {
@@ -3048,15 +2490,18 @@ slave_setup (gvm_connection_t *connection,
                 }
               else
                 {
-                  community_copy = g_strdup (community ? community : "");
-                  user_copy = g_strdup (user ? user : "");
-                  password_copy = g_strdup (password ? password : "");
-                  auth_algorithm_copy =
-                    g_strdup (auth_algorithm ? auth_algorithm : "");
-                  privacy_password_copy =
-                    g_strdup (privacy_password ? privacy_password : "");
-                  privacy_algorithm_copy =
-                    g_strdup (privacy_algorithm ? privacy_algorithm : "");
+                  community_copy
+                      = g_strdup (community ? community : "");
+                  user_copy
+                      = g_strdup (user ? user : "");
+                  password_copy
+                      = g_strdup (password ? password : "");
+                  auth_algorithm_copy
+                      = g_strdup (auth_algorithm ? auth_algorithm : "");
+                  privacy_password_copy
+                      = g_strdup (privacy_password ? privacy_password : "");
+                  privacy_algorithm_copy
+                      = g_strdup (privacy_algorithm ? privacy_algorithm : "");
 
                   opts = gmp_create_lsc_credential_opts_defaults;
                   snmp_name = g_strdup_printf ("%ssnmp", name);
@@ -3071,10 +2516,10 @@ slave_setup (gvm_connection_t *connection,
 
                   cleanup_iterator (&credentials);
 
-                  ret = gmp_create_lsc_credential_ext (
-                    &connection->session,
-                    opts,
-                    &global_slave_snmp_credential_uuid);
+                  ret = gmp_create_lsc_credential_ext
+                           (&connection->session,
+                            opts,
+                            &global_slave_snmp_credential_uuid);
 
                   g_free (snmp_name);
                   g_free (community_copy);
@@ -3095,20 +2540,16 @@ slave_setup (gvm_connection_t *connection,
             }
         }
 
-      g_debug ("   %s: slave SSH credential uuid: %s",
-               __FUNCTION__,
+      g_debug ("   %s: slave SSH credential uuid: %s", __FUNCTION__,
                global_slave_ssh_credential_uuid);
 
-      g_debug ("   %s: slave SMB credential uuid: %s",
-               __FUNCTION__,
+      g_debug ("   %s: slave SMB credential uuid: %s", __FUNCTION__,
                global_slave_smb_credential_uuid);
 
-      g_debug ("   %s: slave ESXi credential uuid: %s",
-               __FUNCTION__,
+      g_debug ("   %s: slave ESXi credential uuid: %s", __FUNCTION__,
                global_slave_esxi_credential_uuid);
 
-      g_debug ("   %s: slave SNMP credential uuid: %s",
-               __FUNCTION__,
+      g_debug ("   %s: slave SNMP credential uuid: %s", __FUNCTION__,
                global_slave_snmp_credential_uuid);
 
       /* Create the target on the slave. */
@@ -3129,9 +2570,10 @@ slave_setup (gvm_connection_t *connection,
           hosts = target_iterator_hosts (&targets);
           exclude_hosts = target_iterator_exclude_hosts (&targets);
           alive_tests = target_iterator_alive_tests (&targets);
-          reverse_lookup_only = target_iterator_reverse_lookup_only (&targets);
-          reverse_lookup_unify =
-            target_iterator_reverse_lookup_unify (&targets);
+          reverse_lookup_only
+            = target_iterator_reverse_lookup_only (&targets);
+          reverse_lookup_unify
+            = target_iterator_reverse_lookup_unify (&targets);
           if (hosts == NULL)
             {
               cleanup_iterator (&targets);
@@ -3162,13 +2604,13 @@ slave_setup (gvm_connection_t *connection,
           opts.port_range = port_range;
           opts.name = name;
           opts.comment = "Slave target created by Master";
-          opts.reverse_lookup_only =
-            reverse_lookup_only ? atoi (reverse_lookup_only) : 0;
-          opts.reverse_lookup_unify =
-            reverse_lookup_unify ? atoi (reverse_lookup_unify) : 0;
+          opts.reverse_lookup_only
+            = reverse_lookup_only ? atoi (reverse_lookup_only) : 0;
+          opts.reverse_lookup_unify
+            = reverse_lookup_unify ? atoi (reverse_lookup_unify) : 0;
 
-          ret = gmp_create_target_ext (
-            &connection->session, opts, &global_slave_target_uuid);
+          ret = gmp_create_target_ext (&connection->session, opts,
+                                       &global_slave_target_uuid);
           g_free (hosts_copy);
           g_free (exclude_hosts_copy);
           g_free (alive_tests_copy);
@@ -3184,11 +2626,8 @@ slave_setup (gvm_connection_t *connection,
               goto fail_credentials;
             }
 
-          if (gmp_get_targets (&connection->session,
-                               global_slave_target_uuid,
-                               0,
-                               0,
-                               &get_targets))
+          if (gmp_get_targets (&connection->session, global_slave_target_uuid,
+                               0, 0, &get_targets))
             goto fail_target;
           child = entity_child (get_targets, "target");
           if (child == NULL)
@@ -3217,8 +2656,9 @@ slave_setup (gvm_connection_t *connection,
           goto fail_credentials;
         }
 
-      g_debug (
-        "   %s: slave target uuid: %s", __FUNCTION__, global_slave_target_uuid);
+      g_debug ("   %s: slave target uuid: %s",
+               __FUNCTION__,
+               global_slave_target_uuid);
 
       /* Create the config on the slave. */
 
@@ -3263,6 +2703,7 @@ slave_setup (gvm_connection_t *connection,
                                      "<name>%s</name>"
                                      "</nvt>"
                                      "<name>Timeout</name>"
+                                     "<id>0</id>"
                                      "<type>entry</type>"
                                      "<value>%s</value>"
                                      "</preference>",
@@ -3298,24 +2739,27 @@ slave_setup (gvm_connection_t *connection,
             goto fail_target;
           }
 
-        init_nvt_selector_iterator (
-          &selectors, NULL, config, NVT_SELECTOR_TYPE_ANY);
+        init_nvt_selector_iterator (&selectors,
+                                    NULL,
+                                    config,
+                                    NVT_SELECTOR_TYPE_ANY);
         while (next (&selectors))
           {
             int type = nvt_selector_iterator_type (&selectors);
-            if (gvm_server_sendf (&connection->session,
-                                  "<nvt_selector>"
-                                  "<name>%s</name>"
-                                  "<include>%i</include>"
-                                  "<type>%i</type>"
-                                  "<family_or_nvt>%s</family_or_nvt>"
-                                  "</nvt_selector>",
-                                  nvt_selector_iterator_name (&selectors),
-                                  nvt_selector_iterator_include (&selectors),
-                                  type,
-                                  (type == NVT_SELECTOR_TYPE_ALL
-                                     ? ""
-                                     : nvt_selector_iterator_nvt (&selectors))))
+            if (gvm_server_sendf
+                 (&connection->session,
+                  "<nvt_selector>"
+                  "<name>%s</name>"
+                  "<include>%i</include>"
+                  "<type>%i</type>"
+                  "<family_or_nvt>%s</family_or_nvt>"
+                  "</nvt_selector>",
+                  nvt_selector_iterator_name (&selectors),
+                  nvt_selector_iterator_include (&selectors),
+                  type,
+                  (type == NVT_SELECTOR_TYPE_ALL
+                    ? ""
+                    : nvt_selector_iterator_nvt (&selectors))))
               goto fail_target;
           }
         cleanup_iterator (&selectors);
@@ -3331,8 +2775,9 @@ slave_setup (gvm_connection_t *connection,
           goto fail_target;
       }
 
-      g_debug (
-        "   %s: slave config uuid: %s", __FUNCTION__, global_slave_config_uuid);
+      g_debug ("   %s: slave config uuid: %s",
+               __FUNCTION__,
+               global_slave_config_uuid);
 
       /* Create the task on the slave. */
 
@@ -3379,8 +2824,9 @@ slave_setup (gvm_connection_t *connection,
         opts.schedule_id = NULL;
         opts.slave_id = NULL;
 
-        ret = gmp_create_task_ext (
-          &connection->session, opts, &global_slave_task_uuid);
+        ret = gmp_create_task_ext (&connection->session,
+                                   opts,
+                                   &global_slave_task_uuid);
         g_free (comment);
         g_free (max_checks);
         g_free (max_hosts);
@@ -3399,8 +2845,7 @@ slave_setup (gvm_connection_t *connection,
       if (global_slave_report_uuid == NULL)
         goto fail_stop_task;
 
-      set_report_slave_task_uuid (global_current_report,
-                                  global_slave_task_uuid);
+      set_report_slave_task_uuid (global_current_report, global_slave_task_uuid);
     }
 
   /* Setup the current task for functions like set_task_run_status. */
@@ -3422,54 +2867,55 @@ slave_setup (gvm_connection_t *connection,
       run_status = task_run_status (task);
       switch (run_status)
         {
-        case TASK_STATUS_DELETE_REQUESTED:
-        case TASK_STATUS_DELETE_ULTIMATE_REQUESTED:
-        case TASK_STATUS_STOP_REQUESTED:
-          switch (gmp_stop_task (&connection->session, global_slave_task_uuid))
-            {
-            case 0:
-              break;
-            case 404:
-              /* Resource Missing. */
-              set_task_interrupted (task,
-                                    "Failed to find task on slave."
-                                    "  Interrupting scan.");
-              goto giveup;
-            default:
-              goto fail_stop_task;
-            }
-          if (run_status == TASK_STATUS_DELETE_REQUESTED)
-            set_task_run_status (current_scanner_task,
-                                 TASK_STATUS_DELETE_WAITING);
-          else if (run_status == TASK_STATUS_DELETE_ULTIMATE_REQUESTED)
-            set_task_run_status (current_scanner_task,
-                                 TASK_STATUS_DELETE_ULTIMATE_WAITING);
-          else
-            set_task_run_status (current_scanner_task,
-                                 TASK_STATUS_STOP_WAITING);
-          break;
-        case TASK_STATUS_STOP_REQUESTED_GIVEUP:
-          g_debug ("   %s: task stopped for giveup", __FUNCTION__);
-          set_task_run_status (current_scanner_task, TASK_STATUS_STOPPED);
-          goto giveup;
-          break;
-        case TASK_STATUS_STOPPED:
-          assert (0);
-          goto fail_stop_task;
-          break;
-        case TASK_STATUS_DELETE_WAITING:
-        case TASK_STATUS_DELETE_ULTIMATE_WAITING:
-        case TASK_STATUS_DONE:
-        case TASK_STATUS_NEW:
-        case TASK_STATUS_REQUESTED:
-        case TASK_STATUS_RUNNING:
-        case TASK_STATUS_STOP_WAITING:
-        case TASK_STATUS_INTERRUPTED:
-          break;
+          case TASK_STATUS_DELETE_REQUESTED:
+          case TASK_STATUS_DELETE_ULTIMATE_REQUESTED:
+          case TASK_STATUS_STOP_REQUESTED:
+            switch (gmp_stop_task (&connection->session,
+                                   global_slave_task_uuid))
+              {
+                case 0:
+                  break;
+                case 404:
+                  /* Resource Missing. */
+                  set_task_interrupted (task,
+                                        "Failed to find task on slave."
+                                        "  Interrupting scan.");
+                  goto giveup;
+                default:
+                  goto fail_stop_task;
+              }
+            if (run_status == TASK_STATUS_DELETE_REQUESTED)
+              set_task_run_status (current_scanner_task,
+                                   TASK_STATUS_DELETE_WAITING);
+            else if (run_status == TASK_STATUS_DELETE_ULTIMATE_REQUESTED)
+              set_task_run_status (current_scanner_task,
+                                   TASK_STATUS_DELETE_ULTIMATE_WAITING);
+            else
+              set_task_run_status (current_scanner_task,
+                                   TASK_STATUS_STOP_WAITING);
+            break;
+          case TASK_STATUS_STOP_REQUESTED_GIVEUP:
+            g_debug ("   %s: task stopped for giveup", __FUNCTION__);
+            set_task_run_status (current_scanner_task, TASK_STATUS_STOPPED);
+            goto giveup;
+            break;
+          case TASK_STATUS_STOPPED:
+            assert (0);
+            goto fail_stop_task;
+            break;
+          case TASK_STATUS_DELETE_WAITING:
+          case TASK_STATUS_DELETE_ULTIMATE_WAITING:
+          case TASK_STATUS_DONE:
+          case TASK_STATUS_NEW:
+          case TASK_STATUS_REQUESTED:
+          case TASK_STATUS_RUNNING:
+          case TASK_STATUS_STOP_WAITING:
+          case TASK_STATUS_INTERRUPTED:
+            break;
         }
 
-      ret = gmp_get_tasks (
-        &connection->session, global_slave_task_uuid, 0, 0, &get_tasks);
+      ret = gmp_get_tasks (&connection->session, global_slave_task_uuid, 0, 0,
+                           &get_tasks);
       if (ret == 404)
         {
           /* Resource Missing. */
@@ -3496,7 +2942,8 @@ slave_setup (gvm_connection_t *connection,
           goto giveup;
         }
       status_done = (strcmp (status, "Done") == 0);
-      if ((strcmp (status, "Running") == 0) || status_done)
+      if ((strcmp (status, "Running") == 0)
+          || status_done)
         {
           int ret2 = 0;
           gmp_get_report_opts_t opts;
@@ -3514,22 +2961,22 @@ slave_setup (gvm_connection_t *connection,
           opts = gmp_get_report_opts_defaults;
           opts.report_id = global_slave_report_uuid;
           opts.format_id = "a994b278-1f62-11e1-96ac-406186ea4fc5";
-          opts.filter = g_strdup_printf (
-            "first=%i rows=-1 levels=hmlgd apply_overrides=0"
-            " min_qod=0 autofp=0 result_hosts_only=%i"
-            " sort=created",
-            next_result,
-            status_done
-              /* Request all the hosts to get their end times. */
-              ? 0
-              : 1);
+          opts.filter = g_strdup_printf
+                         ("first=%i rows=-1 levels=hmlgd apply_overrides=0"
+                          " min_qod=0 autofp=0 result_hosts_only=%i"
+                          " sort=created",
+                          next_result,
+                          status_done
+                           /* Request all the hosts to get their end times. */
+                           ? 0
+                           : 1);
 
           ret = gmp_get_report_ext (&connection->session, opts, &get_report);
           if (ret)
             {
               opts.format_id = "d5da9f67-8551-4e51-807b-b6a873d70e34";
-              ret2 =
-                gmp_get_report_ext (&connection->session, opts, &get_report);
+              ret2 = gmp_get_report_ext (&connection->session, opts,
+                                         &get_report);
             }
           g_free (opts.filter);
           if ((ret == 404) && (ret2 == 404))
@@ -3611,34 +3058,45 @@ slave_setup (gvm_connection_t *connection,
 
       free_entity (get_tasks);
 
-      gvm_sleep (RUN_SLAVE_TASK_SLEEP_SECONDS);
+      g_debug ("   %s: sleeping for %i\n", __FUNCTION__,
+               manage_slave_check_period ());
+      gvm_sleep (manage_slave_check_period ());
     }
 
   /* Cleanup. */
 
   current_scanner_task = (task_t) 0;
 
-  gmp_delete_task_ext (&connection->session, global_slave_task_uuid, del_opts);
+  gmp_delete_task_ext (&connection->session,
+                       global_slave_task_uuid,
+                       del_opts);
   set_report_slave_task_uuid (global_current_report, "");
-  gmp_delete_config_ext (
-    &connection->session, global_slave_config_uuid, del_opts);
-  gmp_delete_target_ext (
-    &connection->session, global_slave_target_uuid, del_opts);
-  gmp_delete_port_list_ext (
-    &connection->session, global_slave_port_list_uuid, del_opts);
+  gmp_delete_config_ext (&connection->session,
+                         global_slave_config_uuid,
+                         del_opts);
+  gmp_delete_target_ext (&connection->session,
+                         global_slave_target_uuid,
+                         del_opts);
+  gmp_delete_port_list_ext (&connection->session,
+                            global_slave_port_list_uuid,
+                            del_opts);
   if (global_slave_ssh_credential_uuid)
-    gmp_delete_lsc_credential_ext (
-      &connection->session, global_slave_ssh_credential_uuid, del_opts);
+    gmp_delete_lsc_credential_ext (&connection->session,
+                                   global_slave_ssh_credential_uuid,
+                                   del_opts);
   if (global_slave_smb_credential_uuid)
-    gmp_delete_lsc_credential_ext (
-      &connection->session, global_slave_smb_credential_uuid, del_opts);
+    gmp_delete_lsc_credential_ext (&connection->session,
+                                   global_slave_smb_credential_uuid,
+                                   del_opts);
   if (global_slave_esxi_credential_uuid)
-    gmp_delete_lsc_credential_ext (
-      &connection->session, global_slave_esxi_credential_uuid, del_opts);
+    gmp_delete_lsc_credential_ext (&connection->session,
+                                   global_slave_esxi_credential_uuid,
+                                   del_opts);
   if (global_slave_snmp_credential_uuid)
-    gmp_delete_lsc_credential_ext (
-      &connection->session, global_slave_snmp_credential_uuid, del_opts);
-succeed_stopped:
+    gmp_delete_lsc_credential_ext (&connection->session,
+                                   global_slave_snmp_credential_uuid,
+                                   del_opts);
+ succeed_stopped:
   free (global_slave_task_uuid);
   global_slave_task_uuid = NULL;
   free (global_slave_report_uuid);
@@ -3662,48 +3120,58 @@ succeed_stopped:
   g_debug ("   %s: succeed", __FUNCTION__);
   return 0;
 
-fail_stop_task:
-  gmp_stop_task (&connection->session, global_slave_task_uuid);
+ fail_stop_task:
+  gmp_stop_task (&connection->session,
+                 global_slave_task_uuid);
   free (global_slave_report_uuid);
-fail_task:
-  gmp_delete_task_ext (&connection->session, global_slave_task_uuid, del_opts);
+ fail_task:
+  gmp_delete_task_ext (&connection->session,
+                       global_slave_task_uuid,
+                       del_opts);
   set_report_slave_task_uuid (global_current_report, "");
   free (global_slave_task_uuid);
-fail_config:
-  gmp_delete_config_ext (
-    &connection->session, global_slave_config_uuid, del_opts);
+ fail_config:
+  gmp_delete_config_ext (&connection->session,
+                         global_slave_config_uuid,
+                         del_opts);
   free (global_slave_config_uuid);
-fail_target:
-  gmp_delete_target_ext (
-    &connection->session, global_slave_target_uuid, del_opts);
+ fail_target:
+  gmp_delete_target_ext (&connection->session,
+                         global_slave_target_uuid,
+                         del_opts);
   free (global_slave_target_uuid);
-  gmp_delete_port_list_ext (
-    &connection->session, global_slave_port_list_uuid, del_opts);
+  gmp_delete_port_list_ext (&connection->session,
+                            global_slave_port_list_uuid,
+                            del_opts);
   free (global_slave_port_list_uuid);
-fail_credentials:
+ fail_credentials:
   if (global_slave_snmp_credential_uuid)
-    gmp_delete_lsc_credential_ext (
-      &connection->session, global_slave_snmp_credential_uuid, del_opts);
+    gmp_delete_lsc_credential_ext (&connection->session,
+                                   global_slave_snmp_credential_uuid,
+                                   del_opts);
   free (global_slave_snmp_credential_uuid);
   if (global_slave_esxi_credential_uuid)
-    gmp_delete_lsc_credential_ext (
-      &connection->session, global_slave_esxi_credential_uuid, del_opts);
+    gmp_delete_lsc_credential_ext (&connection->session,
+                                   global_slave_esxi_credential_uuid,
+                                   del_opts);
   free (global_slave_esxi_credential_uuid);
   if (global_slave_smb_credential_uuid)
-    gmp_delete_lsc_credential_ext (
-      &connection->session, global_slave_smb_credential_uuid, del_opts);
+    gmp_delete_lsc_credential_ext (&connection->session,
+                                   global_slave_smb_credential_uuid,
+                                   del_opts);
   free (global_slave_smb_credential_uuid);
   if (global_slave_ssh_credential_uuid)
-    gmp_delete_lsc_credential_ext (
-      &connection->session, global_slave_ssh_credential_uuid, del_opts);
+    gmp_delete_lsc_credential_ext (&connection->session,
+                                   global_slave_ssh_credential_uuid,
+                                   del_opts);
   free (global_slave_ssh_credential_uuid);
-fail:
+ fail:
   g_debug ("   %s: fail (%i)", __FUNCTION__, ret_fail);
   gvm_connection_close (connection);
   global_slave_connection = NULL;
   return ret_fail;
 
-giveup:
+ giveup:
   g_debug ("   %s: giveup (%i)", __FUNCTION__, ret_giveup);
   gvm_connection_close (connection);
   global_slave_connection = NULL;
@@ -3728,8 +3196,7 @@ giveup:
  *         task name.
  */
 static int
-handle_slave_task (task_t task,
-                   target_t target,
+handle_slave_task (task_t task, target_t target,
                    credential_t target_ssh_credential,
                    credential_t target_smb_credential,
                    credential_t target_esxi_credential,
@@ -3751,8 +3218,7 @@ handle_slave_task (task_t task,
 
   g_debug ("   Running slave task %llu", task);
 
-  // FIX permission checks  may the user still access the slave, target, port
-  // list etc?
+  // FIX permission checks  may the user still access the slave, target, port list etc?
 
   report_set_slave_uuid (global_current_report, slave_id);
   report_set_slave_name (global_current_report, slave_name);
@@ -3791,7 +3257,7 @@ handle_slave_task (task_t task,
                               "",
                               port_string,
                               /* NVT: Global variable settings. */
-                              "1.3.6.1.4.1.25623.1.0.12288",
+                              OID_GLOBAL_SETTINGS,
                               "Error Message",
                               "Authentication with the slave failed.");
         g_free (port_string);
@@ -3812,7 +3278,7 @@ handle_slave_task (task_t task,
               {
                 g_debug ("%s: Received %s signal.",
                          __FUNCTION__,
-                         sys_siglist[get_termination_signal ()]);
+                         sys_siglist[get_termination_signal()]);
               }
             if (global_current_report)
               {
@@ -3823,7 +3289,9 @@ handle_slave_task (task_t task,
             g_free (slave_task_name);
             return 0;
           }
-        gvm_sleep (RUN_SLAVE_TASK_SLEEP_SECONDS);
+        g_debug ("   %s: sleeping for %i\n", __FUNCTION__,
+                 manage_slave_check_period ());
+        gvm_sleep (manage_slave_check_period ());
       }
 
   while (1)
@@ -3832,7 +3300,7 @@ handle_slave_task (task_t task,
         {
           g_debug ("%s: Received %s signal.",
                    __FUNCTION__,
-                   sys_siglist[get_termination_signal ()]);
+                   sys_siglist[get_termination_signal()]);
           if (global_current_report)
             {
               set_report_scan_run_status (global_current_report,
@@ -3843,15 +3311,10 @@ handle_slave_task (task_t task,
           return 0;
         }
 
-      ret = slave_setup (connection,
-                         slave_task_name,
-                         task,
-                         target,
-                         target_ssh_credential,
-                         target_smb_credential,
-                         target_esxi_credential,
-                         target_snmp_credential,
-                         last_stopped_report);
+      ret = slave_setup (connection, slave_task_name,
+                         task, target, target_ssh_credential,
+                         target_smb_credential, target_esxi_credential,
+                         target_snmp_credential, last_stopped_report);
       if (ret == 1)
         {
           ret = slave_sleep_connect (connection, task);
@@ -3869,6 +3332,7 @@ handle_slave_task (task_t task,
   return 0;
 }
 
+
 /* OSP tasks. */
 
 /**
@@ -3887,23 +3351,23 @@ task_scanner_options (task_t task, target_t target)
   iterator_t prefs;
 
   config = task_config (task);
-  init_preference_iterator (&prefs, config);
+  init_config_preference_iterator (&prefs, config);
   table = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
   while (next (&prefs))
     {
       char *name, *value = NULL;
       const char *type;
 
-      name = g_strdup (preference_iterator_name (&prefs));
-      type = preference_iterator_type (&prefs);
+      name = g_strdup (config_preference_iterator_name (&prefs));
+      type = config_preference_iterator_type (&prefs);
 
       if (g_str_has_prefix (type, "credential_"))
         {
           credential_t credential = 0;
           iterator_t iter;
-          const char *uuid = preference_iterator_value (&prefs);
+          const char *uuid = config_preference_iterator_value (&prefs);
 
-          if (!strcmp (preference_iterator_value (&prefs), "0"))
+          if (!strcmp (config_preference_iterator_value (&prefs), "0"))
             credential = target_ssh_credential (target);
           else if (find_resource ("credential", uuid, &credential))
             {
@@ -3927,14 +3391,12 @@ task_scanner_options (task_t task, target_t target)
             }
           if (!strcmp (type, "credential_up")
               && !strcmp (credential_iterator_type (&iter), "up"))
-            value = g_strdup_printf ("%s:%s",
-                                     credential_iterator_login (&iter),
+            value = g_strdup_printf ("%s:%s", credential_iterator_login (&iter),
                                      credential_iterator_password (&iter));
           else if (!strcmp (type, "credential_up"))
             {
               g_warning ("OSP Parameter %s requires credentials of type"
-                         " username+password",
-                         name);
+                         " username+password", name);
               g_free (name);
               continue;
             }
@@ -3952,16 +3414,16 @@ task_scanner_options (task_t task, target_t target)
         {
           char *fname;
 
-          if (!preference_iterator_value (&prefs))
+          if (!config_preference_iterator_value (&prefs))
             continue;
-          fname = g_strdup_printf (
-            "%s/%s", GVM_SCAP_DATA_DIR "/", preference_iterator_value (&prefs));
+          fname = g_strdup_printf ("%s/%s", GVM_SCAP_DATA_DIR "/",
+                                   config_preference_iterator_value (&prefs));
           value = gvm_file_as_base64 (fname);
           if (!value)
             continue;
         }
       else
-        value = g_strdup (preference_iterator_value (&prefs));
+        value = g_strdup (config_preference_iterator_value (&prefs));
       g_hash_table_insert (table, name, value);
     }
   cleanup_iterator (&prefs);
@@ -3979,19 +3441,14 @@ task_scanner_options (task_t task, target_t target)
  * @param[in]   key_priv    Private key.
  */
 static void
-delete_osp_scan (const char *report_id,
-                 const char *host,
-                 int port,
-                 const char *ca_pub,
-                 const char *key_pub,
-                 const char *key_priv)
+delete_osp_scan (const char *report_id, const char *host, int port,
+                 const char *ca_pub, const char *key_pub, const char *key_priv)
 {
   osp_connection_t *connection;
 
-  connection = osp_connection_new (host, port, ca_pub, key_pub, key_priv);
+  connection = osp_connect_with_data (host, port, ca_pub, key_pub, key_priv);
   if (!connection)
     {
-      g_warning ("Couldn't connect to OSP scanner on %s:%d", host, port);
       return;
     }
   osp_delete_scan (connection, report_id);
@@ -4008,31 +3465,28 @@ delete_osp_scan (const char *report_id,
  * @param[in]   key_pub     Certificate.
  * @param[in]   key_priv    Private key.
  * @param[in]   details     1 for detailed report, 0 otherwise.
+ * @param[in]   pop_results 1 to pop results, 0 to leave results intact.
  * @param[out]  report_xml  Scan report.
  *
  * @return -1 on error, progress value between 0 and 100 on success.
  */
 static int
-get_osp_scan_report (const char *scan_id,
-                     const char *host,
-                     int port,
-                     const char *ca_pub,
-                     const char *key_pub,
-                     const char *key_priv,
-                     int details,
+get_osp_scan_report (const char *scan_id, const char *host, int port,
+                     const char *ca_pub, const char *key_pub, const char
+                     *key_priv, int details, int pop_results,
                      char **report_xml)
 {
   osp_connection_t *connection;
   int progress;
   char *error = NULL;
 
-  connection = osp_connection_new (host, port, ca_pub, key_pub, key_priv);
+  connection = osp_connect_with_data (host, port, ca_pub, key_pub, key_priv);
   if (!connection)
     {
-      g_warning ("Couldn't connect to OSP scanner on %s:%d", host, port);
       return -1;
     }
-  progress = osp_get_scan (connection, scan_id, report_xml, details, &error);
+  progress = osp_get_scan_pop (connection, scan_id, report_xml, details,
+                               pop_results, &error);
   if (progress > 100 || progress < 0)
     {
       g_warning ("OSP get_scan %s: %s", scan_id, error);
@@ -4042,6 +3496,48 @@ get_osp_scan_report (const char *scan_id,
 
   osp_connection_close (connection);
   return progress;
+}
+
+
+/**
+ * @brief Get an OSP scan's status.
+ *
+ * @param[in]   scan_id     Scan ID.
+ * @param[in]   host        Scanner host.
+ * @param[in]   port        Scanner port.
+ * @param[in]   ca_pub      CA Certificate.
+ * @param[in]   key_pub     Certificate.
+ * @param[in]   key_priv    Private key.
+ *
+ * @return 0 in success, -1 otherwise.
+ */
+static osp_scan_status_t
+get_osp_scan_status (const char *scan_id, const char *host, int port,
+                     const char *ca_pub, const char *key_pub, const char
+                     *key_priv)
+{
+  osp_connection_t *connection;
+  char *error = NULL;
+  osp_get_scan_status_opts_t get_scan_opts;
+  osp_scan_status_t status = OSP_SCAN_STATUS_ERROR;
+
+  connection = osp_connect_with_data (host, port, ca_pub, key_pub, key_priv);
+  if (!connection)
+    {
+      return status;
+    }
+
+  get_scan_opts.scan_id = scan_id;
+  status = osp_get_scan_status_ext (connection, get_scan_opts, &error);
+  if (status == OSP_SCAN_STATUS_ERROR)
+    {
+      g_warning ("OSP %s %s: %s", __func__, scan_id, error);
+      g_free (error);
+      return status;
+    }
+
+  osp_connection_close (connection);
+  return status;
 }
 
 /**
@@ -4066,10 +3562,12 @@ handle_osp_scan (task_t task, report_t report, const char *scan_id)
   ca_pub = scanner_ca_pub (scanner);
   key_pub = scanner_key_pub (scanner);
   key_priv = scanner_key_priv (scanner);
+
   while (1)
     {
       char *report_xml = NULL;
       int run_status;
+      osp_scan_status_t osp_scan_status;
 
       run_status = task_run_status (task);
       if (run_status == TASK_STATUS_STOPPED
@@ -4078,52 +3576,68 @@ handle_osp_scan (task_t task, report_t report, const char *scan_id)
           rc = -2;
           break;
         }
-      int progress = get_osp_scan_report (
-        scan_id, host, port, ca_pub, key_pub, key_priv, 0, NULL);
-      if (progress == -1)
+      int progress = get_osp_scan_report (scan_id, host, port, ca_pub, key_pub,
+                                          key_priv, 0, 0, &report_xml);
+      if (progress < 0 || progress > 100)
         {
-          result_t result = make_osp_result (task,
-                                             "",
-                                             "",
-                                             threat_message_type ("Error"),
-                                             "Erroneous scan progress value",
-                                             "",
-                                             "",
-                                             QOD_DEFAULT);
+          result_t result = make_osp_result
+                             (task, "", "", "",
+                              threat_message_type ("Error"),
+                              "Erroneous scan progress value", "", "",
+                              QOD_DEFAULT);
           report_add_result (report, result);
+          delete_osp_scan (scan_id, host, port, ca_pub, key_pub,
+                           key_priv);
           rc = -1;
           break;
         }
-      else if (progress < 100)
-        {
-          set_report_slave_progress (report, progress);
-          gvm_sleep (10);
-        }
-      else if (progress == 100)
+      else
         {
           /* Get the full OSP report. */
-          progress = get_osp_scan_report (
-            scan_id, host, port, ca_pub, key_pub, key_priv, 1, &report_xml);
-          if (progress != 100)
+          progress = get_osp_scan_report (scan_id, host, port, ca_pub, key_pub,
+                                          key_priv, 1, 1, &report_xml);
+          if (progress < 0 || progress > 100)
             {
-              result_t result =
-                make_osp_result (task,
-                                 "",
-                                 "",
-                                 threat_message_type ("Error"),
-                                 "Erroneous scan progress value",
-                                 "",
-                                 "",
-                                 QOD_DEFAULT);
+              result_t result = make_osp_result
+                                 (task, "", "", "",
+                                  threat_message_type ("Error"),
+                                  "Erroneous scan progress value", "", "",
+                                  QOD_DEFAULT);
               report_add_result (report, result);
               rc = -1;
               break;
             }
-          parse_osp_report (task, report, report_xml);
-          g_free (report_xml);
-          delete_osp_scan (scan_id, host, port, ca_pub, key_pub, key_priv);
-          rc = 0;
-          break;
+          else
+            {
+              set_report_slave_progress (report, progress);
+              parse_osp_report (task, report, report_xml);
+              g_free (report_xml);
+
+              osp_scan_status = get_osp_scan_status (scan_id, host, port,
+                                                     ca_pub, key_pub, key_priv);
+              if (progress >= 0 && progress < 100
+                  && osp_scan_status == OSP_SCAN_STATUS_STOPPED)
+                {
+                  result_t result = make_osp_result
+                    (task, "", "", "",
+                     threat_message_type ("Error"),
+                     "Scan stopped unexpectedly by the server", "", "",
+                     QOD_DEFAULT);
+                  report_add_result (report, result);
+                  delete_osp_scan (scan_id, host, port, ca_pub, key_pub,
+                                   key_priv);
+                  rc = -1;
+                  break;
+                }
+              else if (progress == 100
+                       && osp_scan_status == OSP_SCAN_STATUS_FINISHED)
+                {
+                  delete_osp_scan (scan_id, host, port, ca_pub, key_pub,
+                                   key_priv);
+                  rc = 0;
+                  break;
+                }
+            }
         }
     }
 
@@ -4195,9 +3709,7 @@ get_osp_task_options (task_t task, target_t target)
  * @return 0 success, -1 if scanner is down.
  */
 static int
-launch_osp_task (task_t task,
-                 target_t target,
-                 const char *scan_id,
+launch_osp_task (task_t task, target_t target, const char *scan_id,
                  char **error)
 {
   osp_connection_t *connection;
@@ -4216,8 +3728,8 @@ launch_osp_task (task_t task,
     }
   target_str = target_hosts (target);
   ports_str = target_port_range (target);
-  ret =
-    osp_start_scan (connection, target_str, ports_str, options, scan_id, error);
+  ret = osp_start_scan (connection, target_str, ports_str, options, scan_id,
+                        error);
 
   g_hash_table_destroy (options);
   osp_connection_close (connection);
@@ -4227,22 +3739,427 @@ launch_osp_task (task_t task,
 }
 
 /**
- * @brief Fork a child to handle an OSP scan's fetching and inserting.
+ * @brief Get the SSH credential of a target as an osp_credential_t
+ *
+ * @param[in]  target  The target to get the credential from.
+ *
+ * @return  Pointer to a newly allocated osp_credential_t
+ */
+static osp_credential_t *
+target_osp_ssh_credential (target_t target)
+{
+  credential_t credential;
+  credential = target_ssh_credential (target);
+  if (credential)
+    {
+      iterator_t iter;
+      const char *type;
+      char *ssh_port;
+      osp_credential_t *osp_credential;
+
+      init_credential_iterator_one (&iter, credential);
+      if (!next (&iter))
+        {
+          g_warning ("%s: SSH Credential not found.", __FUNCTION__);
+          cleanup_iterator (&iter);
+          return NULL;
+        }
+      type = credential_iterator_type (&iter);
+      if (strcmp (type, "up") && strcmp (type, "usk"))
+        {
+          g_warning ("%s: SSH Credential not a user/pass pair"
+                     " or user/ssh key.", __FUNCTION__);
+          cleanup_iterator (&iter);
+          return NULL;
+        }
+
+      ssh_port = target_ssh_port (target);
+      osp_credential = osp_credential_new (type, "ssh", ssh_port);
+      free (ssh_port);
+      osp_credential_set_auth_data (osp_credential,
+                                    "username",
+                                    credential_iterator_login (&iter));
+      osp_credential_set_auth_data (osp_credential,
+                                    "password",
+                                    credential_iterator_password (&iter));
+      if (strcmp (type, "usk") == 0)
+        {
+          const char *private_key = credential_iterator_private_key (&iter);
+          gchar *base64 = g_base64_encode ((guchar *) private_key,
+                                           strlen (private_key));
+          osp_credential_set_auth_data (osp_credential,
+                                        "private", base64);
+          g_free (base64);
+
+        }
+      cleanup_iterator (&iter);
+      return osp_credential;
+    }
+  return NULL;
+}
+
+/**
+ * @brief Get the SMB credential of a target as an osp_credential_t
+ *
+ * @param[in]  target  The target to get the credential from.
+ *
+ * @return  Pointer to a newly allocated osp_credential_t
+ */
+static osp_credential_t *
+target_osp_smb_credential (target_t target)
+{
+  credential_t credential;
+  credential = target_smb_credential (target);
+  if (credential)
+    {
+      iterator_t iter;
+      osp_credential_t *osp_credential;
+
+      init_credential_iterator_one (&iter, credential);
+      if (!next (&iter))
+        {
+          g_warning ("%s: SMB Credential not found.", __FUNCTION__);
+          cleanup_iterator (&iter);
+          return NULL;
+        }
+      if (strcmp (credential_iterator_type (&iter), "up"))
+        {
+          g_warning ("%s: SMB Credential not a user/pass pair.", __FUNCTION__);
+          cleanup_iterator (&iter);
+          return NULL;
+        }
+
+      osp_credential = osp_credential_new ("up", "smb", NULL);
+      osp_credential_set_auth_data (osp_credential,
+                                    "username",
+                                    credential_iterator_login (&iter));
+      osp_credential_set_auth_data (osp_credential,
+                                    "password",
+                                    credential_iterator_password (&iter));
+      cleanup_iterator (&iter);
+      return osp_credential;
+    }
+  return NULL;
+}
+
+/**
+ * @brief Get the SMB credential of a target as an osp_credential_t
+ *
+ * @param[in]  target  The target to get the credential from.
+ *
+ * @return  Pointer to a newly allocated osp_credential_t
+ */
+static osp_credential_t *
+target_osp_esxi_credential (target_t target)
+{
+  credential_t credential;
+  credential = target_esxi_credential (target);
+  if (credential)
+    {
+      iterator_t iter;
+      osp_credential_t *osp_credential;
+
+      init_credential_iterator_one (&iter, credential);
+      if (!next (&iter))
+        {
+          g_warning ("%s: ESXi Credential not found.", __FUNCTION__);
+          cleanup_iterator (&iter);
+          return NULL;
+        }
+      if (strcmp (credential_iterator_type (&iter), "up"))
+        {
+          g_warning ("%s: ESXi Credential not a user/pass pair.",
+                     __FUNCTION__);
+          cleanup_iterator (&iter);
+          return NULL;
+        }
+
+      osp_credential = osp_credential_new ("up", "esxi", NULL);
+      osp_credential_set_auth_data (osp_credential,
+                                    "username",
+                                    credential_iterator_login (&iter));
+      osp_credential_set_auth_data (osp_credential,
+                                    "password",
+                                    credential_iterator_password (&iter));
+      cleanup_iterator (&iter);
+      return osp_credential;
+    }
+  return NULL;
+}
+
+/**
+ * @brief Get the SMB credential of a target as an osp_credential_t
+ *
+ * @param[in]  target  The target to get the credential from.
+ *
+ * @return  Pointer to a newly allocated osp_credential_t
+ */
+static osp_credential_t *
+target_osp_snmp_credential (target_t target)
+{
+  credential_t credential;
+  credential = target_credential (target, "snmp");
+  if (credential)
+    {
+      iterator_t iter;
+      osp_credential_t *osp_credential;
+
+      init_credential_iterator_one (&iter, credential);
+      if (!next (&iter))
+        {
+          g_warning ("%s: SNMP Credential not found.", __FUNCTION__);
+          cleanup_iterator (&iter);
+          return NULL;
+        }
+      if (strcmp (credential_iterator_type (&iter), "snmp"))
+        {
+          g_warning ("%s: SNMP Credential not of type 'snmp'.",
+                     __FUNCTION__);
+          cleanup_iterator (&iter);
+          return NULL;
+        }
+
+      osp_credential = osp_credential_new ("snmp", "snmp", NULL);
+      osp_credential_set_auth_data (osp_credential,
+                                    "username",
+                                    credential_iterator_login (&iter)
+                                      ?: "");
+      osp_credential_set_auth_data (osp_credential,
+                                    "password",
+                                    credential_iterator_password (&iter)
+                                      ?: "");
+      osp_credential_set_auth_data (osp_credential,
+                                    "community",
+                                    credential_iterator_community (&iter)
+                                      ?: "");
+      osp_credential_set_auth_data (osp_credential,
+                                    "auth_algorithm",
+                                    credential_iterator_auth_algorithm (&iter)
+                                      ?: "");
+      osp_credential_set_auth_data (osp_credential,
+                                    "privacy_algorithm",
+                                    credential_iterator_privacy_algorithm
+                                      (&iter) ?: "");
+      osp_credential_set_auth_data (osp_credential,
+                                    "privacy_password",
+                                    credential_iterator_privacy_password
+                                      (&iter) ?: "");
+      cleanup_iterator (&iter);
+      return osp_credential;
+    }
+  return NULL;
+}
+
+/**
+ * @brief Launch an OpenVAS via OSP task.
  *
  * @param[in]   task        The task.
  * @param[in]   target      The target.
+ * @param[out]  scan_id     The new scan uuid.
+ * @param[out]  error       Error return.
+ *
+ * @return 0 success, -1 if scanner is down.
+ */
+static int
+launch_osp_openvas_task (task_t task, target_t target, const char *scan_id,
+                         char **error)
+{
+  osp_connection_t *connection;
+  char *hosts_str, *ports_str, *exclude_hosts_str;
+  osp_target_t *osp_target;
+  GSList *osp_targets, *vts;
+  GHashTable *vts_hash_table;
+  osp_credential_t *ssh_credential, *smb_credential, *esxi_credential;
+  osp_credential_t *snmp_credential;
+  GHashTable *scanner_options;
+  int ret;
+  config_t config;
+  iterator_t scanner_prefs_iter, families, prefs;
+  osp_start_scan_opts_t start_scan_opts;
+
+  config = task_config (task);
+
+  connection = NULL;
+
+  /* Set up target(s) */
+  hosts_str = target_hosts (target);
+  ports_str = target_port_range (target);
+  exclude_hosts_str = target_exclude_hosts (target);
+
+  osp_target = osp_target_new (hosts_str, ports_str, exclude_hosts_str);
+  osp_targets = g_slist_append (NULL, osp_target);
+
+  ssh_credential = target_osp_ssh_credential (target);
+  if (ssh_credential)
+    osp_target_add_credential (osp_target, ssh_credential);
+
+  smb_credential = target_osp_smb_credential (target);
+  if (smb_credential)
+    osp_target_add_credential (osp_target, smb_credential);
+
+  esxi_credential = target_osp_esxi_credential (target);
+  if (esxi_credential)
+    osp_target_add_credential (osp_target, esxi_credential);
+
+  snmp_credential = target_osp_snmp_credential (target);
+  if (snmp_credential)
+    osp_target_add_credential (osp_target, snmp_credential);
+
+  /* Setup general scanner preferences */
+  scanner_options
+    = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+  init_preference_iterator (&scanner_prefs_iter, config, "SERVER_PREFS");
+  while (next (&scanner_prefs_iter))
+    {
+      const char *name, *value;
+      name = preference_iterator_name (&scanner_prefs_iter);
+      value = preference_iterator_value (&scanner_prefs_iter);
+      if (name && value)
+        {
+          const char *osp_value;
+
+          // Workaround for boolean scanner preferences
+          if (strcmp (value, "yes") == 0)
+            osp_value = "1";
+          else if (strcmp (value, "no") == 0)
+            osp_value = "0";
+          else
+            osp_value = value;
+          g_hash_table_replace (scanner_options,
+                                g_strdup (name),
+                                g_strdup (osp_value));
+        }
+    }
+
+  /* Setup vulnerability tests (without preferences) */
+  vts = NULL;
+  vts_hash_table
+    = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+
+  init_family_iterator (&families, 0, NULL, 1);
+  while (next (&families))
+    {
+      const char *family = family_iterator_name (&families);
+      if (family)
+        {
+          iterator_t nvts;
+          init_nvt_iterator (&nvts, 0, config, family, NULL, 1, NULL);
+          while (next (&nvts))
+            {
+              const char *oid;
+              osp_vt_single_t *new_vt;
+
+              oid = nvt_iterator_oid (&nvts);
+              new_vt = osp_vt_single_new (oid);
+
+              vts = g_slist_prepend (vts, new_vt);
+              g_hash_table_replace (vts_hash_table, g_strdup (oid), new_vt);
+            }
+          cleanup_iterator (&nvts);
+        }
+    }
+  cleanup_iterator (&families);
+
+  /* Setup VT preferences */
+  init_preference_iterator (&prefs, config, "PLUGINS_PREFS");
+  while (next (&prefs))
+    {
+      const char *full_name, *value;
+      osp_vt_single_t *osp_vt;
+      gchar **split_name;
+
+      full_name = preference_iterator_name (&prefs);
+      value = preference_iterator_value (&prefs);
+      split_name = g_strsplit (full_name, ":", 4);
+
+      osp_vt = NULL;
+      if (split_name && split_name[0] && split_name[1] && split_name[2])
+        {
+          const char *oid = split_name[0];
+          const char *pref_id = split_name[1];
+          const char *type = split_name[2];
+          gchar *osp_value = NULL;
+
+          if (strcmp (type, "checkbox") == 0)
+            {
+              if (strcmp (value, "yes") == 0)
+                osp_value = g_strdup ("1");
+              else
+                osp_value = g_strdup ("0");
+            }
+          else if (strcmp (type, "radio") == 0)
+            {
+              gchar** split_value;
+              split_value = g_strsplit (value, ";", 2);
+              osp_value = g_strdup (split_value[0]);
+              g_strfreev (split_value);
+            }
+          else if (strcmp (type, "file") == 0)
+            osp_value = g_base64_encode ((guchar*) value, strlen (value));
+
+          osp_vt = g_hash_table_lookup (vts_hash_table, oid);
+          if (osp_vt)
+            osp_vt_single_add_value (osp_vt, pref_id,
+                                     osp_value ? osp_value : value);
+          g_free (osp_value);
+        }
+
+      g_strfreev (split_name);
+    }
+  cleanup_iterator (&prefs);
+
+  /* Start the scan */
+  connection = osp_scanner_connect (task_scanner (task));
+  if (!connection)
+    {
+      if (error)
+        *error = g_strdup ("Could not connect to Scanner");
+      return -1;
+    }
+
+  start_scan_opts.targets = osp_targets;
+  start_scan_opts.vt_groups = NULL;
+  start_scan_opts.vts = vts;
+  start_scan_opts.scanner_params = scanner_options;
+  start_scan_opts.parallel = 1;
+  start_scan_opts.scan_id = scan_id;
+
+  ret = osp_start_scan_ext (connection,
+                            start_scan_opts,
+                            error);
+
+  osp_connection_close (connection);
+  g_slist_free_full (osp_targets, (GDestroyNotify) osp_target_free);
+  // Credentials are freed with target
+  g_slist_free_full (vts, (GDestroyNotify) osp_vt_single_free);
+  g_hash_table_destroy (scanner_options);
+  free (hosts_str);
+  free (ports_str);
+  free (exclude_hosts_str);
+  return ret;
+}
+
+/**
+ * @brief Fork a child to handle an OSP scan's fetching and inserting.
+ *
+ * @param[in]   task               The task.
+ * @param[in]   target             The target.
+ * @param[out]  report_id_return   UUID of the report.
  *
  * @return Parent returns with 0 if success, -1 if failure. Child process
  *         doesn't return and simply exits.
  */
 static int
-fork_osp_scan_handler (task_t task, target_t target)
+fork_osp_scan_handler (task_t task, target_t target, char **report_id_return)
 {
   char *report_id, title[128], *error = NULL;
   int rc;
 
   assert (task);
   assert (target);
+
+  if (report_id_return)
+    *report_id_return = NULL;
 
   if (create_current_report (task, &report_id, TASK_STATUS_REQUESTED))
     {
@@ -4254,21 +4171,30 @@ fork_osp_scan_handler (task_t task, target_t target)
 
   switch (fork ())
     {
-    case 0:
-      break;
-    case -1:
-      /* Parent, failed to fork. */
-      g_warning ("%s: Failed to fork: %s", __FUNCTION__, strerror (errno));
-      set_task_interrupted (task,
-                            "Error forking scan handler."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report,
-                                  TASK_STATUS_INTERRUPTED);
-      global_current_report = (report_t) 0;
-      return -9;
-    default:
-      /* Parent, successfully forked. */
-      return 0;
+      case 0:
+        break;
+      case -1:
+        /* Parent, failed to fork. */
+        global_current_report = 0;
+        g_warning ("%s: Failed to fork: %s",
+                   __FUNCTION__,
+                   strerror (errno));
+        set_task_interrupted (task,
+                              "Error forking scan handler."
+                              "  Interrupting scan.");
+        set_report_scan_run_status (global_current_report,
+                                    TASK_STATUS_INTERRUPTED);
+        global_current_report = (report_t) 0;
+        g_free (report_id);
+        return -9;
+      default:
+        /* Parent, successfully forked. */
+        global_current_report = 0;
+        if (report_id_return)
+          *report_id_return = report_id;
+        else
+          g_free (report_id);
+        return 0;
     }
 
   /* Child: Re-open DB after fork and periodically check scan progress.
@@ -4277,19 +4203,25 @@ fork_osp_scan_handler (task_t task, target_t target)
    */
   reinit_manage_process ();
   manage_session_init (current_credentials.uuid);
-  if (launch_osp_task (task, target, report_id, &error))
+
+  if (scanner_type (task_scanner (task)) == SCANNER_TYPE_OPENVAS
+      || scanner_type (task_scanner (task) == SCANNER_TYPE_OSP_SENSOR))
+    {
+      rc = launch_osp_openvas_task (task, target, report_id, &error);
+    }
+  else
+    {
+      rc = launch_osp_task (task, target, report_id, &error);
+    }
+
+  if (rc)
     {
       result_t result;
 
       g_warning ("OSP start_scan %s: %s", report_id, error);
-      result = make_osp_result (task,
-                                "",
-                                "",
+      result = make_osp_result (task, "", "", "",
                                 threat_message_type ("Error"),
-                                error,
-                                "",
-                                "",
-                                QOD_DEFAULT);
+                                error, "", "", QOD_DEFAULT);
       report_add_result (global_current_report, result);
       set_task_run_status (task, TASK_STATUS_DONE);
       set_report_scan_run_status (global_current_report, TASK_STATUS_DONE);
@@ -4311,6 +4243,9 @@ fork_osp_scan_handler (task_t task, target_t target)
   g_free (report_id);
   if (rc == 0)
     {
+      hosts_set_identifiers (global_current_report);
+      hosts_set_max_severity (global_current_report, NULL, NULL);
+      hosts_set_details (global_current_report);
       set_task_run_status (task, TASK_STATUS_DONE);
       set_report_scan_run_status (global_current_report, TASK_STATUS_DONE);
     }
@@ -4328,14 +4263,15 @@ fork_osp_scan_handler (task_t task, target_t target)
 }
 
 /**
- * @brief Start a task on an OSP scanner.
+ * @brief Start a task on an OSP or OpenVAS via OSP scanner.
  *
  * @param[in]   task       The task.
+ * @param[out]  report_id  The report ID.
  *
  * @return 0 success, 99 permission denied, -1 error.
  */
 static int
-run_osp_task (task_t task)
+run_osp_task (task_t task, char **report_id)
 {
   target_t target;
 
@@ -4356,7 +4292,7 @@ run_osp_task (task_t task)
         return 99;
     }
 
-  if (fork_osp_scan_handler (task, target))
+  if (fork_osp_scan_handler (task, target, report_id))
     {
       g_warning ("Couldn't fork OSP scan handler");
       return -1;
@@ -4364,6 +4300,7 @@ run_osp_task (task_t task)
   return 0;
 }
 
+
 /* CVE tasks. */
 
 /**
@@ -4415,8 +4352,7 @@ cve_scan_host (task_t task, gvm_host_t *gvm_host)
 
           start_time = time (NULL);
           prognosis_report_host = 0;
-          init_host_prognosis_iterator (
-            &prognosis, report_host, 0, -1, NULL, NULL, 0, NULL);
+          init_host_prognosis_iterator (&prognosis, report_host);
           while (next (&prognosis))
             {
               const char *app, *cve;
@@ -4425,8 +4361,10 @@ cve_scan_host (task_t task, gvm_host_t *gvm_host)
               result_t result;
 
               if (global_current_report && (prognosis_report_host == 0))
-                prognosis_report_host = manage_report_host_add (
-                  global_current_report, ip, start_time, 0);
+                prognosis_report_host = manage_report_host_add (global_current_report,
+                                                                ip,
+                                                                start_time,
+                                                                0);
 
               severity = prognosis_iterator_cvss_double (&prognosis);
 
@@ -4434,23 +4372,23 @@ cve_scan_host (task_t task, gvm_host_t *gvm_host)
               cve = prognosis_iterator_cve (&prognosis);
               location = app_location (report_host, app);
 
-              desc =
-                g_strdup_printf ("The host carries the product: %s\n"
-                                 "It is vulnerable according to: %s.\n"
-                                 "%s%s%s"
-                                 "\n"
-                                 "%s",
-                                 app,
-                                 cve,
-                                 location ? "The product was found at: " : "",
-                                 location ? location : "",
-                                 location ? ".\n" : "",
-                                 prognosis_iterator_description (&prognosis));
+              desc = g_strdup_printf ("The host carries the product: %s\n"
+                                      "It is vulnerable according to: %s.\n"
+                                      "%s%s%s"
+                                      "\n"
+                                      "%s",
+                                      app,
+                                      cve,
+                                      location
+                                       ? "The product was found at: "
+                                       : "",
+                                      location ? location : "",
+                                      location ? ".\n" : "",
+                                      prognosis_iterator_description
+                                       (&prognosis));
 
               g_debug ("%s: making result with severity %1.1f desc [%s]",
-                       __FUNCTION__,
-                       severity,
-                       desc);
+                       __FUNCTION__, severity, desc);
 
               result = make_cve_result (task, ip, cve, severity, desc);
               g_free (desc);
@@ -4458,37 +4396,19 @@ cve_scan_host (task_t task, gvm_host_t *gvm_host)
                 {
                   report_add_result (global_current_report, result);
 
-                  insert_report_host_detail (global_current_report,
-                                             ip,
-                                             "cve",
-                                             cve,
-                                             "CVE Scanner",
-                                             "App",
-                                             app);
+                  insert_report_host_detail (global_current_report, ip, "cve", cve,
+                                             "CVE Scanner", "App", app);
 
                   if (location)
                     {
-                      insert_report_host_detail (global_current_report,
-                                                 ip,
-                                                 "cve",
-                                                 cve,
-                                                 "CVE Scanner",
-                                                 app,
-                                                 location);
+                      insert_report_host_detail (global_current_report, ip, "cve", cve,
+                                                 "CVE Scanner", app, location);
 
-                      insert_report_host_detail (global_current_report,
-                                                 ip,
-                                                 "cve",
-                                                 cve,
-                                                 "CVE Scanner",
-                                                 "detected_at",
+                      insert_report_host_detail (global_current_report, ip, "cve", cve,
+                                                 "CVE Scanner", "detected_at",
                                                  location);
-                      insert_report_host_detail (global_current_report,
-                                                 ip,
-                                                 "cve",
-                                                 cve,
-                                                 "CVE Scanner",
-                                                 "detected_by",
+                      insert_report_host_detail (global_current_report, ip, "cve", cve,
+                                                 "CVE Scanner", "detected_by",
                                                  /* Detected by itself. */
                                                  cve);
                     }
@@ -4502,13 +4422,8 @@ cve_scan_host (task_t task, gvm_host_t *gvm_host)
               /* Complete the report_host. */
 
               report_host_set_end_time (prognosis_report_host, time (NULL));
-              insert_report_host_detail (global_current_report,
-                                         ip,
-                                         "cve",
-                                         "",
-                                         "CVE Scanner",
-                                         "CVE Scan",
-                                         "1");
+              insert_report_host_detail (global_current_report, ip, "cve", "",
+                                         "CVE Scanner", "CVE Scan", "1");
             }
         }
       cleanup_iterator (&report_hosts);
@@ -4521,11 +4436,12 @@ cve_scan_host (task_t task, gvm_host_t *gvm_host)
 /**
  * @brief Fork a child to handle a CVE scan's calculating and inserting.
  *
+ * A process is forked to run the task, but the forked process never returns.
+ *
  * @param[in]   task        The task.
  * @param[in]   target      The target.
  *
- * @return Parent returns with 0 if success, -1 if failure. Child process
- *         doesn't return and simply exits.
+ * @return 0 success, -1 error, -9 failed to fork.
  */
 static int
 fork_cve_scan_handler (task_t task, target_t target)
@@ -4549,22 +4465,24 @@ fork_cve_scan_handler (task_t task, target_t target)
   pid = fork ();
   switch (pid)
     {
-    case 0:
-      break;
-    case -1:
-      /* Parent, failed to fork. */
-      g_warning ("%s: Failed to fork: %s", __FUNCTION__, strerror (errno));
-      set_task_interrupted (task,
-                            "Error forking scan handler."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report,
-                                  TASK_STATUS_INTERRUPTED);
-      global_current_report = (report_t) 0;
-      return -9;
-    default:
-      /* Parent, successfully forked. */
-      g_debug ("%s: %i forked %i", __FUNCTION__, getpid (), pid);
-      return 0;
+      case 0:
+        break;
+      case -1:
+        /* Parent, failed to fork. */
+        g_warning ("%s: Failed to fork: %s",
+                   __FUNCTION__,
+                   strerror (errno));
+        set_task_interrupted (task,
+                              "Error forking scan handler."
+                              "  Interrupting scan.");
+        set_report_scan_run_status (global_current_report,
+                                    TASK_STATUS_INTERRUPTED);
+        global_current_report = (report_t) 0;
+        return -9;
+      default:
+        /* Parent, successfully forked. */
+        g_debug ("%s: %i forked %i", __FUNCTION__, getpid (), pid);
+        return 0;
     }
 
   /* Child.
@@ -4588,8 +4506,7 @@ fork_cve_scan_handler (task_t task, target_t target)
       set_task_interrupted (task,
                             "Error in target host list."
                             "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report,
-                                  TASK_STATUS_INTERRUPTED);
+      set_report_scan_run_status (global_current_report, TASK_STATUS_INTERRUPTED);
       exit (1);
     }
 
@@ -4607,8 +4524,7 @@ fork_cve_scan_handler (task_t task, target_t target)
         set_task_interrupted (task,
                               "Failed to get nthlast report."
                               "  Interrupting scan.");
-        set_report_scan_run_status (global_current_report,
-                                    TASK_STATUS_INTERRUPTED);
+        set_report_scan_run_status (global_current_report, TASK_STATUS_INTERRUPTED);
         gvm_hosts_free (gvm_hosts);
         exit (1);
       }
@@ -4630,7 +4546,7 @@ fork_cve_scan_handler (task_t task, target_t target)
  *
  * @param[in]   task    The task.
  *
- * @return 0 success, 99 permission denied, -1 error.
+ * @return 0 success, 99 permission denied, -1 error, -9 failed to fork.
  */
 static int
 run_cve_task (task_t task)
@@ -4662,71 +4578,8 @@ run_cve_task (task_t task)
   return 0;
 }
 
-/* OTP tasks. */
-
-/**
- * @brief Initialise OpenVAS scanner variables, checking for defaults.
- *
- * @param[in]  ca_pub       CA Certificate.
- * @param[in]  key_pub      Scanner Certificate.
- * @param[in]  key_priv     Scanner private key.
- *
- * @return 0 success, 1 both default CA cert setting and ca_pub were NULL.
- */
-int
-set_certs (const char *ca_pub, const char *key_pub, const char *key_priv)
-{
-  const char *fallback;
-
-  if (ca_pub == NULL)
-    fallback = manage_default_ca_cert ();
-  else
-    fallback = NULL;
-
-  openvas_scanner_set_certs (fallback ? fallback : ca_pub, key_pub, key_priv);
-
-  if (ca_pub || fallback)
-    return 0;
-  return 1;
-}
-
-/**
- * @brief Initialise some values of the OpenVAS scanner.
- *
- * @param[in]  scanner  Scanner.
- *
- * @return 0 success, -1 error, 1 no CA cert.
- */
-static int
-scanner_setup (scanner_t scanner)
-{
-  int ret, port;
-  char *host, *ca_pub, *key_pub, *key_priv;
-
-  assert (scanner);
-  host = scanner_host (scanner);
-  if (host && *host == '/')
-    {
-      /* XXX: Workaround for unix socket case. Should add a flag. */
-      openvas_scanner_set_unix (host);
-      return 0;
-    }
-  port = scanner_port (scanner);
-  ret = openvas_scanner_set_address (host, port);
-  g_free (host);
-  if (ret)
-    return ret;
-  ca_pub = scanner_ca_pub (scanner);
-  key_pub = scanner_key_pub (scanner);
-  key_priv = scanner_key_priv (scanner);
-  ret = 0;
-  if (set_certs (ca_pub, key_pub, key_priv))
-    ret = 1;
-  g_free (ca_pub);
-  g_free (key_pub);
-  g_free (key_priv);
-  return ret;
-}
+
+/* Tasks. */
 
 /**
  * @brief Initialise variables required for running a scan.
@@ -4743,13 +4596,9 @@ scanner_setup (scanner_t scanner)
  * @return 0 success, -1 error, 99 permission denied.
  */
 static int
-run_task_setup (task_t task,
-                config_t *config,
-                target_t *target,
-                port_list_t *port_list,
-                credential_t *ssh_credential,
-                credential_t *smb_credential,
-                credential_t *esxi_credential,
+run_task_setup (task_t task, config_t *config, target_t *target,
+                port_list_t *port_list, credential_t *ssh_credential,
+                credential_t *smb_credential, credential_t *esxi_credential,
                 credential_t *snmp_credential)
 {
   int ret;
@@ -4775,23 +4624,27 @@ run_task_setup (task_t task,
     return ret;
 
   if (*ssh_credential
-      && ((ret = check_available (
-             "credential", *ssh_credential, "get_credentials"))))
+      && ((ret = check_available ("credential",
+                                  *ssh_credential,
+                                  "get_credentials"))))
     return ret;
 
   if (*smb_credential
-      && ((ret = check_available (
-             "credential", *smb_credential, "get_credentials"))))
+      && ((ret = check_available ("credential",
+                                  *smb_credential,
+                                  "get_credentials"))))
     return ret;
 
   if (*esxi_credential
-      && ((ret = check_available (
-             "credential", *esxi_credential, "get_credentials"))))
+      && ((ret = check_available ("credential",
+                                  *esxi_credential,
+                                  "get_credentials"))))
     return ret;
 
   if (*snmp_credential
-      && ((ret = check_available (
-             "credential", *snmp_credential, "get_credentials"))))
+      && ((ret = check_available ("credential",
+                                  *snmp_credential,
+                                  "get_credentials"))))
     return ret;
 
   return 0;
@@ -4806,15 +4659,15 @@ run_task_setup (task_t task,
  *                          continue if stopped else start from beginning.
  * @param[in]   run_status  The task's run status.
  * @param[in]   last_stopped_report  Last stopped report of task.
+ * @param[in]   for_slave_scan  If the report is for a slave scan.
  *
  * @return 0 success, -1 error, -3 creating the report failed.
  */
 static int
-run_task_prepare_report (task_t task,
-                         char **report_id,
-                         int from,
+run_task_prepare_report (task_t task, char **report_id, int from,
                          task_status_t run_status,
-                         report_t *last_stopped_report)
+                         report_t *last_stopped_report,
+                         gboolean for_slave_scan)
 {
   if ((from == 1)
       || ((from == 2)
@@ -4828,12 +4681,14 @@ run_task_prepare_report (task_t task,
         }
 
       global_current_report = *last_stopped_report;
-      if (report_id)
-        *report_id = report_uuid (*last_stopped_report);
+      if (report_id) *report_id = report_uuid (*last_stopped_report);
 
       /* Remove partial host information from the report. */
 
-      trim_partial_report (*last_stopped_report);
+      if (for_slave_scan)
+        trim_report (*last_stopped_report);
+      else
+        trim_partial_report (*last_stopped_report);
 
       /* Ensure the report is marked as requested. */
 
@@ -4841,8 +4696,7 @@ run_task_prepare_report (task_t task,
 
       /* Clear the end times of the task and partial report. */
 
-      set_task_start_time_epoch (task,
-                                 scan_start_time_epoch (global_current_report));
+      set_task_start_time_epoch (task, scan_start_time_epoch (global_current_report));
       set_task_end_time (task, NULL);
       set_scan_end_time (*last_stopped_report, NULL);
     }
@@ -4868,7 +4722,9 @@ run_task_prepare_report (task_t task,
 }
 
 /**
- * @brief Start a slave/GMP task.
+ * @brief Start a slave GMP task.
+ *
+ * A process is forked to run the task, but the forked process never returns.
  *
  * @param[in]  task        The task.
  * @param[in]  from        0 start from beginning, 1 continue from stopped, 2
@@ -4878,16 +4734,16 @@ run_task_prepare_report (task_t task,
  * @param[in]  slave_id    UUID of slave.
  * @param[in]  slave_name  Name of slave.
  *
- * @return Before forking: 1 task is active already, 3 failed to find task,
- *         -1 error.
+ * @return 1 task is active already, 3 failed to find task,
+ *         4 resuming not supported, 99 permission denied, -1 error,
+ *         -3 creating report failed, -4 target host is NULL,
+ *         -9 failed to fork.
  */
 static int
-run_slave_or_gmp_task (task_t task,
-                       int from,
-                       char **report_id,
-                       gvm_connection_t *connection,
-                       const gchar *slave_id,
-                       const gchar *slave_name)
+run_gmp_slave_task (task_t task, int from, char **report_id,
+                    gvm_connection_t *connection,
+                    const gchar *slave_id,
+                    const gchar *slave_name)
 {
   int ret, pid;
   task_status_t run_status;
@@ -4898,14 +4754,8 @@ run_slave_or_gmp_task (task_t task,
   credential_t ssh_credential, smb_credential, esxi_credential, snmp_credential;
   port_list_t port_list;
 
-  ret = run_task_setup (task,
-                        &config,
-                        &target,
-                        &port_list,
-                        &ssh_credential,
-                        &smb_credential,
-                        &esxi_credential,
-                        &snmp_credential);
+  ret = run_task_setup (task, &config, &target, &port_list, &ssh_credential,
+                        &smb_credential, &esxi_credential, &snmp_credential);
   if (ret)
     return ret;
 
@@ -4923,8 +4773,8 @@ run_slave_or_gmp_task (task_t task,
 
   /* Prepare the report. */
 
-  ret = run_task_prepare_report (
-    task, report_id, from, run_status, &last_stopped_report);
+  ret = run_task_prepare_report (task, report_id, from, run_status,
+                                 &last_stopped_report, TRUE);
   if (ret)
     {
       set_task_run_status (task, run_status);
@@ -4959,27 +4809,29 @@ run_slave_or_gmp_task (task_t task,
   pid = fork ();
   switch (pid)
     {
-    case 0:
-      /* Child.  Carry on starting the task, reopen the database (required
-       * after fork). */
-      reinit_manage_process ();
-      manage_session_init (current_credentials.uuid);
-      break;
-    case -1:
-      /* Parent when error. */
-      set_task_interrupted (task,
-                            "Failed to fork task child."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -9;
-      break;
-    default:
-      g_debug ("%s: forked %i to run slave/gmp task", __FUNCTION__, pid);
-      /* Parent.  Return, in order to respond to client. */
-      global_current_report = (report_t) 0;
-      return 0;
-      break;
+      case 0:
+        /* Child.  Carry on starting the task, reopen the database (required
+         * after fork). */
+        reinit_manage_process ();
+        manage_session_init (current_credentials.uuid);
+        break;
+      case -1:
+        /* Parent when error. */
+        set_task_interrupted (task,
+                              "Failed to fork task child."
+                              "  Interrupting scan.");
+        set_report_scan_run_status (global_current_report, run_status);
+        global_current_report = (report_t) 0;
+        return -9;
+        break;
+      default:
+        g_debug ("%s: forked %i to run slave/gmp task",
+                 __FUNCTION__,
+                 pid);
+        /* Parent.  Return, in order to respond to client. */
+        global_current_report = (report_t) 0;
+        return 0;
+        break;
     }
 
   /* Reset any running information. */
@@ -4995,49 +4847,261 @@ run_slave_or_gmp_task (task_t task,
   }
 
   uuid = report_uuid (global_current_report);
-  snprintf (title, sizeof (title), "gvmd: OTP: Handling slave scan %s", uuid);
+  snprintf (title, sizeof (title),
+            "gvmd: GMP: Handling slave scan %s",
+            uuid);
   free (uuid);
   proctitle_set (title);
 
-  switch (handle_slave_task (task,
-                             target,
-                             ssh_credential,
-                             smb_credential,
-                             esxi_credential,
-                             snmp_credential,
-                             last_stopped_report,
-                             connection,
-                             slave_id,
+  switch (handle_slave_task (task, target, ssh_credential, smb_credential,
+                             esxi_credential, snmp_credential,
+                             last_stopped_report, connection, slave_id,
                              slave_name))
     {
-    case 0:
-      break;
-    default:
-      assert (0);
-    case 1:
-      set_task_interrupted (task,
-                            "Authentication with slave failed."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      exit (EXIT_FAILURE);
-    case -1:
-      set_task_interrupted (task,
-                            "Failed to make UUID."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      exit (EXIT_FAILURE);
-    case -2:
-      set_task_interrupted (task,
-                            "Failed to get slave task name."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      exit (EXIT_FAILURE);
+      case 0:
+        break;
+      default:
+        assert (0);
+      case 1:
+        set_task_interrupted (task,
+                              "Authentication with slave failed."
+                              "  Interrupting scan.");
+        set_report_scan_run_status (global_current_report, run_status);
+        exit (EXIT_FAILURE);
+      case -1:
+        set_task_interrupted (task,
+                              "Failed to make UUID."
+                              "  Interrupting scan.");
+        set_report_scan_run_status (global_current_report, run_status);
+        exit (EXIT_FAILURE);
+      case -2:
+        set_task_interrupted (task,
+                              "Failed to get slave task name."
+                              "  Interrupting scan.");
+        set_report_scan_run_status (global_current_report, run_status);
+        exit (EXIT_FAILURE);
     }
   exit (EXIT_SUCCESS);
 }
 
 /**
+ * @brief Gets the current path of the relay mapper executable.
+ *
+ * @return The current relay mapper path.
+ */
+const char *
+get_relay_mapper_path ()
+{
+  return relay_mapper_path;
+}
+
+/**
+ * @brief Gets the current path of the relay mapper executable.
+ *
+ * @param[in]  new_path  The new relay mapper path.
+ */
+void
+set_relay_mapper_path (const char *new_path)
+{
+  g_free (relay_mapper_path);
+  relay_mapper_path = new_path ? g_strdup (new_path) : NULL;
+}
+
+/**
+ * @brief Gets a relay hostname and port for a sensor scanner.
+ *
+ * If no mapper is available, a copy of the original host, port and
+ *  CA certificate are returned.
+ *
+ * @param[in]  original_host    The original hostname or IP address.
+ * @param[in]  original_port    The original port number.
+ * @param[in]  original_ca_cert The original CA certificate.
+ * @param[in]  protocol         The protocol to look for, e.g. "GMP" or "OSP".
+ * @param[out] new_host         The hostname or IP address of the relay.
+ * @param[out] new_port         The port number of the relay.
+ * @param[out] new_ca_cert      The CA certificate of the relay.
+ *
+ * @return 0 success, 1 relay not found, -1 error.
+ */
+int
+slave_get_relay (const char *original_host,
+                 int original_port,
+                 const char *original_ca_cert,
+                 const char *protocol,
+                 gchar **new_host,
+                 int *new_port,
+                 gchar **new_ca_cert)
+{
+  int ret = -1;
+
+  assert (new_host);
+  assert (new_port);
+  assert (new_ca_cert);
+
+  if (relay_mapper_path == NULL)
+    {
+      *new_host = original_host ? g_strdup (original_host) : NULL;
+      *new_port = original_port;
+      *new_ca_cert = original_ca_cert ? g_strdup (original_ca_cert) : NULL;
+
+      return 0;
+    }
+  else
+    {
+      gchar **cmd, *stdout_str, *stderr_str;
+      int exit_code;
+      GError *err;
+      entity_t relay_entity;
+
+      stdout_str = NULL;
+      stderr_str = NULL;
+      exit_code = -1;
+      err = NULL;
+
+      cmd = (gchar **) g_malloc (8 * sizeof (gchar *));
+      cmd[0] = g_strdup (relay_mapper_path);
+      cmd[1] = g_strdup ("--host");
+      cmd[2] = g_strdup (original_host);
+      cmd[3] = g_strdup ("--port");
+      cmd[4] = g_strdup_printf ("%d", original_port);
+      cmd[5] = g_strdup ("--protocol");
+      cmd[6] = g_strdup (protocol);
+      cmd[7] = NULL;
+
+      if (g_spawn_sync (NULL,
+                        cmd,
+                        NULL,
+                        G_SPAWN_SEARCH_PATH,
+                        NULL,
+                        NULL,
+                        &stdout_str,
+                        &stderr_str,
+                        &exit_code,
+                        &err) == FALSE)
+        {
+          g_warning ("%s: g_spawn_sync failed: %s",
+                     __FUNCTION__, err ? err->message : "");
+          g_strfreev (cmd);
+          g_free (stdout_str);
+          g_free (stderr_str);
+          return -1;
+        }
+      else if (exit_code)
+        {
+          g_warning ("%s: mapper exited with code %d",
+                     __FUNCTION__, exit_code);
+          g_message ("%s: mapper stderr:\n%s", __FUNCTION__, stderr_str);
+          g_debug ("%s: mapper stdout:\n%s", __FUNCTION__, stdout_str);
+          g_strfreev (cmd);
+          g_free (stdout_str);
+          g_free (stderr_str);
+          return -1;
+        }
+
+      relay_entity = NULL;
+      if (parse_entity (stdout_str, &relay_entity))
+        {
+          g_warning ("%s: failed to parse mapper output",
+                     __FUNCTION__);
+          g_message ("%s: mapper stdout:\n%s", __FUNCTION__, stdout_str);
+          g_message ("%s: mapper stderr:\n%s", __FUNCTION__, stderr_str);
+        }
+      else
+        {
+          entity_t host_entity, port_entity, ca_cert_entity;
+
+          host_entity = entity_child (relay_entity, "host");
+          port_entity = entity_child (relay_entity, "port");
+          ca_cert_entity = entity_child (relay_entity, "ca_cert");
+
+          if (host_entity && port_entity && ca_cert_entity)
+            {
+              if (entity_text (host_entity)
+                  && entity_text (port_entity)
+                  && strcmp (entity_text (host_entity), "")
+                  && strcmp (entity_text (port_entity), ""))
+                {
+                  *new_host = g_strdup (entity_text (host_entity));
+                  *new_port = atoi (entity_text (port_entity));
+
+                  if (entity_text (ca_cert_entity)
+                      && strcmp (entity_text (ca_cert_entity), ""))
+                    {
+                      *new_ca_cert = g_strdup (entity_text (ca_cert_entity));
+                    }
+                  else
+                    {
+                      *new_ca_cert = NULL;
+                    }
+                  ret = 0;
+                }
+              else
+                {
+                  // Consider relay not found if host or port is empty
+                  ret = 1; 
+                }
+            }
+          else
+            {
+              g_warning ("%s: mapper output did not contain"
+                         " HOST, PORT and CA_CERT",
+                         __FUNCTION__);
+            }
+          free_entity (relay_entity);
+        }
+      g_strfreev (cmd);
+      g_free (stdout_str);
+      g_free (stderr_str);
+    }
+
+  return ret;
+}
+
+/**
+ * @brief Sets up modified connection data to connect to a sensors list host.
+ *
+ * @param[in]     old_conn  Connection data for the original host.
+ * @param[in,out] new_conn  Struct to write local connection data to.
+ *
+ * @return 0 success, 1 relay not found, -1 error.
+ */
+int
+slave_relay_connection (gvm_connection_t *old_conn,
+                        gvm_connection_t *new_conn)
+{
+  int ret;
+
+  assert (old_conn);
+  assert (new_conn);
+  assert (old_conn->host_string);
+
+  memset (new_conn, 0, sizeof (*new_conn));
+
+  ret = slave_get_relay (old_conn->host_string,
+                         old_conn->port,
+                         old_conn->ca_cert,
+                         "GMP",
+                         &new_conn->host_string,
+                         &new_conn->port,
+                         &new_conn->ca_cert);
+
+  if (ret)
+    return ret;
+
+  new_conn->tls = old_conn->tls;
+  new_conn->session = old_conn->session;
+  new_conn->username
+    = old_conn->username ? g_strdup (old_conn->username) : NULL;
+  new_conn->password
+    = old_conn->password ? g_strdup (old_conn->password) : NULL;
+
+  return 0;
+}
+
+/**
  * @brief Start a task on a GMP scanner.
+ *
+ * A process is forked to run the task, but the forked process never returns.
  *
  * @param[in]   task        The task.
  * @param[in]   scanner     Slave scanner to run task on.
@@ -5045,14 +5109,16 @@ run_slave_or_gmp_task (task_t task,
  *                          continue if stopped else start from beginning.
  * @param[out]  report_id   The report ID.
  *
- * @return Before forking: 1 task is active already, 3 failed to find task,
- *         -1 error.
+ * @return 1 task is active already, 3 failed to find task,
+ *         4 resuming not supported, 99 permission denied, -1 error,
+ *         -3 creating report failed, -4 target host is NULL,
+ *         -9 failed to fork.
  */
 static int
 run_gmp_task (task_t task, scanner_t scanner, int from, char **report_id)
 {
   int ret;
-  gvm_connection_t connection;
+  gvm_connection_t connection, relay_connection;
   char *scanner_id, *name;
 
   memset (&connection, 0, sizeof (connection));
@@ -5064,7 +5130,8 @@ run_gmp_task (task_t task, scanner_t scanner, int from, char **report_id)
       return -1;
     }
 
-  g_debug ("   %s: connection.host: %s", __FUNCTION__, connection.host_string);
+  g_debug ("   %s: connection.host: %s", __FUNCTION__,
+           connection.host_string);
 
   connection.port = scanner_port (scanner);
   if (connection.port == -1)
@@ -5098,8 +5165,21 @@ run_gmp_task (task_t task, scanner_t scanner, int from, char **report_id)
 
   connection.tls = 1;
 
-  ret = run_slave_or_gmp_task (
-    task, from, report_id, &connection, scanner_id, name);
+  ret = slave_relay_connection (&connection, &relay_connection);
+  if (ret)
+    {
+      free (connection.host_string);
+      free (connection.username);
+      free (connection.password);
+      free (connection.ca_cert);
+      free (scanner_id);
+      free (name);
+      return -1;
+    }
+
+  // TODO: Relay only when actual connection is established.
+  ret = run_gmp_slave_task (task, from, report_id, &relay_connection,
+                            scanner_id, name);
 
   free (connection.host_string);
   free (connection.username);
@@ -5112,634 +5192,26 @@ run_gmp_task (task_t task, scanner_t scanner, int from, char **report_id)
 }
 
 /**
- * @brief Start an OTP scanner task.
- *
- * @param[in]   task        The task.
- * @param[in]   scanner     Scanner to use.
- * @param[in]   from        0 start from beginning, 1 continue from stopped, 2
- *                          continue if stopped else start from beginning.
- * @param[out]  report_id   The report ID.
- *
- * @return Before forking: 1 task is active already, 3 failed to find task,
- */
-static int
-run_otp_task (task_t task, scanner_t scanner, int from, char **report_id)
-{
-  char title[128], *hosts, *port_range, *port, *uuid;
-  gchar *plugins;
-  int fail, pid, ret;
-  GSList *files = NULL;
-  GPtrArray *preference_files;
-  task_status_t run_status;
-  report_t last_stopped_report;
-  target_t target;
-  config_t config;
-  credential_t ssh_credential, smb_credential, esxi_credential, snmp_credential;
-  port_list_t port_list;
-
-  /* Setup the task info required for the scan. */
-
-  ret = run_task_setup (task,
-                        &config,
-                        &target,
-                        &port_list,
-                        &ssh_credential,
-                        &smb_credential,
-                        &esxi_credential,
-                        &snmp_credential);
-  if (ret)
-    return ret;
-
-  /* When resuming, check that the scanner supports it. */
-
-  if (from > 0 && config_type (config) > 0)
-    return 4;
-
-  /* For local scans, setup the scanner. */
-
-  switch (scanner_setup (scanner))
-    {
-    case 0:
-      break;
-    case 1:
-      return -7;
-    default:
-      return -5;
-    }
-
-  if (!openvas_scanner_connected ()
-      && (openvas_scanner_connect () || openvas_scanner_init (0)))
-    return -5;
-
-  if (openvas_scanner_is_loading ())
-    {
-      openvas_scanner_close ();
-      return -5;
-    }
-
-  /* Mark task "Requested".
-   *
-   * Every fail exit from here must reset the run status. */
-
-  if (set_task_requested (task, &run_status))
-    return 1;
-
-  /* Prepare the report. */
-
-  ret = run_task_prepare_report (
-    task, report_id, from, run_status, &last_stopped_report);
-  if (ret)
-    {
-      set_task_run_status (task, run_status);
-      return ret;
-    }
-
-  /* Check target. */
-
-  if (target_hosts (target) == NULL)
-    {
-      g_debug ("   target hosts is NULL");
-      set_task_run_status (task, run_status);
-      return -4;
-    }
-
-  set_report_scheduled (global_current_report);
-
-  /* Every fail exit from here must reset to this run status, and must
-   * clear global_current_report. */
-
-  /** @todo On fail exits only, may need to honour request states that one of
-   *        the other processes has set on the task (stop_task,
-   *        request_delete_task). */
-
-  /** @todo Also reset status on report, as current_scanner_task is 0 here. */
-
-  run_status = TASK_STATUS_INTERRUPTED;
-
-  /* Fork a child to start and handle the task while the parent responds to
-   * the client. */
-
-  pid = fork ();
-  switch (pid)
-    {
-    case 0:
-      /* Child.  Carry on starting the task, reopen the database (required
-       * after fork). */
-      reinit_manage_process ();
-      manage_session_init (current_credentials.uuid);
-      break;
-    case -1:
-      /* Parent when error. */
-      g_warning (
-        "%s: Failed to fork task child: %s", __FUNCTION__, strerror (errno));
-      set_task_interrupted (task,
-                            "Failed to fork task child."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -9;
-      break;
-    default:
-      /* Parent.  Return, in order to respond to client. */
-      global_current_report = (report_t) 0;
-      return 0;
-      break;
-    }
-
-  /* Reset any running information. */
-
-  {
-    char *iface;
-    iface = task_preference_value (task, "source_iface");
-    if (iface)
-      report_set_source_iface (global_current_report, iface);
-    else
-      report_set_source_iface (global_current_report, "");
-    free (iface);
-  }
-
-  uuid = report_uuid (global_current_report);
-  snprintf (title, sizeof (title), "gvmd: OTP: Handling scan %s", uuid);
-  free (uuid);
-  proctitle_set (title);
-
-  report_set_slave_uuid (global_current_report, "");
-  report_set_slave_name (global_current_report, "");
-  report_set_slave_port (global_current_report, 0);
-  report_set_slave_host (global_current_report, "");
-
-  /* Send the preferences header. */
-
-  if (send_to_server ("CLIENT <|> PREFERENCES <|>\n"))
-    {
-      g_warning ("%s: Failed to send OTP PREFERENCES", __FUNCTION__);
-      set_task_interrupted (task,
-                            "Failed to send OTP PREFERENCES."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  /* Send the plugin list. */
-
-  plugins = nvt_selector_plugins (config);
-  if (plugins)
-    {
-      if (ssh_credential == 0 && smb_credential == 0 && esxi_credential == 0)
-        fail = sendf_to_server ("plugin_set <|> %s\n", plugins);
-      else
-        {
-          GString *auth_plugins = g_string_new ("");
-          if (ssh_credential)
-            g_string_append (auth_plugins, "1.3.6.1.4.1.25623.1.0.90022;");
-          if (smb_credential)
-            g_string_append (auth_plugins, "1.3.6.1.4.1.25623.1.0.90023;");
-          if (esxi_credential)
-            g_string_append (auth_plugins, "1.3.6.1.4.1.25623.1.0.105058;");
-          if (snmp_credential)
-            g_string_append (auth_plugins, "1.3.6.1.4.1.25623.1.0.105076;");
-
-          fail = sendf_to_server (
-            "plugin_set <|> %s%s\n", auth_plugins->str, plugins);
-          g_string_free (auth_plugins, TRUE);
-        }
-    }
-  else
-    fail = send_to_server ("plugin_set <|> 0\n");
-  free (plugins);
-  if (fail)
-    {
-      set_task_interrupted (task,
-                            "Failed to send OTP plugin set."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  /* Send the scanner and task preferences. */
-
-  if (send_config_preferences (config, "SERVER_PREFS", NULL, NULL))
-    {
-      set_task_interrupted (task,
-                            "Failed to send OTP SERVER PREFS."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  if (send_task_preferences (task))
-    {
-      set_task_interrupted (task,
-                            "Failed to send OTP task preferences."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  /* Send the port range. */
-
-  port_range = target_port_range (target);
-  if (sendf_to_server ("port_range <|> %s\n",
-                       port_range ? port_range : "default"))
-    {
-      free (port_range);
-      set_task_interrupted (task,
-                            "Failed to send OTP port_range."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-  free (port_range);
-
-  /* Send the SSH LSC port. */
-
-  port = target_ssh_port (target);
-  if (port && sendf_to_server ("auth_port_ssh <|> %s\n", port))
-    {
-      free (port);
-      set_task_interrupted (task,
-                            "Failed to send OTP auth_port_ssh."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-  free (port);
-
-  /* Collect task files to send. */
-
-  files = get_files_to_send (task);
-
-  /* Send the plugins preferences. */
-
-  preference_files = g_ptr_array_new ();
-  if (send_config_preferences (
-        config, "PLUGINS_PREFS", files, preference_files))
-    {
-      g_ptr_array_free (preference_files, TRUE);
-      slist_free (files);
-      set_task_interrupted (task,
-                            "Failed to send OTP PLUGINS_PREFS."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  /* Send other scanner preferences. */
-
-  if (send_scanner_preferences (task, target, last_stopped_report))
-    {
-      g_ptr_array_add (preference_files, NULL);
-      array_free (preference_files);
-      slist_free (files);
-      set_task_interrupted (task,
-                            "Failed to send OTP scanner preferences."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  /* Send credential preferences if there are credentials linked to target. */
-
-  if (ssh_credential)
-    {
-      iterator_t credentials;
-
-      init_credential_iterator_one (&credentials, ssh_credential);
-      if (next (&credentials))
-        {
-          const char *user = credential_iterator_login (&credentials);
-          const char *password = credential_iterator_password (&credentials);
-
-          if (sendf_to_server ("SSH Authorization[entry]:SSH login name:"
-                               " <|> %s\n",
-                               user ? user : "")
-              || (credential_iterator_private_key (&credentials)
-                    ? sendf_to_server ("SSH Authorization[password]:"
-                                       "SSH key passphrase:"
-                                       " <|> %s\n",
-                                       password ? password : "")
-                    : sendf_to_server ("SSH Authorization[password]:"
-                                       "SSH password (unsafe!):"
-                                       " <|> %s\n",
-                                       password ? password : "")))
-
-            {
-            fail:
-              cleanup_iterator (&credentials);
-              g_ptr_array_add (preference_files, NULL);
-              array_free (preference_files);
-              slist_free (files);
-              set_task_interrupted (task,
-                                    "Failed to send OTP SSH preferences."
-                                    "  Interrupting scan.");
-              set_report_scan_run_status (global_current_report, run_status);
-              global_current_report = (report_t) 0;
-              return -10;
-            }
-
-          if (credential_iterator_private_key (&credentials))
-            {
-              char *file_uuid = gvm_uuid_make ();
-              if (file_uuid == NULL)
-                goto fail;
-
-              g_ptr_array_add (preference_files, (gpointer) file_uuid);
-              g_ptr_array_add (
-                preference_files,
-                (gpointer) g_strdup (
-                  credential_iterator_private_key (&credentials)));
-
-              if (sendf_to_server ("SSH Authorization[file]:"
-                                   "SSH private key:"
-                                   " <|> %s\n",
-                                   file_uuid))
-                goto fail;
-            }
-        }
-      cleanup_iterator (&credentials);
-    }
-
-  if (smb_credential)
-    {
-      iterator_t credentials;
-
-      init_credential_iterator_one (&credentials, smb_credential);
-      if (next (&credentials))
-        {
-          const char *user = credential_iterator_login (&credentials);
-          const char *password = credential_iterator_password (&credentials);
-
-          if (sendf_to_server ("SMB Authorization[entry]:SMB login: <|> %s\n",
-                               user ? user : "")
-              || sendf_to_server ("SMB Authorization[password]:SMB password:"
-                                  " <|> %s\n",
-                                  password ? password : ""))
-            {
-              cleanup_iterator (&credentials);
-              g_ptr_array_add (preference_files, NULL);
-              array_free (preference_files);
-              slist_free (files);
-              set_task_interrupted (task,
-                                    "Failed to send OTP SMB preferences."
-                                    "  Interrupting scan.");
-              set_report_scan_run_status (global_current_report, run_status);
-              global_current_report = (report_t) 0;
-              return -10;
-            }
-        }
-      cleanup_iterator (&credentials);
-    }
-
-  if (esxi_credential)
-    {
-      iterator_t credentials;
-
-      init_credential_iterator_one (&credentials, esxi_credential);
-      if (next (&credentials))
-        {
-          const char *user = credential_iterator_login (&credentials);
-          const char *password = credential_iterator_password (&credentials);
-
-          if (sendf_to_server ("ESXi Authorization[entry]:ESXi login name:"
-                               " <|> %s\n",
-                               user ? user : "")
-              || sendf_to_server (
-                   "ESXi Authorization[password]:ESXi login password:"
-                   " <|> %s\n",
-                   password ? password : ""))
-            {
-              cleanup_iterator (&credentials);
-              g_ptr_array_add (preference_files, NULL);
-              array_free (preference_files);
-              slist_free (files);
-              set_task_interrupted (task,
-                                    "Failed to send OTP EXSi preferences."
-                                    "  Interrupting scan.");
-              set_report_scan_run_status (global_current_report, run_status);
-              global_current_report = (report_t) 0;
-              return -10;
-            }
-        }
-      cleanup_iterator (&credentials);
-    }
-
-  if (snmp_credential)
-    {
-      iterator_t credentials;
-
-      init_credential_iterator_one (&credentials, snmp_credential);
-      if (next (&credentials))
-        {
-          const char *community = credential_iterator_community (&credentials);
-          const char *user = credential_iterator_login (&credentials);
-          const char *password = credential_iterator_password (&credentials);
-          const char *auth_algorithm =
-            credential_iterator_auth_algorithm (&credentials);
-          const char *privacy_password =
-            credential_iterator_privacy_password (&credentials);
-          const char *privacy_algorithm =
-            credential_iterator_privacy_algorithm (&credentials);
-
-          if (sendf_to_server ("SNMP Authorization[password]:SNMP Community:"
-                               " <|> %s\n",
-                               community ? community : "")
-              || sendf_to_server ("SNMP Authorization[entry]:SNMPv3 Username:"
-                                  " <|> %s\n",
-                                  user ? user : "")
-              || sendf_to_server ("SNMP Authorization[password]:"
-                                  "SNMPv3 Password:"
-                                  " <|> %s\n",
-                                  password ? password : "")
-              || sendf_to_server ("SNMP Authorization[radio]:"
-                                  "SNMPv3 Authentication Algorithm:"
-                                  " <|> %s\n",
-                                  auth_algorithm ? auth_algorithm : "")
-              || sendf_to_server ("SNMP Authorization[password]:"
-                                  "SNMPv3 Privacy Password:"
-                                  " <|> %s\n",
-                                  privacy_password ? privacy_password : "")
-              || sendf_to_server ("SNMP Authorization[radio]:"
-                                  "SNMPv3 Privacy Algorithm:"
-                                  " <|> %s\n",
-                                  privacy_algorithm ? privacy_algorithm : ""))
-            {
-              cleanup_iterator (&credentials);
-              g_ptr_array_add (preference_files, NULL);
-              array_free (preference_files);
-              slist_free (files);
-              set_task_interrupted (task,
-                                    "Failed to send OTP SNMP preferences."
-                                    "  Interrupting scan.");
-              set_report_scan_run_status (global_current_report, run_status);
-              global_current_report = (report_t) 0;
-              return -10;
-            }
-        }
-      cleanup_iterator (&credentials);
-    }
-
-  g_ptr_array_add (preference_files, NULL);
-
-  /* Send preferences for target "Alive Test", overriding config values. */
-
-  if (send_alive_test_preferences (target))
-    {
-      array_free (preference_files);
-      slist_free (files);
-      set_task_interrupted (task,
-                            "Failed to send OTP alive test preferences."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  /* Send network_targets preference. */
-
-  hosts = target_hosts (target);
-  if (!hosts || sendf_to_server ("network_targets <|> %s\n", hosts))
-    {
-      g_free (hosts);
-      g_ptr_array_add (preference_files, NULL);
-      array_free (preference_files);
-      slist_free (files);
-      set_task_interrupted (task,
-                            "Failed to send OTP network_targets."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  /* End off preferences. */
-
-  if (send_to_server ("<|> CLIENT\n"))
-    {
-      free (hosts);
-      array_free (preference_files);
-      slist_free (files);
-      set_task_interrupted (task,
-                            "Failed to send OTP CLIENT."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  /* Send any files stored in the config preferences. */
-
-  {
-    gchar *file;
-    int index = 0;
-    while ((file = g_ptr_array_index (preference_files, index)))
-      {
-        GSList *head;
-        gchar *value;
-
-        index++;
-
-        /* Skip the file if the value of the preference is the name of a
-         * file associated with the task. */
-        value = g_ptr_array_index (preference_files, index);
-        head = files;
-        while (head)
-          {
-            if (strcmp (head->data, value) == 0)
-              break;
-            head = g_slist_next (head);
-          }
-
-        if (head == NULL && send_file (file, value))
-          {
-            free (hosts);
-            array_free (preference_files);
-            slist_free (files);
-            g_warning ("%s: Failed to send an OTP file", __FUNCTION__);
-            set_task_interrupted (task,
-                                  "Failed to send OTP file."
-                                  "  Interrupting scan.");
-            set_report_scan_run_status (global_current_report, run_status);
-            global_current_report = (report_t) 0;
-            return -10;
-          }
-        index++;
-      }
-
-    array_free (preference_files);
-  }
-
-  /* Send any files. */
-
-  while (files)
-    {
-      GSList *last = files;
-      if (send_task_file (task, files->data))
-        {
-          free (hosts);
-          slist_free (files);
-          set_task_interrupted (task,
-                                "Failed to send an OTP task file."
-                                "  Interrupting scan.");
-          set_report_scan_run_status (global_current_report, run_status);
-          global_current_report = (report_t) 0;
-          return -10;
-        }
-      files = g_slist_next (files);
-      g_free (last->data);
-      g_slist_free_1 (last);
-    }
-
-  /* Send the attack command. */
-
-  /* Send all the hosts to the Scanner.  When resuming a stopped task,
-   * the hosts that have been completely scanned are excluded by being
-   * included in exclude_hosts preference. */
-  fail = sendf_to_server (
-    "CLIENT <|> LONG_ATTACK <|>\n%d\n%s\n", strlen (hosts), hosts);
-  free (hosts);
-  if (fail)
-    {
-      set_task_interrupted (task,
-                            "Failed to send OTP LONG_ATTACK."
-                            "  Interrupting scan.");
-      set_report_scan_run_status (global_current_report, run_status);
-      global_current_report = (report_t) 0;
-      return -10;
-    }
-
-  current_scanner_task = task;
-
-  return 2;
-}
-
-/**
  * @brief Start or resume a task.
  *
- * Use \ref send_to_server to queue the task start sequence in the scanner
- * output buffer.
- *
- * Only one task can run at a time in a process.
+ * A process will be forked to handle the task, but the forked process will
+ * never return.
  *
  * @param[in]   task_id     The task ID.
  * @param[out]  report_id   The report ID.
  * @param[in]   from        0 start from beginning, 1 continue from stopped, 2
  *                          continue if stopped else start from beginning.
  *
- * @return Before forking: 1 task is active already, 3 failed to find task,
- *         4 resuming task not supported, 99 permission denied, -1 error,
+ * @return 1 task is active already,
+ *         3 failed to find task,
+ *         4 resuming task not supported,
+ *         99 permission denied,
+ *         -1 error,
  *         -2 task is missing a target,
- *         -3 creating the report failed, -4 target missing hosts, -5 scanner is
- *         down or still loading, -6 already a task running in this process,
- *         -7 no CA cert, -9 fork failed.  After forking: 0 success (parent),
- *         2 success (child), -10 error (child).
+ *         -3 creating the report failed,
+ *         -4 target missing hosts,
+ *         -6 already a task running in this process,
+ *         -9 fork failed.
  */
 static int
 run_task (const char *task_id, char **report_id, int from)
@@ -5780,30 +5252,33 @@ run_task (const char *task_id, char **report_id, int from)
   if (scanner_type (scanner) == SCANNER_TYPE_GMP)
     return run_gmp_task (task, scanner, from, report_id);
 
-  if (scanner_type (scanner) != SCANNER_TYPE_OPENVAS)
-    return run_osp_task (task);
+  if (scanner_type (scanner) == SCANNER_TYPE_OPENVAS
+      || scanner_type (scanner) == SCANNER_TYPE_OSP
+      || scanner_type (scanner) == SCANNER_TYPE_OSP_SENSOR)
+    return run_osp_task (task, report_id);
 
-  return run_otp_task (task, scanner, from, report_id);
+  return -1; // Unknown scanner type
 }
 
 /**
  * @brief Start a task.
  *
- * Use \ref send_to_server to queue the task start sequence in the scanner
- * output buffer.
- *
- * Only one task can run at a time in a process.
+ * A process will be forked to handle the task, but the forked process will
+ * never return.
  *
  * @param[in]   task_id    The task ID.
  * @param[out]  report_id  The report ID.
  *
- * @return Before forking: 1 task is active already, 3 failed to find task,
- *         99 permission denied, -1 internal error,
- *         -2 task is missing a target, -3 creating the report failed,
- *         -4 target missing hosts, -6 already a task running in this process,
- *         -7 no CA cert, -9 fork failed.
- *         After forking: 0 success (parent), 2 success (child),
- *         -10 error (child).
+ * @return 1 task is active already,
+ *         3 failed to find task,
+ *         4 resuming task not supported,
+ *         99 permission denied,
+ *         -1 error,
+ *         -2 task is missing a target,
+ *         -3 creating the report failed,
+ *         -4 target missing hosts,
+ *         -6 already a task running in this process,
+ *         -9 fork failed.
  */
 int
 start_task (const char *task_id, char **report_id)
@@ -5826,24 +5301,40 @@ stop_osp_task (task_t task)
 {
   osp_connection_t *connection;
   int ret = -1;
+  report_t scan_report;
   char *scan_id;
+
+  scan_report = task_running_report (task);
+  scan_id = report_uuid (scan_report);
+  if (!scan_id)
+    goto end_stop_osp;
+  connection = osp_scanner_connect (task_scanner (task));
+  if (!connection)
+    goto end_stop_osp;
+  set_task_run_status (task, TASK_STATUS_STOP_REQUESTED);
+  ret = osp_stop_scan (connection, scan_id, NULL);
+  osp_connection_close (connection);
+  if (ret)
+    {
+      g_free (scan_id);
+      goto end_stop_osp;
+    }
 
   connection = osp_scanner_connect (task_scanner (task));
   if (!connection)
     goto end_stop_osp;
-  scan_id = report_uuid (task_running_report (task));
-  if (!scan_id)
-    goto end_stop_osp;
-  set_task_run_status (task, TASK_STATUS_STOP_REQUESTED);
-  ret = osp_stop_scan (connection, scan_id, NULL);
+  ret = osp_delete_scan (connection, scan_id);
   osp_connection_close (connection);
   g_free (scan_id);
 
 end_stop_osp:
   set_task_end_time_epoch (task, time (NULL));
-  set_scan_end_time_epoch (global_current_report, time (NULL));
   set_task_run_status (task, TASK_STATUS_STOPPED);
-  set_report_scan_run_status (global_current_report, TASK_STATUS_STOPPED);
+  if (scan_report)
+    {
+      set_scan_end_time_epoch (scan_report, time (NULL));
+      set_report_scan_run_status (scan_report, TASK_STATUS_STOPPED);
+    }
   if (ret)
     return -1;
   return 0;
@@ -5852,13 +5343,9 @@ end_stop_osp:
 /**
  * @brief Initiate stopping a task.
  *
- * Use \ref send_to_server to queue the task stop sequence in the
- * scanner output buffer.
- *
  * @param[in]  task  Task.
  *
- * @return 0 on success, 1 if stop requested, -1 if out of space in scanner
- *         output buffer, -5 scanner down, -7 no CA cert.
+ * @return 0 on success, 1 if stop requested.
  */
 int
 stop_task_internal (task_t task)
@@ -5866,28 +5353,9 @@ stop_task_internal (task_t task)
   task_status_t run_status;
 
   run_status = task_run_status (task);
-  if (run_status == TASK_STATUS_REQUESTED || run_status == TASK_STATUS_RUNNING)
+  if (run_status == TASK_STATUS_REQUESTED
+      || run_status == TASK_STATUS_RUNNING)
     {
-      if (current_scanner_task == task)
-        {
-          scanner_t scanner = task_scanner (task);
-
-          assert (scanner);
-          switch (scanner_setup (scanner))
-            {
-            case 0:
-              break;
-            case 1:
-              return -7;
-            default:
-              return -5;
-            }
-          if (!openvas_scanner_connected ()
-              && (openvas_scanner_connect () || openvas_scanner_init (0)))
-            return -5;
-          if (send_to_server ("CLIENT <|> STOP_WHOLE_TEST <|> CLIENT\n"))
-            return -1;
-        }
       set_task_run_status (task, TASK_STATUS_STOP_REQUESTED);
       return 1;
     }
@@ -5917,14 +5385,10 @@ stop_task_internal (task_t task)
 /**
  * @brief Initiate stopping a task.
  *
- * Use \ref send_to_server to queue the task stop sequence in the
- * scanner output buffer.
- *
  * @param[in]  task_id  Task UUID.
  *
  * @return 0 on success, 1 if stop requested, 3 failed to find task,
- *         99 permission denied, -1 if out of space in scanner output buffer,
- *         -5 scanner down.
+ *         99 permission denied, -1 error.
  */
 int
 stop_task (const char *task_id)
@@ -5940,7 +5404,8 @@ stop_task (const char *task_id)
   if (task == 0)
     return 3;
 
-  if (config_type (task_config (task)) != 0)
+  if (scanner_type (task_scanner (task)) == SCANNER_TYPE_OPENVAS
+      || scanner_type (task_scanner (task)) == SCANNER_TYPE_OSP)
     return stop_osp_task (task);
 
   return stop_task_internal (task);
@@ -5949,11 +5414,23 @@ stop_task (const char *task_id)
 /**
  * @brief Resume a task.
  *
+ * A process will be forked to handle the task, but the forked process will
+ * never return.
+ *
  * @param[in]   task_id    Task UUID.
  * @param[out]  report_id  If successful, ID of the resultant report.
  *
- * @return 22 caller error (task must be in "stopped" or "interrupted" state),
- *         or any start_task error.
+ * @return 1 task is active already,
+ *         3 failed to find task,
+ *         4 resuming task not supported,
+ *         22 caller error (task must be in "stopped" or "interrupted" state),
+ *         99 permission denied,
+ *         -1 error,
+ *         -2 task is missing a target,
+ *         -3 creating the report failed,
+ *         -4 target missing hosts,
+ *         -6 already a task running in this process,
+ *         -9 fork failed.
  */
 int
 resume_task (const char *task_id, char **report_id)
@@ -5983,7 +5460,7 @@ resume_task (const char *task_id, char **report_id)
  * @param[in]  task_id    UUID of task.
  * @param[in]  slave_id   UUID of slave.
  *
- * @return 0 success, 1 success, process forked, 2 task not found,
+ * @return 0 success, 2 task not found,
  *         3 slave not found, 4 slaves not supported by scanner, 5 task cannot
  *         be stopped currently, 6 scanner does not allow stopping, 7 new
  *         scanner does not support slaves, 98 stop and resume permission
@@ -6045,50 +5522,50 @@ move_task (const char *task_id, const char *slave_id)
 
   switch (status)
     {
-    case TASK_STATUS_DELETE_REQUESTED:
-    case TASK_STATUS_DELETE_ULTIMATE_REQUESTED:
-    case TASK_STATUS_DELETE_WAITING:
-    case TASK_STATUS_DELETE_ULTIMATE_WAITING:
-    case TASK_STATUS_REQUESTED:
-      // Task cannot be stopped now
-      return 5;
-      break;
-    case TASK_STATUS_RUNNING:
-      if (task_scanner_type == SCANNER_TYPE_CVE)
-        return 6;
-      // Check permissions to stop and resume task
-      if (acl_user_has_access_uuid ("task", task_id, "stop_task", 0)
-          && acl_user_has_access_uuid ("task", task_id, "resume_task", 0))
-        {
-          // Stop the task, wait and resume after changes
-          stop_task_internal (task);
-          should_resume_task = 1;
+      case TASK_STATUS_DELETE_REQUESTED:
+      case TASK_STATUS_DELETE_ULTIMATE_REQUESTED:
+      case TASK_STATUS_DELETE_WAITING:
+      case TASK_STATUS_DELETE_ULTIMATE_WAITING:
+      case TASK_STATUS_REQUESTED:
+        // Task cannot be stopped now
+        return 5;
+        break;
+      case TASK_STATUS_RUNNING:
+        if (task_scanner_type == SCANNER_TYPE_CVE)
+          return 6;
+        // Check permissions to stop and resume task
+        if (acl_user_has_access_uuid ("task", task_id, "stop_task", 0)
+            && acl_user_has_access_uuid ("task", task_id, "resume_task", 0))
+          {
+            // Stop the task, wait and resume after changes
+            stop_task_internal (task);
+            should_resume_task = 1;
 
-          status = task_run_status (task);
-          while (status == TASK_STATUS_STOP_REQUESTED
-                 || status == TASK_STATUS_STOP_REQUESTED_GIVEUP
-                 || status == TASK_STATUS_STOP_WAITING)
-            {
-              sleep (5);
-              status = task_run_status (task);
-            }
-        }
-      else
-        return 98;
-      break;
-    case TASK_STATUS_STOP_REQUESTED:
-    case TASK_STATUS_STOP_REQUESTED_GIVEUP:
-    case TASK_STATUS_STOP_WAITING:
-      while (status == TASK_STATUS_STOP_REQUESTED
-             || status == TASK_STATUS_STOP_REQUESTED_GIVEUP
-             || status == TASK_STATUS_STOP_WAITING)
-        {
-          sleep (5);
-          status = task_run_status (task);
-        }
-      break;
-    default:
-      break;
+            status = task_run_status (task);
+            while (status == TASK_STATUS_STOP_REQUESTED
+                   || status == TASK_STATUS_STOP_REQUESTED_GIVEUP
+                   || status == TASK_STATUS_STOP_WAITING)
+              {
+                sleep (5);
+                status = task_run_status (task);
+              }
+          }
+        else
+          return 98;
+        break;
+      case TASK_STATUS_STOP_REQUESTED:
+      case TASK_STATUS_STOP_REQUESTED_GIVEUP:
+      case TASK_STATUS_STOP_WAITING:
+        while (status == TASK_STATUS_STOP_REQUESTED
+                || status == TASK_STATUS_STOP_REQUESTED_GIVEUP
+                || status == TASK_STATUS_STOP_WAITING)
+          {
+            sleep (5);
+            status = task_run_status (task);
+          }
+        break;
+      default:
+        break;
     }
 
   /* Update scanner. */
@@ -6098,106 +5575,12 @@ move_task (const char *task_id, const char *slave_id)
   /* Resume task if required. */
 
   if (should_resume_task)
-    {
-      pid_t pid = getpid ();
-
-      resume_task (task_id, NULL);
-
-      if (getpid () != pid)
-        return 1;
-    }
+    resume_task (task_id, NULL);
 
   return 0;
 }
 
-/* OTP Scanner messaging. */
-
-/**
- * @brief Acknowledge a scanner BYE.
- *
- * @return 0 on success, -1 if out of space in scanner output buffer.
- */
-int
-acknowledge_bye ()
-{
-  if (send_to_server ("CLIENT <|> BYE <|> ACK\n"))
-    return -1;
-  return 0;
-}
-
-/**
- * @brief Acknowledge scanner PLUGINS_FEED_VERSION message,
- * @brief requesting all plugin info.
- *
- * @return 0 on success, -1 if out of space in scanner output buffer.
- */
-int
-acknowledge_feed_version_info ()
-{
-  if (send_to_server ("CLIENT <|> COMPLETE_LIST <|> CLIENT\n"))
-    return -1;
-  return 0;
-}
-
-/**
- * @brief Handle state changes to current task made by other processes.
- *
- * @return 0 on success, -1 if out of space in scanner output buffer, 1 if
- *         queued to scanner.
- */
-int
-manage_check_current_task ()
-{
-  if (current_scanner_task)
-    {
-      task_status_t run_status;
-
-      /* Commit pending transaction if needed. */
-      manage_transaction_stop (FALSE);
-
-      /* Check if some other process changed the status. */
-
-      run_status = task_run_status (current_scanner_task);
-      switch (run_status)
-        {
-        case TASK_STATUS_STOP_REQUESTED_GIVEUP:
-          /* This should only happen for slave tasks. */
-          assert (0);
-        case TASK_STATUS_STOP_REQUESTED:
-          if (send_to_server ("CLIENT <|> STOP_WHOLE_TEST <|> CLIENT\n"))
-            return -1;
-          set_task_run_status (current_scanner_task, TASK_STATUS_STOP_WAITING);
-          return 1;
-          break;
-        case TASK_STATUS_DELETE_REQUESTED:
-          if (send_to_server ("CLIENT <|> STOP_WHOLE_TEST <|> CLIENT\n"))
-            return -1;
-          set_task_run_status (current_scanner_task,
-                               TASK_STATUS_DELETE_WAITING);
-          return 1;
-          break;
-        case TASK_STATUS_DELETE_ULTIMATE_REQUESTED:
-          if (send_to_server ("CLIENT <|> STOP_WHOLE_TEST <|> CLIENT\n"))
-            return -1;
-          set_task_run_status (current_scanner_task,
-                               TASK_STATUS_DELETE_ULTIMATE_WAITING);
-          return 1;
-          break;
-        case TASK_STATUS_DELETE_WAITING:
-        case TASK_STATUS_DELETE_ULTIMATE_WAITING:
-        case TASK_STATUS_DONE:
-        case TASK_STATUS_NEW:
-        case TASK_STATUS_REQUESTED:
-        case TASK_STATUS_RUNNING:
-        case TASK_STATUS_STOP_WAITING:
-        case TASK_STATUS_STOPPED:
-        case TASK_STATUS_INTERRUPTED:
-          break;
-        }
-    }
-  return 0;
-}
-
+
 /* Credentials. */
 
 /**
@@ -6207,8 +5590,8 @@ manage_check_current_task ()
  *
  * @return The written-out type name.
  */
-const char *
-credential_full_type (const char *abbreviation)
+const char*
+credential_full_type (const char* abbreviation)
 {
   if (abbreviation == NULL)
     return NULL;
@@ -6226,54 +5609,145 @@ credential_full_type (const char *abbreviation)
     return abbreviation;
 }
 
+
 /* System reports. */
 
 /**
- * @brief Get system report types from a slave.
+ * @brief Get a performance report from an OSP scanner.
+ *
+ * @param[in]  scanner          The scanner to get the performance report from.
+ * @param[in]  start            The start time of the performance report.
+ * @param[in]  end              The end time of the performance report.
+ * @param[in]  titles           The end titles for the performance report.
+ * @param[in]  performance_str  The performance string.
+ *
+ * @return 0 if successful, 4 could not connect to scanner,
+ *         6 failed to get performance report, -1 error
+ */
+static int
+get_osp_performance_string (scanner_t scanner, int start, int end,
+                            const char *titles, gchar **performance_str)
+{
+  char *host, *ca_pub, *key_pub, *key_priv;
+  int port;
+  osp_connection_t *connection;
+  osp_get_performance_opts_t opts;
+  gchar *error;
+
+  host = scanner_host (scanner);
+  port = scanner_port (scanner);
+  ca_pub = scanner_ca_pub (scanner);
+  key_pub = scanner_key_pub (scanner);
+  key_priv = scanner_key_priv (scanner);
+
+  connection = osp_connect_with_data (host, port, ca_pub, key_pub, key_priv);
+
+  free (host);
+  free (ca_pub);
+  free (key_pub);
+  free (key_priv);
+
+  if (connection == NULL)
+    return 4;
+
+  opts.start = start;
+  opts.end = end;
+  opts.titles = g_strdup (titles);
+  error = NULL;
+
+  if (osp_get_performance_ext (connection, opts, performance_str, &error))
+    {
+      osp_connection_close (connection);
+      g_warning ("Error getting OSP performance report: %s", error);
+      g_free (error);
+      g_free (opts.titles);
+      return 4;
+    }
+
+  osp_connection_close (connection);
+  g_free (opts.titles);
+
+  return 0;
+}
+
+/**
+ * @brief Get system report types from a GMP slave.
  *
  * @param[in]   required_type  Single type to limit types to.
  * @param[out]  types          Types on success.
  * @param[out]  start          Actual start of types, which caller must free.
- * @param[out]  slave_id       ID of GMP slave.
+ * @param[out]  slave          GMP slave.
  *
- * @return 0 if successful, 2 failed to find slave, 3 unused, 4 could not
- * connect to slave, 5 authentication failed, 6 failed to get system report,
- * -1 otherwise.
+ * @return 0 if successful, 4 could not connect to slave, 5 authentication
+ * failed, 6 failed to get system report, -1 otherwise.
  */
 static int
-get_slave_system_report_types (const char *required_type,
-                               gchar ***start,
-                               gchar ***types,
-                               const char *slave_id)
+get_slave_system_report_types (const char *required_type, gchar ***start,
+                               gchar ***types, scanner_t slave)
 {
-  scanner_t slave = 0;
-  char *host, **end;
-  int port, socket;
+  char *original_host, *original_ca_cert, **end;
+  int original_port, new_port, socket;
   gnutls_session_t session;
   entity_t get, report;
   entities_t reports;
+  gchar *new_host, *new_ca_cert;
   int ret;
 
-  if (find_scanner_with_permission (slave_id, &slave, "get_scanners"))
-    return -1;
   if (slave == 0)
-    return 2;
-
-  host = scanner_host (slave);
-  if (host == NULL)
     return -1;
 
-  g_debug ("   %s: host: %s", __FUNCTION__, host);
+  original_host = scanner_host (slave);
+  if (original_host == NULL)
+    return -1;
 
-  port = scanner_port (slave);
-  if (port == -1)
+  g_debug ("   %s: host: %s", __FUNCTION__, original_host);
+
+  original_port = scanner_port (slave);
+  if (original_port == -1)
     {
-      free (host);
+      free (original_host);
       return -1;
     }
 
-  socket = gvm_server_open (&session, host, port);
-  free (host);
+  original_ca_cert = scanner_ca_pub (slave);
+
+  ret = slave_get_relay (original_host,
+                         original_port,
+                         original_ca_cert,
+                         "GMP",
+                         &new_host,
+                         &new_port,
+                         &new_ca_cert);
+
+  if (ret == 1)
+    {
+      g_message ("%s: no relay found for %s:%d",
+                 __FUNCTION__, original_host, original_port);
+      free (original_host);
+      free (original_ca_cert);
+      return 4;
+    }
+  else if (ret)
+    {
+      free (original_host);
+      free (original_ca_cert);
+      return -1;
+    }
+
+  free (original_host);
+  free (original_ca_cert);
+
+  socket = gvm_server_open_verify (&session,
+                                   new_host,
+                                   new_port,
+                                   new_ca_cert,
+                                   NULL,
+                                   NULL,
+                                   1);
+
+  g_free (new_host);
+  g_free (new_ca_cert);
+
   if (socket == -1)
     return 4;
 
@@ -6298,8 +5772,8 @@ get_slave_system_report_types (const char *required_type,
   gvm_server_close (socket, session);
 
   reports = get->entities;
-  end = *types = *start =
-    g_malloc ((xml_count_entities (reports) + 1) * sizeof (gchar *));
+  end = *types = *start = g_malloc ((xml_count_entities (reports) + 1)
+                                    * sizeof (gchar*));
   while ((report = first_entity (reports)))
     {
       if (strcmp (entity_name (report), "system_report") == 0)
@@ -6332,7 +5806,7 @@ get_slave_system_report_types (const char *required_type,
 
   return 0;
 
-fail:
+ fail:
   gvm_server_close (socket, session);
   return ret;
 }
@@ -6357,10 +5831,8 @@ fail:
  *         -1 otherwise.
  */
 static int
-get_system_report_types (const char *required_type,
-                         gchar ***start,
-                         gchar ***types,
-                         const char *slave_id)
+get_system_report_types (const char *required_type, gchar ***start,
+                         gchar ***types, const char *slave_id)
 {
   gchar *astdout = NULL;
   gchar *astderr = NULL;
@@ -6368,26 +5840,57 @@ get_system_report_types (const char *required_type,
   gint exit_status;
 
   if (slave_id && strcmp (slave_id, "0"))
-    return get_slave_system_report_types (
-      required_type, start, types, slave_id);
-
-  g_debug ("   command: " COMMAND);
-
-  if ((g_spawn_command_line_sync (
-         COMMAND, &astdout, &astderr, &exit_status, &err)
-       == FALSE)
-      || (WIFEXITED (exit_status) == 0) || WEXITSTATUS (exit_status))
     {
-      g_debug ("%s: gvmcg failed with %d", __FUNCTION__, exit_status);
-      g_debug ("%s: stdout: %s", __FUNCTION__, astdout);
-      g_debug ("%s: stderr: %s", __FUNCTION__, astderr);
-      g_free (astdout);
-      g_free (astderr);
-      *start = *types = g_malloc0 (sizeof (gchar *) * 2);
-      (*start)[0] = g_strdup ("fallback Fallback Report");
-      (*start)[0][strlen ("fallback")] = '\0';
-      return 3;
+      scanner_t slave;
+      scanner_type_t slave_type;
+
+      slave = 0;
+      slave_type = SCANNER_TYPE_NONE;
+
+      if (find_scanner_with_permission (slave_id, &slave, "get_scanners"))
+        return -1;
+      if (slave == 0)
+        return 2;
+
+      if (slave_type == SCANNER_TYPE_GMP)
+        return get_slave_system_report_types (required_type, start, types,
+                                              slave);
+      else
+        {
+          int ret;
+
+          // Assume OSP scanner
+          ret = get_osp_performance_string (slave, 0, 0, "titles", &astdout);
+
+          if (ret)
+            return ret;
+        }
     }
+  else
+    {
+      g_debug ("   command: " COMMAND);
+
+      if ((g_spawn_command_line_sync (COMMAND,
+                                      &astdout,
+                                      &astderr,
+                                      &exit_status,
+                                      &err)
+          == FALSE)
+          || (WIFEXITED (exit_status) == 0)
+          || WEXITSTATUS (exit_status))
+        {
+          g_debug ("%s: gvmcg failed with %d", __FUNCTION__, exit_status);
+          g_debug ("%s: stdout: %s", __FUNCTION__, astdout);
+          g_debug ("%s: stderr: %s", __FUNCTION__, astderr);
+          g_free (astdout);
+          g_free (astderr);
+          *start = *types = g_malloc0 (sizeof (gchar*) * 2);
+          (*start)[0] = g_strdup ("fallback Fallback Report");
+          (*start)[0][strlen ("fallback")] = '\0';
+          return 3;
+        }
+    }
+
   if (astdout)
     {
       char **type;
@@ -6434,7 +5937,7 @@ get_system_report_types (const char *required_type,
         }
     }
   else
-    *start = *types = g_malloc0 (sizeof (gchar *));
+    *start = *types = g_malloc0 (sizeof (gchar*));
 
   g_free (astdout);
   g_free (astderr);
@@ -6456,17 +5959,17 @@ get_system_report_types (const char *required_type,
  *         99 permission denied, -1 on error.
  */
 int
-init_system_report_type_iterator (report_type_iterator_t *iterator,
-                                  const char *type,
-                                  const char *slave_id)
+init_system_report_type_iterator (report_type_iterator_t* iterator,
+                                  const char* type,
+                                  const char* slave_id)
 {
   int ret;
 
   if (acl_user_may ("get_system_reports") == 0)
     return 99;
 
-  ret = get_system_report_types (
-    type, &iterator->start, &iterator->current, slave_id);
+  ret = get_system_report_types (type, &iterator->start, &iterator->current,
+                                 slave_id);
   if (ret == 0 || ret == 3)
     {
       iterator->current--;
@@ -6481,7 +5984,7 @@ init_system_report_type_iterator (report_type_iterator_t *iterator,
  * @param[in]  iterator  Iterator.
  */
 void
-cleanup_report_type_iterator (report_type_iterator_t *iterator)
+cleanup_report_type_iterator (report_type_iterator_t* iterator)
 {
   g_strfreev (iterator->start);
 }
@@ -6496,11 +5999,10 @@ cleanup_report_type_iterator (report_type_iterator_t *iterator)
  * @return TRUE if there was a next item, else FALSE.
  */
 gboolean
-next_report_type (report_type_iterator_t *iterator)
+next_report_type (report_type_iterator_t* iterator)
 {
   iterator->current++;
-  if (*iterator->current == NULL)
-    return FALSE;
+  if (*iterator->current == NULL) return FALSE;
   return TRUE;
 }
 
@@ -6511,10 +6013,10 @@ next_report_type (report_type_iterator_t *iterator)
  *
  * @return Name.
  */
-const char *
-report_type_iterator_name (report_type_iterator_t *iterator)
+const char*
+report_type_iterator_name (report_type_iterator_t* iterator)
 {
-  return (const char *) *iterator->current;
+  return (const char*) *iterator->current;
 }
 
 /**
@@ -6524,66 +6026,96 @@ report_type_iterator_name (report_type_iterator_t *iterator)
  *
  * @return Title.
  */
-const char *
-report_type_iterator_title (report_type_iterator_t *iterator)
+const char*
+report_type_iterator_title (report_type_iterator_t* iterator)
 {
   const char *name = *iterator->current;
   return name + strlen (name) + 1;
 }
 
 /**
- * @brief Get a system report from a slave.
+ * @brief Get a system report from a GMP slave.
  *
  * @param[in]  name       Name of report.
  * @param[in]  duration   Time range of report, in seconds.
  * @param[in]  start_time Time of first data point in report.
  * @param[in]  end_time   Time of last data point in report.
- * @param[in]  slave_id   ID of GMP scanner slave to get report from.
- *                        0 for local.
+ * @param[in]  slave      GMP scanner slave to get report from.
  * @param[out] report     On success, report in base64 if such a report exists
  *                        else NULL.  Arbitrary on error.
  *
- * @return 0 if successful, 2 failed to find slave, 3 unused, 4 could not
- * connect to slave, 5 authentication failed, 6 failed to get system report,
- * -1 otherwise.
+ * @return 0 if successful, 4 could not connect to slave, 5 authentication
+ * failed, 6 failed to get system report, -1 otherwise.
  */
 static int
-slave_system_report (const char *name,
-                     const char *duration,
-                     const char *start_time,
-                     const char *end_time,
-                     const char *slave_id,
-                     char **report)
+gmp_slave_system_report (const char *name, const char *duration,
+                         const char *start_time, const char *end_time,
+                         scanner_t slave, char **report)
 {
-  scanner_t slave = 0;
-  char *host;
-  int port, socket;
+  char *original_host, *original_ca_cert;
+  int original_port, new_port, socket;
   gnutls_session_t session;
   entity_t get, entity;
   entities_t reports;
   gmp_get_system_reports_opts_t opts;
+  gchar *new_host, *new_ca_cert;
   int ret;
 
-  if (find_scanner_with_permission (slave_id, &slave, "get_slaves"))
-    return -1;
   if (slave == 0)
-    return 2;
-
-  host = scanner_host (slave);
-  if (host == NULL)
     return -1;
 
-  g_debug ("   %s: host: %s", __FUNCTION__, host);
+  original_host = scanner_host (slave);
+  if (original_host == NULL)
+    return -1;
 
-  port = scanner_port (slave);
-  if (port == -1)
+  g_debug ("   %s: host: %s", __FUNCTION__, original_host);
+
+  original_port = scanner_port (slave);
+  if (original_port == -1)
     {
-      free (host);
+      free (original_host);
       return -1;
     }
 
-  socket = gvm_server_open (&session, host, port);
-  free (host);
+  original_ca_cert = scanner_ca_pub (slave);
+
+  ret = slave_get_relay (original_host,
+                         original_port,
+                         original_ca_cert,
+                         "GMP",
+                         &new_host,
+                         &new_port,
+                         &new_ca_cert);
+
+  if (ret == 1)
+    {
+      g_message ("%s: no relay found for %s:%d",
+                 __FUNCTION__, original_host, original_port);
+      free (original_host);
+      free (original_ca_cert);
+      return 4;
+    }
+  else if (ret)
+    {
+      free (original_host);
+      free (original_ca_cert);
+      return -1;
+    }
+
+  free (original_host);
+  free (original_ca_cert);
+
+  socket = gvm_server_open_verify (&session,
+                                   new_host,
+                                   new_port,
+                                   new_ca_cert,
+                                   NULL,
+                                   NULL,
+                                   1);
+
+  g_free (new_host);
+  g_free (new_ca_cert);
+
   if (socket == -1)
     return 4;
 
@@ -6630,7 +6162,7 @@ slave_system_report (const char *name,
   g_warning ("   %s: error getting entity", __FUNCTION__);
   return 6;
 
-fail:
+ fail:
   gvm_server_close (socket, session);
   return ret;
 }
@@ -6638,16 +6170,112 @@ fail:
 /**
  * @brief Header for fallback system report.
  */
-#define FALLBACK_SYSTEM_REPORT_HEADER                                          \
-  "This is the most basic, fallback report.  The system can be configured "    \
-  "to\n"                                                                       \
-  "produce more powerful reports.  Please contact your system administrator\n" \
-  "for more information.\n\n"
+#define FALLBACK_SYSTEM_REPORT_HEADER \
+"This is the most basic, fallback report.  The system can be configured to\n" \
+"produce more powerful reports.  Please contact your system administrator\n" \
+"for more information.\n\n"
 
 /**
  * @brief Default duration for system reports.
  */
 #define DEFAULT_DURATION 86400L
+
+/**
+ * @brief Generate params for gvmcg or OSP get_performance.
+ *
+ * @param[in]  duration     The duration as a string
+ * @param[in]  start_time   The start time as a string
+ * @param[in]  end_time     The end time as a string
+ * @param[out] param_1      Output of the first parameter (start or duration)
+ * @param[out] param_2      Output of the second parameter (end time)
+ * @param[out] params_count The number of valid parameters
+ */
+void
+parse_performance_params (const char *duration,
+                          const char *start_time,
+                          const char *end_time,
+                          time_t *param_1,
+                          time_t *param_2,
+                          int *params_count)
+{
+  time_t start_time_num, end_time_num, duration_num;
+  start_time_num = 0;
+  end_time_num = 0;
+  duration_num = 0;
+
+  *param_1 = 0;
+  *param_2 = 0;
+  *params_count = 0;
+
+  if (duration && strcmp (duration, ""))
+    {
+      duration_num = atol (duration);
+      if (duration_num == 0)
+        return;
+    }
+  if (start_time && strcmp (start_time, ""))
+    {
+      start_time_num = parse_iso_time (start_time);
+      if (start_time_num == 0)
+        return;
+    }
+  if (end_time && strcmp (end_time, ""))
+    {
+      end_time_num = parse_iso_time (end_time);
+      if (end_time_num == 0)
+        return;
+    }
+
+  if (start_time && strcmp (start_time, ""))
+    {
+      if (end_time && strcmp (end_time, ""))
+        {
+          *param_1 = start_time_num;
+          *param_2 = end_time_num;
+          *params_count = 2;
+        }
+      else if (duration && strcmp (duration, ""))
+        {
+          *param_1 = start_time_num;
+          *param_2 = start_time_num + duration_num;
+          *params_count = 2;
+        }
+      else
+        {
+          *param_1 = start_time_num;
+          *param_2 = start_time_num + DEFAULT_DURATION;
+          *params_count = 2;
+        }
+    }
+  else if (end_time && strcmp (end_time, ""))
+    {
+      if (duration && strcmp (duration, ""))
+        {
+          *param_1 = end_time_num - duration_num;
+          *param_2 = end_time_num;
+          *params_count = 2;
+        }
+      else
+        {
+          *param_1 = end_time_num - DEFAULT_DURATION,
+          *param_1 = end_time_num,
+          *params_count = 2;
+        }
+    }
+  else
+    {
+      if (duration && strcmp (duration, ""))
+        {
+          *param_1 = duration_num;
+          *params_count = 1;
+        }
+      else
+        {
+          *param_1 = DEFAULT_DURATION;
+          *params_count = 1;
+        }
+    }
+}
 
 /**
  * @brief Get a system report.
@@ -6661,110 +6289,93 @@ fail:
  *                        else NULL.  Arbitrary on error.
  *
  * @return 0 if successful (including failure to find report), -1 on error,
+ *         2 could not find slave scanner,
  *         3 if used the fallback report,  4 could not connect to slave,
  *         5 authentication failed, 6 failed to get system report.
  */
 int
-manage_system_report (const char *name,
-                      const char *duration,
-                      const char *start_time,
-                      const char *end_time,
-                      const char *slave_id,
-                      char **report)
+manage_system_report (const char *name, const char *duration,
+                      const char *start_time, const char *end_time,
+                      const char *slave_id, char **report)
 {
   gchar *astdout = NULL;
   gchar *astderr = NULL;
   GError *err = NULL;
   gint exit_status;
   gchar *command;
-  time_t start_time_num, end_time_num, duration_num;
-  start_time_num = 0;
-  end_time_num = 0;
-  duration_num = 0;
+  time_t cmd_param_1, cmd_param_2;
+  int params_count;
 
   assert (name);
 
-  if (duration && strcmp (duration, ""))
-    {
-      duration_num = atol (duration);
-      if (duration_num == 0)
-        return manage_system_report ("blank", NULL, NULL, NULL, NULL, report);
-    }
-  if (start_time && strcmp (start_time, ""))
-    {
-      start_time_num = parse_iso_time (start_time);
-      if (start_time_num == 0)
-        return manage_system_report ("blank", NULL, NULL, NULL, NULL, report);
-    }
-  if (end_time && strcmp (end_time, ""))
-    {
-      end_time_num = parse_iso_time (end_time);
-      if (end_time_num == 0)
-        return manage_system_report ("blank", NULL, NULL, NULL, NULL, report);
-    }
+  parse_performance_params (duration, start_time, end_time,
+                            &cmd_param_1, &cmd_param_2, &params_count);
+
+  if (params_count == 0)
+    return manage_system_report ("blank", NULL, NULL, NULL, NULL, report);
 
   if (slave_id && strcmp (slave_id, "0"))
-    return slave_system_report (
-      name, duration, start_time, end_time, slave_id, report);
+    {
+      scanner_t slave;
+      scanner_type_t slave_type;
+
+      slave = 0;
+
+      if (find_scanner_with_permission (slave_id, &slave, "get_scanners"))
+        return -1;
+      if (slave == 0)
+        return 2;
+
+      slave_type = scanner_type (slave);
+      if (slave_type == SCANNER_TYPE_GMP)
+        return gmp_slave_system_report (name, duration, start_time, end_time,
+                                        slave, report);
+      else
+        {
+          if (params_count == 1)
+            {
+              // only duration
+              time_t now;
+              now = time (NULL);
+              return get_osp_performance_string (slave,
+                                                 now - cmd_param_1,
+                                                 now,
+                                                 name,
+                                                 report);
+            }
+          else
+            {
+              // start and end time
+              return get_osp_performance_string (slave,
+                                                 cmd_param_1,
+                                                 cmd_param_2,
+                                                 name,
+                                                 report);
+            }
+        }
+    }
 
   /* For simplicity, it's up to the command to do the base64 encoding. */
-  if (start_time && strcmp (start_time, ""))
-    {
-      if (end_time && strcmp (end_time, ""))
-        {
-          command = g_strdup_printf (
-            "gvmcg %ld %ld %s", start_time_num, end_time_num, name);
-        }
-      else if (duration && strcmp (duration, ""))
-        {
-          command = g_strdup_printf ("gvmcg %ld %ld %s",
-                                     start_time_num,
-                                     start_time_num + duration_num,
-                                     name);
-        }
-      else
-        {
-          command = g_strdup_printf ("gvmcg %ld %ld %s",
-                                     start_time_num,
-                                     start_time_num + DEFAULT_DURATION,
-                                     name);
-        }
-    }
-  else if (end_time && strcmp (end_time, ""))
-    {
-      if (duration && strcmp (duration, ""))
-        {
-          command = g_strdup_printf ("gvmcg %ld %ld %s",
-                                     end_time_num - duration_num,
-                                     end_time_num,
-                                     name);
-        }
-      else
-        {
-          command = g_strdup_printf ("gvmcg %ld %ld %s",
-                                     end_time_num - DEFAULT_DURATION,
-                                     end_time_num,
-                                     name);
-        }
-    }
+  if (params_count == 1)
+    command = g_strdup_printf ("gvmcg %ld %s",
+                               cmd_param_1,
+                               name);
   else
-    {
-      if (duration && strcmp (duration, ""))
-        {
-          command = g_strdup_printf ("gvmcg %ld %s", duration_num, name);
-        }
-      else
-        {
-          command = g_strdup_printf ("gvmcg %ld %s", DEFAULT_DURATION, name);
-        }
-    }
+    command = g_strdup_printf ("gvmcg %ld %ld %s",
+                               cmd_param_1,
+                               cmd_param_2,
+                               name);
 
   g_debug ("   command: %s", command);
 
-  if ((g_spawn_command_line_sync (
-         command, &astdout, &astderr, &exit_status, &err)
+  if ((g_spawn_command_line_sync (command,
+                                  &astdout,
+                                  &astderr,
+                                  &exit_status,
+                                  &err)
        == FALSE)
-      || (WIFEXITED (exit_status) == 0) || WEXITSTATUS (exit_status))
+      || (WIFEXITED (exit_status) == 0)
+      || WEXITSTATUS (exit_status))
     {
       int ret;
       double load[3];
@@ -6785,18 +6396,24 @@ manage_system_report (const char *name,
       ret = getloadavg (load, 3);
       if (ret == 3)
         {
-          g_string_append_printf (
-            buffer, "Load average for past minute:     %.1f\n", load[0]);
-          g_string_append_printf (
-            buffer, "Load average for past 5 minutes:  %.1f\n", load[1]);
-          g_string_append_printf (
-            buffer, "Load average for past 15 minutes: %.1f\n", load[2]);
+          g_string_append_printf (buffer,
+                                  "Load average for past minute:     %.1f\n",
+                                  load[0]);
+          g_string_append_printf (buffer,
+                                  "Load average for past 5 minutes:  %.1f\n",
+                                  load[1]);
+          g_string_append_printf (buffer,
+                                  "Load average for past 15 minutes: %.1f\n",
+                                  load[2]);
         }
       else
         g_string_append (buffer, "Error getting load averages.\n");
 
       get_error = NULL;
-      g_file_get_contents ("/proc/meminfo", &output, &output_len, &get_error);
+      g_file_get_contents ("/proc/meminfo",
+                           &output,
+                           &output_len,
+                           &get_error);
       if (get_error)
         g_error_free (get_error);
       else
@@ -6819,13 +6436,15 @@ manage_system_report (const char *name,
       g_free (astdout);
       if (strcmp (name, "blank") == 0)
         return -1;
-      return manage_system_report ("blank", NULL, NULL, NULL, NULL, report);
+      return manage_system_report ("blank", NULL, NULL, NULL,
+                                   NULL, report);
     }
   else
     *report = astdout;
   return 0;
 }
 
+
 /* Scheduling. */
 
 /**
@@ -6839,7 +6458,7 @@ int authenticate_allow_all = 0;
  * @brief UUID of user whose scheduled task is to be started (in connection
  *        with authenticate_allow_all).
  */
-static gchar *schedule_user_uuid = NULL;
+static gchar* schedule_user_uuid = NULL;
 
 /**
  * @brief Ensure that any subsequent authentications succeed.
@@ -6857,7 +6476,7 @@ manage_auth_allow_all (int scheduled)
  *
  * @return UUID of user that scheduled the current task.
  */
-const gchar *
+const gchar*
 get_scheduled_user_uuid ()
 {
   return schedule_user_uuid;
@@ -6870,7 +6489,7 @@ get_scheduled_user_uuid ()
  * @param user_uuid UUID of user that scheduled the current task.
  */
 void
-set_scheduled_user_uuid (const gchar *user_uuid)
+set_scheduled_user_uuid (const gchar* user_uuid)
 {
   gchar *user_uuid_copy = user_uuid ? g_strdup (user_uuid) : NULL;
   g_free (schedule_user_uuid);
@@ -6882,9 +6501,9 @@ set_scheduled_user_uuid (const gchar *user_uuid)
  */
 typedef struct
 {
-  gchar *owner_uuid; ///< UUID of owner.
-  gchar *owner_name; ///< Name of owner.
-  gchar *task_uuid;  ///< UUID of task.
+  gchar *owner_uuid;   ///< UUID of owner.
+  gchar *owner_name;   ///< Name of owner.
+  gchar *task_uuid;    ///< UUID of task.
 } scheduled_task_t;
 
 /**
@@ -6897,9 +6516,8 @@ typedef struct
  * @return Scheduled task structure.
  */
 static scheduled_task_t *
-scheduled_task_new (const gchar *task_uuid,
-                    const gchar *owner_uuid,
-                    const gchar *owner_name)
+scheduled_task_new (const gchar* task_uuid, const gchar* owner_uuid,
+                    const gchar* owner_name)
 {
   scheduled_task_t *scheduled_task;
 
@@ -6952,26 +6570,26 @@ scheduled_task_start (scheduled_task_t *scheduled_task,
   pid = fork ();
   switch (pid)
     {
-    case 0:
-      /* Child.  Carry on to start the task, reopen the database (required
-       * after fork). */
+      case 0:
+        /* Child.  Carry on to start the task, reopen the database (required
+         * after fork). */
 
-      /* Restore the sigmask that was blanked for pselect. */
-      pthread_sigmask (SIG_SETMASK, sigmask_current, NULL);
+        /* Restore the sigmask that was blanked for pselect. */
+        pthread_sigmask (SIG_SETMASK, sigmask_current, NULL);
 
-      reinit_manage_process ();
-      manage_session_init (current_credentials.uuid);
-      break;
+        reinit_manage_process ();
+        manage_session_init (current_credentials.uuid);
+        break;
 
-    case -1:
-      /* Parent on error. */
-      g_warning ("%s: fork failed", __FUNCTION__);
-      return -1;
+      case -1:
+        /* Parent on error. */
+        g_warning ("%s: fork failed", __FUNCTION__);
+        return -1;
 
-    default:
-      /* Parent.  Continue to next task. */
-      g_debug ("%s: %i forked %i", __FUNCTION__, getpid (), pid);
-      return 0;
+      default:
+        /* Parent.  Continue to next task. */
+        g_debug ("%s: %i forked %i", __FUNCTION__, getpid (), pid);
+        return 0;
     }
 
   /* Run the callback to fork a child connected to the Manager. */
@@ -6979,118 +6597,125 @@ scheduled_task_start (scheduled_task_t *scheduled_task,
   pid = fork_connection (&connection, scheduled_task->owner_uuid);
   switch (pid)
     {
-    case 0:
-      /* Child.  Break, start task, exit. */
-      break;
+      case 0:
+        /* Child.  Break, start task, exit. */
+        break;
 
-    case -1:
-      /* Parent on error. */
-      g_warning ("%s: fork_connection failed", __FUNCTION__);
-      reschedule_task (scheduled_task->task_uuid);
-      scheduled_task_free (scheduled_task);
-      exit (EXIT_FAILURE);
-      break;
-
-    default:
-      {
-        int status;
-
-        /* Parent.  Wait for child, to check return. */
-
-        snprintf (
-          title, sizeof (title), "gvmd: scheduler: waiting for %i", pid);
-        proctitle_set (title);
-
-        g_debug ("%s: %i fork_connectioned %i", __FUNCTION__, getpid (), pid);
-
-        if (signal (SIGCHLD, SIG_DFL) == SIG_ERR)
-          g_warning ("%s: failed to set SIGCHLD", __FUNCTION__);
-        while (waitpid (pid, &status, 0) < 0)
-          {
-            if (errno == ECHILD)
-              {
-                g_warning ("%s: Failed to get child exit,"
-                           " so task '%s' may not have been scheduled",
-                           __FUNCTION__,
-                           scheduled_task->task_uuid);
-                scheduled_task_free (scheduled_task);
-                exit (EXIT_FAILURE);
-              }
-            if (errno == EINTR)
-              continue;
-            g_warning ("%s: waitpid: %s", __FUNCTION__, strerror (errno));
-            g_warning ("%s: As a result, task '%s' may not have been"
-                       " scheduled",
-                       __FUNCTION__,
-                       scheduled_task->task_uuid);
-            scheduled_task_free (scheduled_task);
-            exit (EXIT_FAILURE);
-          }
-        if (WIFEXITED (status))
-          switch (WEXITSTATUS (status))
-            {
-            case EXIT_SUCCESS:
-              {
-                schedule_t schedule;
-                int periods;
-                const gchar *task_uuid;
-
-                /* Child succeeded, so task successfully started. */
-
-                task_uuid = scheduled_task->task_uuid;
-                schedule = task_schedule_uuid (task_uuid);
-                if (schedule && schedule_period (schedule) == 0
-                    && schedule_duration (schedule) == 0
-                    /* Check next time too, in case the user changed
-                     * the schedule after this task was added to the
-                     * "starts" list. */
-                    && task_schedule_next_time_uuid (task_uuid) == 0)
-                  /* A once-off schedule without a duration, remove
-                   * it from the task.  If it has a duration it
-                   * will be removed by manage_schedule via
-                   * clear_duration_schedules, after the duration. */
-                  set_task_schedule_uuid (task_uuid, 0, 0);
-                else if ((periods = task_schedule_periods_uuid (task_uuid)))
-                  {
-                    /* A task restricted to a certain number of
-                     * scheduled runs. */
-                    if (periods > 1)
-                      {
-                        set_task_schedule_periods (task_uuid, periods - 1);
-                      }
-                    else if (periods == 1 && schedule_duration (schedule) == 0)
-                      {
-                        /* Last run of a task restricted to a certain
-                         * number of scheduled runs. */
-                        set_task_schedule_uuid (task_uuid, 0, 1);
-                      }
-                    else if (periods == 1)
-                      /* Flag that the task has started, for
-                       * update_duration_schedule_periods. */
-                      set_task_schedule_next_time_uuid (task_uuid, 0);
-                  }
-              }
-              scheduled_task_free (scheduled_task);
-              exit (EXIT_SUCCESS);
-
-            case EXIT_FAILURE:
-            default:
-              break;
-            }
-
-        /* Child failed, reset task schedule time and exit. */
-
-        g_warning ("%s: child failed", __FUNCTION__);
+      case -1:
+        /* Parent on error. */
+        g_warning ("%s: fork_connection failed", __FUNCTION__);
         reschedule_task (scheduled_task->task_uuid);
         scheduled_task_free (scheduled_task);
         exit (EXIT_FAILURE);
-      }
+        break;
+
+      default:
+        {
+          int status;
+
+          /* Parent.  Wait for child, to check return. */
+
+          snprintf (title, sizeof (title),
+                    "gvmd: scheduler: waiting for %i",
+                    pid);
+          proctitle_set (title);
+
+          g_debug ("%s: %i fork_connectioned %i",
+                   __FUNCTION__, getpid (), pid);
+
+          if (signal (SIGCHLD, SIG_DFL) == SIG_ERR)
+            g_warning ("%s: failed to set SIGCHLD", __FUNCTION__);
+          while (waitpid (pid, &status, 0) < 0)
+            {
+              if (errno == ECHILD)
+                {
+                  g_warning ("%s: Failed to get child exit,"
+                             " so task '%s' may not have been scheduled",
+                             __FUNCTION__,
+                             scheduled_task->task_uuid);
+                  scheduled_task_free (scheduled_task);
+                  exit (EXIT_FAILURE);
+                }
+              if (errno == EINTR)
+                continue;
+              g_warning ("%s: waitpid: %s",
+                         __FUNCTION__,
+                         strerror (errno));
+              g_warning ("%s: As a result, task '%s' may not have been"
+                         " scheduled",
+                         __FUNCTION__,
+                         scheduled_task->task_uuid);
+              scheduled_task_free (scheduled_task);
+              exit (EXIT_FAILURE);
+            }
+          if (WIFEXITED (status))
+            switch (WEXITSTATUS (status))
+              {
+                case EXIT_SUCCESS:
+                  {
+                    schedule_t schedule;
+                    int periods;
+                    const gchar *task_uuid;
+
+                    /* Child succeeded, so task successfully started. */
+
+                    task_uuid = scheduled_task->task_uuid;
+                    schedule = task_schedule_uuid (task_uuid);
+                    if (schedule
+                        && schedule_period (schedule) == 0
+                        && schedule_duration (schedule) == 0
+                        /* Check next time too, in case the user changed
+                         * the schedule after this task was added to the
+                         * "starts" list. */
+                        && task_schedule_next_time_uuid (task_uuid) == 0)
+                      /* A once-off schedule without a duration, remove
+                       * it from the task.  If it has a duration it
+                       * will be removed by manage_schedule via
+                       * clear_duration_schedules, after the duration. */
+                      set_task_schedule_uuid (task_uuid, 0, 0);
+                    else if ((periods = task_schedule_periods_uuid
+                                         (task_uuid)))
+                      {
+                        /* A task restricted to a certain number of
+                         * scheduled runs. */
+                        if (periods > 1)
+                          {
+                            set_task_schedule_periods (task_uuid,
+                                                       periods - 1);
+                          }
+                        else if (periods == 1
+                                 && schedule_duration (schedule) == 0)
+                          {
+                            /* Last run of a task restricted to a certain
+                             * number of scheduled runs. */
+                            set_task_schedule_uuid (task_uuid, 0, 1);
+                          }
+                        else if (periods == 1)
+                          /* Flag that the task has started, for
+                           * update_duration_schedule_periods. */
+                          set_task_schedule_next_time_uuid (task_uuid, 0);
+                      }
+                  }
+                  scheduled_task_free (scheduled_task);
+                  exit (EXIT_SUCCESS);
+
+                case EXIT_FAILURE:
+                default:
+                  break;
+              }
+
+          /* Child failed, reset task schedule time and exit. */
+
+          g_warning ("%s: child failed", __FUNCTION__);
+          reschedule_task (scheduled_task->task_uuid);
+          scheduled_task_free (scheduled_task);
+          exit (EXIT_FAILURE);
+        }
     }
 
   /* Start the task. */
 
-  snprintf (title,
-            sizeof (title),
+  snprintf (title, sizeof (title),
             "gvmd: scheduler: starting %s",
             scheduled_task->task_uuid);
   proctitle_set (title);
@@ -7105,13 +6730,15 @@ scheduled_task_start (scheduled_task_t *scheduled_task,
       exit (EXIT_FAILURE);
     }
 
-  if (gmp_resume_task_report_c (&connection, scheduled_task->task_uuid, NULL))
+  if (gmp_resume_task_report_c (&connection,
+                                scheduled_task->task_uuid,
+                                NULL))
     {
-      if (gmp_start_task_report_c (
-            &connection, scheduled_task->task_uuid, NULL))
+      if (gmp_start_task_report_c (&connection,
+                                   scheduled_task->task_uuid,
+                                   NULL))
         {
-          g_warning ("%s: gmp_start_task and gmp_resume_task failed",
-                     __FUNCTION__);
+          g_warning ("%s: gmp_start_task and gmp_resume_task failed", __FUNCTION__);
           scheduled_task_free (scheduled_task);
           gvm_connection_free (&connection);
           exit (EXIT_FAILURE);
@@ -7149,24 +6776,23 @@ scheduled_task_stop (scheduled_task_t *scheduled_task,
 
   switch (fork_connection (&connection, scheduled_task->owner_uuid))
     {
-    case 0:
-      /* Child.  Break, stop task, exit. */
-      break;
+      case 0:
+        /* Child.  Break, stop task, exit. */
+        break;
 
-    case -1:
-      /* Parent on error. */
-      g_warning ("%s: stop fork failed", __FUNCTION__);
-      return -1;
+      case -1:
+        /* Parent on error. */
+        g_warning ("%s: stop fork failed", __FUNCTION__);
+        return -1;
 
-    default:
-      /* Parent.  Continue to next task. */
-      return 0;
+      default:
+        /* Parent.  Continue to next task. */
+        return 0;
     }
 
   /* Stop the task. */
 
-  snprintf (title,
-            sizeof (title),
+  snprintf (title, sizeof (title),
             "gvmd: scheduler: stopping %s",
             scheduled_task->task_uuid);
   proctitle_set (title);
@@ -7202,7 +6828,8 @@ scheduled_task_stop (scheduled_task_t *scheduled_task,
  *                                    the NVTS.  Child does not return.
  */
 void
-manage_sync (sigset_t *sigmask_current, int (*fork_update_nvt_cache) ())
+manage_sync (sigset_t *sigmask_current,
+             int (*fork_update_nvt_cache) ())
 {
   manage_sync_nvts (fork_update_nvt_cache);
   manage_sync_scap (sigmask_current);
@@ -7290,8 +6917,8 @@ manage_schedule (manage_connection_forker_t fork_connection,
         g_debug ("%s: start due for %llu, setting next_time",
                  __FUNCTION__,
                  task_schedule_iterator_task (&schedules));
-        set_task_schedule_next_time (
-          task_schedule_iterator_task (&schedules),
+        set_task_schedule_next_time
+         (task_schedule_iterator_task (&schedules),
           icalendar_next_time_from_string (icalendar, zone, 0));
 
         /* Skip this task if it was already added to the starts list
@@ -7312,11 +6939,12 @@ manage_schedule (manage_connection_forker_t fork_connection,
 
         /* Add task UUID and owner name and UUID to the list. */
 
-        starts = g_slist_prepend (
-          starts,
-          scheduled_task_new (task_schedule_iterator_task_uuid (&schedules),
-                              task_schedule_iterator_owner_uuid (&schedules),
-                              task_schedule_iterator_owner_name (&schedules)));
+        starts = g_slist_prepend
+                  (starts,
+                   scheduled_task_new
+                    (task_schedule_iterator_task_uuid (&schedules),
+                     task_schedule_iterator_owner_uuid (&schedules),
+                     task_schedule_iterator_owner_name (&schedules)));
       }
     else if (task_schedule_iterator_stop_due (&schedules))
       {
@@ -7329,11 +6957,12 @@ manage_schedule (manage_connection_forker_t fork_connection,
 
         /* Add task UUID and owner name and UUID to the list. */
 
-        stops = g_slist_prepend (
-          stops,
-          scheduled_task_new (task_schedule_iterator_task_uuid (&schedules),
-                              task_schedule_iterator_owner_uuid (&schedules),
-                              task_schedule_iterator_owner_name (&schedules)));
+        stops = g_slist_prepend
+                 (stops,
+                  scheduled_task_new
+                   (task_schedule_iterator_task_uuid (&schedules),
+                    task_schedule_iterator_owner_uuid (&schedules),
+                    task_schedule_iterator_owner_name (&schedules)));
       }
   cleanup_task_schedule_iterator (&schedules);
 
@@ -7350,8 +6979,9 @@ manage_schedule (manage_connection_forker_t fork_connection,
       starts = starts->next;
       g_slist_free_1 (head);
 
-      if (scheduled_task_start (
-            scheduled_task, fork_connection, sigmask_current))
+      if (scheduled_task_start (scheduled_task,
+                                fork_connection,
+                                sigmask_current))
         /* Error.  Reschedule and continue to next task. */
         reschedule_task (scheduled_task->task_uuid);
       scheduled_task_free (scheduled_task);
@@ -7369,8 +6999,9 @@ manage_schedule (manage_connection_forker_t fork_connection,
       stops = stops->next;
       g_slist_free_1 (head);
 
-      if (scheduled_task_stop (
-            scheduled_task, fork_connection, sigmask_current))
+      if (scheduled_task_stop (scheduled_task,
+                               fork_connection,
+                               sigmask_current))
         {
           /* Error.  Exit. */
           scheduled_task_free (scheduled_task);
@@ -7417,6 +7048,7 @@ set_schedule_timeout (int new_timeout)
     schedule_timeout = new_timeout;
 }
 
+
 /* Report formats. */
 
 /**
@@ -7431,22 +7063,22 @@ report_format_param_type_name (report_format_param_type_t type)
 {
   switch (type)
     {
-    case REPORT_FORMAT_PARAM_TYPE_BOOLEAN:
-      return "boolean";
-    case REPORT_FORMAT_PARAM_TYPE_INTEGER:
-      return "integer";
-    case REPORT_FORMAT_PARAM_TYPE_SELECTION:
-      return "selection";
-    case REPORT_FORMAT_PARAM_TYPE_STRING:
-      return "string";
-    case REPORT_FORMAT_PARAM_TYPE_TEXT:
-      return "text";
-    case REPORT_FORMAT_PARAM_TYPE_REPORT_FORMAT_LIST:
-      return "report_format_list";
-    default:
-      assert (0);
-    case REPORT_FORMAT_PARAM_TYPE_ERROR:
-      return "ERROR";
+      case REPORT_FORMAT_PARAM_TYPE_BOOLEAN:
+        return "boolean";
+      case REPORT_FORMAT_PARAM_TYPE_INTEGER:
+        return "integer";
+      case REPORT_FORMAT_PARAM_TYPE_SELECTION:
+        return "selection";
+      case REPORT_FORMAT_PARAM_TYPE_STRING:
+        return "string";
+      case REPORT_FORMAT_PARAM_TYPE_TEXT:
+        return "text";
+      case REPORT_FORMAT_PARAM_TYPE_REPORT_FORMAT_LIST:
+        return "report_format_list";
+      default:
+        assert (0);
+      case REPORT_FORMAT_PARAM_TYPE_ERROR:
+        return "ERROR";
     }
 }
 
@@ -7490,12 +7122,16 @@ backup_file_name (const char *name)
   if (length && (name[length - 1] == '~'))
     return 1;
 
-  if ((length > 3) && (name[length - 4] == '.'))
-    return ((name[length - 3] == 'b') && (name[length - 2] == 'a')
+  if ((length > 3)
+      && (name[length - 4] == '.'))
+    return ((name[length - 3] == 'b')
+            && (name[length - 2] == 'a')
             && (name[length - 1] == 'k'))
-           || ((name[length - 3] == 'B') && (name[length - 2] == 'A')
+           || ((name[length - 3] == 'B')
+               && (name[length - 2] == 'A')
                && (name[length - 1] == 'K'))
-           || ((name[length - 3] == 'C') && (name[length - 2] == 'K')
+           || ((name[length - 3] == 'C')
+               && (name[length - 2] == 'K')
                && (name[length - 1] == 'P'));
 
   return 0;
@@ -7557,7 +7193,10 @@ get_report_format_files (const char *dir_name, GPtrArray **start)
 gchar *
 predefined_report_format_dir (const gchar *uuid)
 {
-  return g_build_filename (GVMD_DATA_DIR, "report_formats", uuid, NULL);
+  return g_build_filename (GVMD_DATA_DIR,
+                           "report_formats",
+                           uuid,
+                           NULL);
 }
 
 /**
@@ -7570,7 +7209,7 @@ predefined_report_format_dir (const gchar *uuid)
  * @return 0 on success, -1 on error.
  */
 int
-init_report_format_file_iterator (file_iterator_t *iterator,
+init_report_format_file_iterator (file_iterator_t* iterator,
                                   report_format_t report_format)
 {
   gchar *dir_name, *uuid;
@@ -7588,8 +7227,11 @@ init_report_format_file_iterator (file_iterator_t *iterator,
       owner_uuid = report_format_owner_uuid (report_format);
       if (owner_uuid == NULL)
         return -1;
-      dir_name = g_build_filename (
-        GVMD_STATE_DIR, "report_formats", owner_uuid, uuid, NULL);
+      dir_name = g_build_filename (GVMD_STATE_DIR,
+                                   "report_formats",
+                                   owner_uuid,
+                                   uuid,
+                                   NULL);
       g_free (owner_uuid);
     }
 
@@ -7613,7 +7255,7 @@ init_report_format_file_iterator (file_iterator_t *iterator,
  * @param[in]  iterator  Iterator.
  */
 void
-cleanup_file_iterator (file_iterator_t *iterator)
+cleanup_file_iterator (file_iterator_t* iterator)
 {
   array_free (iterator->start);
   g_free (iterator->dir_name);
@@ -7629,11 +7271,10 @@ cleanup_file_iterator (file_iterator_t *iterator)
  * @return TRUE if there was a next item, else FALSE.
  */
 gboolean
-next_file (file_iterator_t *iterator)
+next_file (file_iterator_t* iterator)
 {
   iterator->current++;
-  if (*iterator->current == NULL)
-    return FALSE;
+  if (*iterator->current == NULL) return FALSE;
   return TRUE;
 }
 
@@ -7644,10 +7285,10 @@ next_file (file_iterator_t *iterator)
  *
  * @return File name.
  */
-const char *
-file_iterator_name (file_iterator_t *iterator)
+const char*
+file_iterator_name (file_iterator_t* iterator)
 {
-  return (const char *) *iterator->current;
+  return (const char*) *iterator->current;
 }
 
 /**
@@ -7657,27 +7298,30 @@ file_iterator_name (file_iterator_t *iterator)
  *
  * @return Freshly allocated file contents, in base64.
  */
-gchar *
-file_iterator_content_64 (file_iterator_t *iterator)
+gchar*
+file_iterator_content_64 (file_iterator_t* iterator)
 {
   gchar *path_name, *content;
   GError *error;
   gsize content_size;
 
-  path_name =
-    g_build_filename (iterator->dir_name, (gchar *) *iterator->current, NULL);
+  path_name = g_build_filename (iterator->dir_name,
+                                (gchar*) *iterator->current,
+                                NULL);
 
   /* Read in the contents. */
 
   error = NULL;
-  if (g_file_get_contents (path_name, &content, &content_size, &error) == FALSE)
+  if (g_file_get_contents (path_name,
+                           &content,
+                           &content_size,
+                           &error)
+      == FALSE)
     {
       if (error)
         {
           g_debug ("%s: failed to read %s: %s",
-                   __FUNCTION__,
-                   path_name,
-                   error->message);
+                   __FUNCTION__, path_name, error->message);
           g_error_free (error);
         }
       g_free (path_name);
@@ -7690,7 +7334,7 @@ file_iterator_content_64 (file_iterator_t *iterator)
 
   if (content && (content_size > 0))
     {
-      gchar *base64 = g_base64_encode ((guchar *) content, content_size);
+      gchar *base64 = g_base64_encode ((guchar*) content, content_size);
       g_free (content);
       return base64;
     }
@@ -7698,70 +7342,7 @@ file_iterator_content_64 (file_iterator_t *iterator)
   return content;
 }
 
-/* Scanner Tags. */
-
-/**
- * @brief Split up the tags received from the scanner.
- *
- * @param[in]  scanner_tags  The tags sent by the scanner.
- * @param[out] tags          Tags.
- * @param[out] cvss_base     CVSS base.
- */
-void
-parse_tags (const char *scanner_tags, gchar **tags, gchar **cvss_base)
-{
-  gchar **split, **point;
-  GString *tags_buffer;
-  gboolean first;
-
-  tags_buffer = g_string_new ("");
-  split = g_strsplit (scanner_tags, "|", 0);
-  point = split;
-  *cvss_base = NULL;
-  first = TRUE;
-
-  while (*point)
-    {
-      if (strncmp (*point, "cvss_base=", strlen ("cvss_base=")) == 0)
-        {
-          /* Skip this tag. */
-        }
-      else if (strncmp (
-                 *point, "cvss_base_vector=", strlen ("cvss_base_vector="))
-               == 0)
-        {
-          if (*cvss_base == NULL)
-            *cvss_base =
-              g_strdup_printf ("%.1f",
-                               get_cvss_score_from_base_metrics (
-                                 *point + strlen ("cvss_base_vector=")));
-          if (first)
-            first = FALSE;
-          else
-            g_string_append_c (tags_buffer, '|');
-          g_string_append (tags_buffer, *point);
-        }
-      else
-        {
-          if (first)
-            first = FALSE;
-          else
-            g_string_append_c (tags_buffer, '|');
-          g_string_append (tags_buffer, *point);
-        }
-      point++;
-    }
-
-  if (tags_buffer->len == 0)
-    {
-      g_string_free (tags_buffer, TRUE);
-      *tags = g_strdup ("NOTAG");
-    }
-  else
-    *tags = g_string_free (tags_buffer, FALSE);
-  g_strfreev (split);
-}
-
+
 /* Slaves. */
 
 /**
@@ -7776,11 +7357,8 @@ parse_tags (const char *scanner_tags, gchar **tags, gchar **cvss_base)
  * @return 0 success, -1 error.
  */
 int
-delete_slave_task (const gchar *host,
-                   int port,
-                   const gchar *username,
-                   const gchar *password,
-                   const char *slave_task_uuid)
+delete_slave_task (const gchar *host, int port, const gchar *username,
+                   const gchar *password, const char *slave_task_uuid)
 {
   int socket;
   gnutls_session_t session;
@@ -7795,8 +7373,7 @@ delete_slave_task (const gchar *host,
   g_debug ("   %s: host: %s", __FUNCTION__, host);
 
   socket = gvm_server_open (&session, host, port);
-  if (socket == -1)
-    return -1;
+  if (socket == -1) return -1;
 
   g_debug ("   %s: connected", __FUNCTION__);
 
@@ -7859,11 +7436,11 @@ delete_slave_task (const gchar *host,
     goto fail_credential;
   if (gmp_delete_port_list_ext (&session, slave_port_list_uuid, del_opts))
     goto fail_credential;
-  if (gmp_delete_lsc_credential_ext (
-        &session, slave_smb_credential_uuid, del_opts))
+  if (gmp_delete_lsc_credential_ext (&session, slave_smb_credential_uuid,
+                                     del_opts))
     goto fail;
-  if (gmp_delete_lsc_credential_ext (
-        &session, slave_ssh_credential_uuid, del_opts))
+  if (gmp_delete_lsc_credential_ext (&session, slave_ssh_credential_uuid,
+                                     del_opts))
     goto fail;
 
   /* Cleanup. */
@@ -7873,19 +7450,19 @@ delete_slave_task (const gchar *host,
   gvm_server_close (socket, session);
   return 0;
 
-fail_config:
+ fail_config:
   gmp_delete_config_ext (&session, slave_config_uuid, del_opts);
-fail_target:
+ fail_target:
   gmp_delete_target_ext (&session, slave_target_uuid, del_opts);
   gmp_delete_port_list_ext (&session, slave_port_list_uuid, del_opts);
-fail_credential:
+ fail_credential:
   gmp_delete_lsc_credential_ext (&session, slave_smb_credential_uuid, del_opts);
   gmp_delete_lsc_credential_ext (&session, slave_ssh_credential_uuid, del_opts);
-fail_free:
+ fail_free:
   free_entity (get_targets);
-fail_free_task:
+ fail_free_task:
   free_entity (get_tasks);
-fail:
+ fail:
   gvm_server_close (socket, session);
   return -1;
 }
@@ -8004,9 +7581,7 @@ get_dfn_cert_adv_filename (char *item_id)
  *         result of the operation of NULL on failure.
  */
 static gchar *
-xsl_transform (gchar *stylesheet,
-               gchar *xmlfile,
-               gchar **param_names,
+xsl_transform (gchar *stylesheet, gchar *xmlfile, gchar **param_names,
                gchar **param_values)
 {
   int i, param_idx;
@@ -8020,7 +7595,7 @@ xsl_transform (gchar *stylesheet,
     while (param_names[param_idx] && param_values[param_idx])
       param_idx++;
 
-  cmd = (gchar **) g_malloc ((4 + param_idx * 3) * sizeof (gchar *));
+  cmd = (gchar **)g_malloc ((4 + param_idx * 3) * sizeof (gchar *));
 
   i = 0;
   cmd[i++] = "xsltproc";
@@ -8039,24 +7614,27 @@ xsl_transform (gchar *stylesheet,
   cmd[i++] = xmlfile;
   cmd[i] = NULL;
 
+
   /* DEBUG: display the final command line. */
   cmd_full = g_strjoinv (" ", cmd);
-  g_debug ("%s: Spawning in parent dir: %s", __FUNCTION__, cmd_full);
+  g_debug ("%s: Spawning in parent dir: %s",
+           __FUNCTION__, cmd_full);
   g_free (cmd_full);
   /* --- */
 
   if ((g_spawn_sync (NULL,
                      cmd,
-                     NULL, /* Environment. */
+                     NULL,                  /* Environment. */
                      G_SPAWN_SEARCH_PATH,
-                     NULL, /* Setup function. */
+                     NULL,                  /* Setup function. */
                      NULL,
                      &standard_out,
                      &standard_err,
                      &exit_status,
                      NULL)
        == FALSE)
-      || (WIFEXITED (exit_status) == 0) || WEXITSTATUS (exit_status))
+      || (WIFEXITED (exit_status) == 0)
+      || WEXITSTATUS (exit_status))
     {
       g_debug ("%s: failed to transform the xml: %d (WIF %i, WEX %i)",
                __FUNCTION__,
@@ -8088,9 +7666,11 @@ xsl_transform (gchar *stylesheet,
  *
  * @param  x  Prefix for names in snippet.
  */
-#define DEF(x)                             \
-  const char *x = nvt_iterator_##x (nvts); \
-  gchar *x##_text = x ? g_markup_escape_text (x, -1) : g_strdup ("");
+#define DEF(x)                                                    \
+      const char* x = nvt_iterator_ ## x (nvts);                  \
+      gchar* x ## _text = x                                       \
+                          ? g_markup_escape_text (x, -1)          \
+                          : g_strdup ("");
 
 /**
  * @brief Create and return XML description for an NVT.
@@ -8106,63 +7686,136 @@ xsl_transform (gchar *stylesheet,
  * @return A dynamically allocated string containing the XML description.
  */
 gchar *
-get_nvti_xml (iterator_t *nvts,
-              int details,
-              int pref_count,
-              int preferences,
-              const char *timeout,
-              config_t config,
+get_nvti_xml (iterator_t *nvts, int details, int pref_count,
+              int preferences, const char *timeout, config_t config,
               int close_tag)
 {
-  const char *oid = nvt_iterator_oid (nvts);
-  const char *name = nvt_iterator_name (nvts);
+  const char* oid = nvt_iterator_oid (nvts);
+  const char* name = nvt_iterator_name (nvts);
   gchar *msg, *name_text;
 
-  name_text = name ? g_markup_escape_text (name, strlen (name)) : g_strdup ("");
+  name_text = name
+               ? g_markup_escape_text (name, strlen (name))
+               : g_strdup ("");
   if (details)
     {
       int tag_count;
-      GString *cert_refs_str, *tags_str, *buffer;
+      GString *refs_str, *tags_str, *buffer, *nvt_tags;
       iterator_t cert_refs_iterator, tags;
       gchar *tag_name_esc, *tag_value_esc, *tag_comment_esc;
       char *default_timeout = nvt_default_timeout (oid);
 
       DEF (family);
-      DEF (xref);
       DEF (tag);
 
 #undef DEF
 
-      cert_refs_str = g_string_new ("");
-      if (manage_cert_loaded ())
+      nvt_tags = g_string_new (tag_text);
+      g_free (tag_text);
+
+      /* Add the elements that are expected as part of the pipe-separated tag list
+       * via API although internally already explicitly stored. Once the API is
+       * extended to have these elements explicitly, they do not need to be
+       * added to this tag string anymore. */
+      if (nvt_iterator_summary (nvts) && nvt_iterator_summary (nvts)[0])
+        {
+          if (nvt_tags->str)
+            xml_string_append (nvt_tags, "|summary=%s",
+                               nvt_iterator_summary (nvts));
+          else
+            xml_string_append (nvt_tags, "summary=%s",
+                               nvt_iterator_summary (nvts));
+        }
+      if (nvt_iterator_insight (nvts) && nvt_iterator_insight (nvts)[0])
+        {
+          if (nvt_tags->str)
+            xml_string_append (nvt_tags, "|insight=%s",
+                               nvt_iterator_insight (nvts));
+          else
+            xml_string_append (nvt_tags, "insight=%s",
+                               nvt_iterator_insight (nvts));
+        }
+      if (nvt_iterator_affected (nvts) && nvt_iterator_affected (nvts)[0])
+        {
+          if (nvt_tags->str)
+            xml_string_append (nvt_tags, "|affected=%s",
+                               nvt_iterator_affected (nvts));
+          else
+            xml_string_append (nvt_tags, "affected=%s",
+                               nvt_iterator_affected (nvts));
+        }
+      if (nvt_iterator_impact (nvts) && nvt_iterator_impact (nvts)[0])
+        {
+          if (nvt_tags->str)
+            xml_string_append (nvt_tags, "|impact=%s",
+                               nvt_iterator_impact (nvts));
+          else
+            xml_string_append (nvt_tags, "impact=%s",
+                               nvt_iterator_impact (nvts));
+        }
+      if (nvt_iterator_solution (nvts) && nvt_iterator_solution (nvts)[0])
+        {
+          if (nvt_tags->str)
+            xml_string_append (nvt_tags, "|solution=%s",
+                                nvt_iterator_solution (nvts));
+          else
+            xml_string_append (nvt_tags, "solution=%s",
+                               nvt_iterator_solution (nvts));
+        }
+      if (nvt_iterator_solution_type (nvts)
+          && nvt_iterator_solution_type (nvts)[0])
+        {
+          if (nvt_tags->str)
+            xml_string_append (nvt_tags, "|solution_type=%s",
+                               nvt_iterator_solution_type (nvts));
+          else
+            xml_string_append (nvt_tags, "solution_type=%s",
+                               nvt_iterator_solution_type (nvts));
+        }
+      if (nvt_iterator_detection (nvts) && nvt_iterator_detection (nvts)[0])
+        {
+          if (nvt_tags->str)
+            xml_string_append (nvt_tags, "|vuldetect=%s",
+                               nvt_iterator_detection (nvts));
+          else
+            xml_string_append (nvt_tags, "vuldetect=%s",
+                               nvt_iterator_detection (nvts));
+        }
+
+      refs_str = g_string_new ("");
+
+      if (manage_cert_loaded())
         {
           init_nvt_cert_bund_adv_iterator (&cert_refs_iterator, oid, 0, 0);
           while (next (&cert_refs_iterator))
             {
-              g_string_append_printf (
-                cert_refs_str,
-                "<cert_ref type=\"CERT-Bund\" id=\"%s\"/>",
-                get_iterator_name (&cert_refs_iterator));
-            }
+              xml_string_append (refs_str,
+                                 "<ref type=\"cert-bund\" id=\"%s\"/>",
+                                 get_iterator_name (&cert_refs_iterator));
+          }
           cleanup_iterator (&cert_refs_iterator);
 
           init_nvt_dfn_cert_adv_iterator (&cert_refs_iterator, oid, 0, 0);
           while (next (&cert_refs_iterator))
             {
-              g_string_append_printf (cert_refs_str,
-                                      "<cert_ref type=\"DFN-CERT\" id=\"%s\"/>",
-                                      get_iterator_name (&cert_refs_iterator));
-            }
+              xml_string_append (refs_str,
+                                 "<ref type=\"dfn-cert\" id=\"%s\"/>",
+                                 get_iterator_name (&cert_refs_iterator));
+          }
           cleanup_iterator (&cert_refs_iterator);
         }
       else
         {
-          g_string_append (cert_refs_str,
+          g_string_append (refs_str,
                            "<warning>database not available</warning>");
         }
 
+      nvti_refs_append_xml (refs_str, oid, NULL);
+
       tags_str = g_string_new ("");
-      tag_count = resource_tag_count ("nvt", get_iterator_resource (nvts), 1);
+      tag_count = resource_tag_count ("nvt",
+                                      get_iterator_resource (nvts),
+                                      1);
 
       if (tag_count)
         {
@@ -8171,16 +7824,20 @@ get_nvti_xml (iterator_t *nvts,
                                   "<count>%i</count>",
                                   tag_count);
 
-          init_resource_tag_iterator (
-            &tags, "nvt", get_iterator_resource (nvts), 1, NULL, 1);
+          init_resource_tag_iterator (&tags, "nvt",
+                                      get_iterator_resource (nvts),
+                                      1, NULL, 1);
           while (next (&tags))
             {
-              tag_name_esc =
-                g_markup_escape_text (resource_tag_iterator_name (&tags), -1);
-              tag_value_esc =
-                g_markup_escape_text (resource_tag_iterator_value (&tags), -1);
-              tag_comment_esc = g_markup_escape_text (
-                resource_tag_iterator_comment (&tags), -1);
+              tag_name_esc = g_markup_escape_text (resource_tag_iterator_name
+                                                    (&tags),
+                                                  -1);
+              tag_value_esc = g_markup_escape_text (resource_tag_iterator_value
+                                                      (&tags),
+                                                    -1);
+              tag_comment_esc = g_markup_escape_text (resource_tag_iterator_comment
+                                                        (&tags),
+                                                      -1);
               g_string_append_printf (tags_str,
                                       "<tag id=\"%s\">"
                                       "<name>%s</name>"
@@ -8196,64 +7853,60 @@ get_nvti_xml (iterator_t *nvts,
               g_free (tag_comment_esc);
             }
           cleanup_iterator (&tags);
-          g_string_append_printf (tags_str, "</user_tags>");
+          g_string_append_printf (tags_str,
+                                  "</user_tags>");
         }
 
       buffer = g_string_new ("");
 
-      g_string_append_printf (
-        buffer,
-        "<nvt oid=\"%s\">"
-        "<name>%s</name>"
-        "<creation_time>%s</creation_time>"
-        "<modification_time>%s</modification_time>"
-        "%s" // user_tags
-        "<category>%d</category>"
-        "<family>%s</family>"
-        "<cvss_base>%s</cvss_base>"
-        "<qod>"
-        "<value>%s</value>"
-        "<type>%s</type>"
-        "</qod>"
-        "<cve_id>%s</cve_id>"
-        "<bugtraq_id>%s</bugtraq_id>"
-        "<cert_refs>%s</cert_refs>"
-        "<xrefs>%s</xrefs>"
-        "<tags>%s</tags>"
-        "<preference_count>%i</preference_count>"
-        "<timeout>%s</timeout>"
-        "<default_timeout>%s</default_timeout>",
-        oid,
-        name_text,
-        get_iterator_creation_time (nvts) ? get_iterator_creation_time (nvts)
-                                          : "",
-        get_iterator_modification_time (nvts)
-          ? get_iterator_modification_time (nvts)
-          : "",
-        tags_str->str,
-        nvt_iterator_category (nvts),
-        family_text,
-        nvt_iterator_cvss_base (nvts) ? nvt_iterator_cvss_base (nvts) : "",
-        nvt_iterator_qod (nvts),
-        nvt_iterator_qod_type (nvts),
-        nvt_iterator_cve (nvts),
-        nvt_iterator_bid (nvts),
-        cert_refs_str->str,
-        xref_text,
-        tag_text,
-        pref_count,
-        timeout ? timeout : "",
-        default_timeout ? default_timeout : "");
+      g_string_append_printf (buffer,
+                              "<nvt oid=\"%s\">"
+                              "<name>%s</name>"
+                              "<creation_time>%s</creation_time>"
+                              "<modification_time>%s</modification_time>"
+                              "%s" // user_tags
+                              "<category>%d</category>"
+                              "<family>%s</family>"
+                              "<cvss_base>%s</cvss_base>"
+                              "<qod>"
+                              "<value>%s</value>"
+                              "<type>%s</type>"
+                              "</qod>"
+                              "<refs>%s</refs>"
+                              "<tags>%s</tags>"
+                              "<preference_count>%i</preference_count>"
+                              "<timeout>%s</timeout>"
+                              "<default_timeout>%s</default_timeout>",
+                              oid,
+                              name_text,
+                              get_iterator_creation_time (nvts)
+                               ? get_iterator_creation_time (nvts)
+                               : "",
+                              get_iterator_modification_time (nvts)
+                               ? get_iterator_modification_time (nvts)
+                               : "",
+                              tags_str->str,
+                              nvt_iterator_category (nvts),
+                              family_text,
+                              nvt_iterator_cvss_base (nvts)
+                               ? nvt_iterator_cvss_base (nvts)
+                               : "",
+                              nvt_iterator_qod (nvts),
+                              nvt_iterator_qod_type (nvts),
+                              refs_str->str,
+                              nvt_tags->str,
+                              pref_count,
+                              timeout ? timeout : "",
+                              default_timeout ? default_timeout : "");
       g_free (family_text);
-      g_free (xref_text);
-      g_free (tag_text);
-      g_string_free (cert_refs_str, 1);
-      g_string_free (tags_str, 1);
+      g_string_free(nvt_tags, 1);
+      g_string_free(refs_str, 1);
+      g_string_free(tags_str, 1);
 
       if (preferences)
         {
           iterator_t prefs;
-          const char *nvt_name = nvt_iterator_name (nvts);
+          const char *nvt_oid = nvt_iterator_oid (nvts);
 
           /* Send the preferences for the NVT. */
 
@@ -8264,7 +7917,7 @@ get_nvti_xml (iterator_t *nvts,
                              timeout ? timeout : "",
                              default_timeout ? default_timeout : "");
 
-          init_nvt_preference_iterator (&prefs, nvt_name);
+          init_nvt_preference_iterator (&prefs, nvt_oid);
           while (next (&prefs))
             buffer_config_preference_xml (buffer, &prefs, config, 1);
           cleanup_iterator (&prefs);
@@ -8279,23 +7932,25 @@ get_nvti_xml (iterator_t *nvts,
   else
     {
       int tag_count;
-      tag_count = resource_tag_count ("nvt", get_iterator_resource (nvts), 1);
+      tag_count = resource_tag_count ("nvt",
+                                      get_iterator_resource (nvts),
+                                      1);
 
       if (tag_count)
         {
-          msg = g_strdup_printf ("<nvt oid=\"%s\"><name>%s</name>"
-                                 "<user_tags><count>%i</count></user_tags>%s",
-                                 oid,
-                                 name_text,
-                                 tag_count,
-                                 close_tag ? "</nvt>" : "");
+          msg = g_strdup_printf
+                 ("<nvt oid=\"%s\"><name>%s</name>"
+                  "<user_tags><count>%i</count></user_tags>%s",
+                  oid, name_text,
+                  tag_count,
+                  close_tag ? "</nvt>" : "");
         }
       else
         {
-          msg = g_strdup_printf ("<nvt oid=\"%s\"><name>%s</name>%s",
-                                 oid,
-                                 name_text,
-                                 close_tag ? "</nvt>" : "");
+          msg = g_strdup_printf
+                 ("<nvt oid=\"%s\"><name>%s</name>%s",
+                  oid, name_text,
+                  close_tag ? "</nvt>" : "");
         }
     }
   g_free (name_text);
@@ -8318,16 +7973,16 @@ manage_scap_update_time ()
   /* Read in the contents. */
 
   error = NULL;
-  if (g_file_get_contents (
-        SCAP_TIMESTAMP_FILENAME, &content, &content_size, &error)
+  if (g_file_get_contents (SCAP_TIMESTAMP_FILENAME,
+                           &content,
+                           &content_size,
+                           &error)
       == FALSE)
     {
       if (error)
         {
           g_debug ("%s: failed to read %s: %s",
-                   __FUNCTION__,
-                   SCAP_TIMESTAMP_FILENAME,
-                   error->message);
+                   __FUNCTION__, SCAP_TIMESTAMP_FILENAME, error->message);
           g_error_free (error);
         }
       return "";
@@ -8358,8 +8013,8 @@ int
 manage_read_info (gchar *type, gchar *uid, gchar *name, gchar **result)
 {
   gchar *fname;
-  gchar *pnames[2] = {"refname", NULL};
-  gchar *pvalues[2] = {name, NULL};
+  gchar *pnames[2] = { "refname", NULL };
+  gchar *pvalues[2] = { name, NULL };
 
   assert (result != NULL);
   *result = NULL;
@@ -8393,7 +8048,7 @@ manage_read_info (gchar *type, gchar *uid, gchar *name, gchar **result)
       iterator_t nvts;
       nvt_t nvt;
 
-      if (!find_nvt (name ? name : uid, &nvt) && nvt)
+      if (!find_nvt (uid ? uid : name, &nvt) && nvt)
         {
           init_nvt_iterator (&nvts, nvt, 0, NULL, NULL, 0, NULL);
 
@@ -8415,8 +8070,8 @@ manage_read_info (gchar *type, gchar *uid, gchar *name, gchar **result)
       if (fname)
         {
           gchar *ovaldef;
-          ovaldef =
-            xsl_transform (OVALDEF_GETBYNAME_XSL, fname, pnames, pvalues);
+          ovaldef = xsl_transform (OVALDEF_GETBYNAME_XSL, fname,
+                                   pnames, pvalues);
           g_free (fname);
           if (ovaldef)
             *result = ovaldef;
@@ -8428,8 +8083,8 @@ manage_read_info (gchar *type, gchar *uid, gchar *name, gchar **result)
       if (fname)
         {
           gchar *adv;
-          adv =
-            xsl_transform (CERT_BUND_ADV_GETBYNAME_XSL, fname, pnames, pvalues);
+          adv = xsl_transform (CERT_BUND_ADV_GETBYNAME_XSL, fname,
+                               pnames, pvalues);
           g_free (fname);
           if (adv)
             *result = adv;
@@ -8441,8 +8096,8 @@ manage_read_info (gchar *type, gchar *uid, gchar *name, gchar **result)
       if (fname)
         {
           gchar *adv;
-          adv =
-            xsl_transform (DFN_CERT_ADV_GETBYNAME_XSL, fname, pnames, pvalues);
+          adv = xsl_transform (DFN_CERT_ADV_GETBYNAME_XSL, fname,
+                               pnames, pvalues);
           g_free (fname);
           if (adv)
             *result = adv;
@@ -8455,6 +8110,7 @@ manage_read_info (gchar *type, gchar *uid, gchar *name, gchar **result)
   return 1;
 }
 
+
 /* Users. */
 
 /**
@@ -8466,7 +8122,7 @@ manage_read_info (gchar *type, gchar *uid, gchar *name, gchar **result)
  * @return 0 if the username is valid, 1 if not.
  */
 int
-validate_username (const gchar *name)
+validate_username (const gchar * name)
 {
   if (g_regex_match_simple ("^[[:alnum:]-_.]+$", name, 0, 0))
     return 0;
@@ -8474,6 +8130,7 @@ validate_username (const gchar *name)
     return 1;
 }
 
+
 /* Resource aggregates. */
 
 /**
@@ -8489,6 +8146,7 @@ sort_data_free (sort_data_t *sort_data)
   g_free (sort_data);
 }
 
+
 /* Feeds. */
 
 /**
@@ -8503,7 +8161,8 @@ sort_data_free (sort_data_t *sort_data)
  * @return TRUE if the selftest was successful, or FALSE if an error occurred.
  */
 gboolean
-gvm_sync_script_perform_selftest (const gchar *sync_script, gchar **result)
+gvm_sync_script_perform_selftest (const gchar * sync_script,
+                                  gchar ** result)
 {
   g_assert (sync_script);
   g_assert_cmpstr (*result, ==, NULL);
@@ -8520,22 +8179,15 @@ gvm_sync_script_perform_selftest (const gchar *sync_script, gchar **result)
   gint script_exit;
   GError *error = NULL;
 
-  if (!g_spawn_sync (script_working_dir,
-                     argv,
-                     NULL,
-                     0,
-                     NULL,
-                     NULL,
-                     &script_out,
-                     &script_err,
-                     &script_exit,
-                     &error))
+  if (!g_spawn_sync
+      (script_working_dir, argv, NULL, 0, NULL, NULL, &script_out, &script_err,
+       &script_exit, &error))
     {
       if (*result != NULL)
         {
-          *result = g_strdup_printf ("Failed to execute synchronization "
-                                     "script: %s",
-                                     error->message);
+          *result =
+            g_strdup_printf ("Failed to execute synchronization " "script: %s",
+                             error->message);
         }
 
       g_free (script_working_dir);
@@ -8581,8 +8233,8 @@ gvm_sync_script_perform_selftest (const gchar *sync_script, gchar **result)
  *         error occurred.
  */
 gboolean
-gvm_get_sync_script_identification (const gchar *sync_script,
-                                    gchar **identification,
+gvm_get_sync_script_identification (const gchar * sync_script,
+                                    gchar ** identification,
                                     int feed_type)
 {
   g_assert (sync_script);
@@ -8603,16 +8255,9 @@ gvm_get_sync_script_identification (const gchar *sync_script,
 
   gchar **script_identification;
 
-  if (!g_spawn_sync (script_working_dir,
-                     argv,
-                     NULL,
-                     0,
-                     NULL,
-                     NULL,
-                     &script_out,
-                     &script_err,
-                     &script_exit,
-                     &error))
+  if (!g_spawn_sync
+        (script_working_dir, argv, NULL, 0, NULL, NULL, &script_out, &script_err,
+         &script_exit, &error))
     {
       g_warning ("Failed to execute %s: %s", sync_script, error->message);
 
@@ -8646,8 +8291,7 @@ gvm_get_sync_script_identification (const gchar *sync_script,
           && g_ascii_strncasecmp (script_identification[0], "SCAPSYNC", 7))
       || (feed_type == CERT_FEED
           && g_ascii_strncasecmp (script_identification[0], "CERTSYNC", 7))
-      || g_ascii_strncasecmp (
-           script_identification[0], script_identification[5], 7))
+      || g_ascii_strncasecmp (script_identification[0], script_identification[5], 7))
     {
       g_warning ("%s is not a feed synchronization script", sync_script);
 
@@ -8684,7 +8328,8 @@ gvm_get_sync_script_identification (const gchar *sync_script,
  *         occurred.
  */
 gboolean
-gvm_get_sync_script_description (const gchar *sync_script, gchar **description)
+gvm_get_sync_script_description (const gchar * sync_script,
+                                 gchar ** description)
 {
   g_assert (sync_script);
   g_assert_cmpstr (*description, ==, NULL);
@@ -8701,16 +8346,9 @@ gvm_get_sync_script_description (const gchar *sync_script, gchar **description)
   gint script_exit;
   GError *error = NULL;
 
-  if (!g_spawn_sync (script_working_dir,
-                     argv,
-                     NULL,
-                     0,
-                     NULL,
-                     NULL,
-                     &script_out,
-                     &script_err,
-                     &script_exit,
-                     &error))
+  if (!g_spawn_sync
+      (script_working_dir, argv, NULL, 0, NULL, NULL, &script_out, &script_err,
+       &script_exit, &error))
     {
       g_warning ("Failed to execute %s: %s", sync_script, error->message);
 
@@ -8756,8 +8394,8 @@ gvm_get_sync_script_description (const gchar *sync_script, gchar **description)
  *         occurred.
  */
 gboolean
-gvm_get_sync_script_feed_version (const gchar *sync_script,
-                                  gchar **feed_version)
+gvm_get_sync_script_feed_version (const gchar * sync_script,
+                                  gchar ** feed_version)
 {
   g_assert (sync_script);
   g_assert_cmpstr (*feed_version, ==, NULL);
@@ -8774,16 +8412,9 @@ gvm_get_sync_script_feed_version (const gchar *sync_script,
   gint script_exit;
   GError *error = NULL;
 
-  if (!g_spawn_sync (script_working_dir,
-                     argv,
-                     NULL,
-                     0,
-                     NULL,
-                     NULL,
-                     &script_out,
-                     &script_err,
-                     &script_exit,
-                     &error))
+  if (!g_spawn_sync
+        (script_working_dir, argv, NULL, 0, NULL, NULL, &script_out, &script_err,
+         &script_exit, &error))
     {
       g_warning ("Failed to execute %s: %s", sync_script, error->message);
 
@@ -8848,19 +8479,18 @@ gvm_migrate_secinfo (int feed_type)
 
   lockfile_name = g_build_filename (g_get_tmp_dir (), lockfile_basename, NULL);
 
-  lockfile = open (lockfile_name,
-                   O_RDWR | O_CREAT | O_APPEND,
+  lockfile = open (lockfile_name, O_RDWR | O_CREAT | O_APPEND,
                    /* "-rw-r--r--" */
                    S_IWUSR | S_IRUSR | S_IROTH | S_IRGRP);
   if (lockfile == -1)
     {
-      g_warning (
-        "Failed to open lock file '%s': %s", lockfile_name, strerror (errno));
+      g_warning ("Failed to open lock file '%s': %s", lockfile_name,
+                 strerror (errno));
       g_free (lockfile_name);
       return -1;
     }
 
-  if (flock (lockfile, LOCK_EX | LOCK_NB)) /* Exclusive, Non blocking. */
+  if (flock (lockfile, LOCK_EX | LOCK_NB))  /* Exclusive, Non blocking. */
     {
       if (errno == EWOULDBLOCK)
         {
@@ -8873,8 +8503,9 @@ gvm_migrate_secinfo (int feed_type)
         }
       g_debug ("%s: flock: %s", __FUNCTION__, strerror (errno));
       if (close (lockfile))
-        g_warning (
-          "%s: failed to close lockfile: %s", __FUNCTION__, strerror (errno));
+        g_warning ("%s: failed to close lockfile: %s",
+                   __FUNCTION__,
+                   strerror (errno));
       g_free (lockfile_name);
       return -1;
     }
@@ -8898,6 +8529,20 @@ gvm_migrate_secinfo (int feed_type)
   return ret;
 }
 
+/**
+ * @brief Update NVT cache using OSP.
+ *
+ * @param[in]  update_socket  Socket to use to contact ospd-openvas scanner.
+ *
+ * @return 0 success, -1 error, 2 scanner still loading.
+ */
+int
+manage_update_nvts_osp (const gchar *update_socket)
+{
+  return manage_update_nvt_cache_osp (update_socket);
+}
+
+
 /* Wizards. */
 
 /**
@@ -8916,15 +8561,17 @@ gvm_migrate_secinfo (int feed_type)
  *                                when return is 4, or NULL.
  * @param[out] ret_response      Address for response string of last command.
  *
- * @return 0 success, 1 name error, 2 process forked to run task, -10 process
- *         forked to run task where task start failed, -2 to_scanner buffer
- *         full, 4 command in wizard failed, 5 wizard not read only,
- *         6 Parameter validation failed, -1 internal error,
+ * @return 0 success,
+ *         1 name error,
+ *         4 command in wizard failed,
+ *         5 wizard not read only,
+ *         6 Parameter validation failed,
+ *         -1 internal error,
  *         99 permission denied.
  */
 int
 manage_run_wizard (const gchar *wizard_name,
-                   int (*run_command) (void *, gchar *, gchar **),
+                   int (*run_command) (void*, gchar*, gchar**),
                    void *run_command_data,
                    array_t *params,
                    int read_only,
@@ -8940,10 +8587,8 @@ manage_run_wizard (const gchar *wizard_name,
   entity_t entity, mode_entity, params_entity, read_only_entity;
   entity_t param_def, step;
   entities_t modes, steps, param_defs;
-  int ret, forked;
+  int ret;
   const gchar *point;
-
-  forked = 0;
 
   if (acl_user_may ("run_wizard") == 0)
     return 99;
@@ -8958,24 +8603,30 @@ manage_run_wizard (const gchar *wizard_name,
     *ret_response = NULL;
 
   point = wizard_name;
-  while (*point && (isalnum (*point) || *point == '_'))
-    point++;
+  while (*point && (isalnum (*point) || *point == '_')) point++;
   if (*point)
     return 1;
 
   /* Read wizard from file. */
 
   file_name = g_strdup_printf ("%s.xml", wizard_name);
-  file = g_build_filename (GVMD_DATA_DIR, "wizards", file_name, NULL);
+  file = g_build_filename (GVMD_DATA_DIR,
+                           "wizards",
+                           file_name,
+                           NULL);
   g_free (file_name);
 
   get_error = NULL;
-  g_file_get_contents (file, &wizard, &wizard_len, &get_error);
+  g_file_get_contents (file,
+                       &wizard,
+                       &wizard_len,
+                       &get_error);
   g_free (file);
   if (get_error)
     {
-      g_warning (
-        "%s: Failed to read wizard: %s", __FUNCTION__, get_error->message);
+      g_warning ("%s: Failed to read wizard: %s",
+                 __FUNCTION__,
+                 get_error->message);
       g_error_free (get_error);
       return -1;
     }
@@ -9015,10 +8666,7 @@ manage_run_wizard (const gchar *wizard_name,
           if (ret_response)
             *ret_response = g_strdup ("");
 
-          if (forked)
-            return 3;
-          else
-            return 0;
+          return 0;
         }
     }
   else
@@ -9058,7 +8706,8 @@ manage_run_wizard (const gchar *wizard_name,
           if ((name_entity == NULL)
               || (strcmp (entity_text (name_entity), "") == 0))
             {
-              g_warning ("%s: Wizard PARAM missing NAME", __FUNCTION__);
+              g_warning ("%s: Wizard PARAM missing NAME",
+                         __FUNCTION__);
               free_entity (entity);
               return -1;
             }
@@ -9069,7 +8718,8 @@ manage_run_wizard (const gchar *wizard_name,
           if ((regex_entity == NULL)
               || (strcmp (entity_text (regex_entity), "") == 0))
             {
-              g_warning ("%s: Wizard PARAM missing REGEX", __FUNCTION__);
+              g_warning ("%s: Wizard PARAM missing REGEX",
+                         __FUNCTION__);
               free_entity (entity);
               return -1;
             }
@@ -9077,9 +8727,9 @@ manage_run_wizard (const gchar *wizard_name,
             regex = entity_text (regex_entity);
 
           optional_entity = entity_child (param_def, "optional");
-          optional =
-            (optional_entity && strcmp (entity_text (optional_entity), "")
-             && strcmp (entity_text (optional_entity), "0"));
+          optional = (optional_entity
+                      && strcmp (entity_text (optional_entity), "")
+                      && strcmp (entity_text (optional_entity), "0"));
 
           if (params)
             {
@@ -9088,12 +8738,13 @@ manage_run_wizard (const gchar *wizard_name,
                 {
                   name_value_t *pair;
 
-                  pair = (name_value_t *) g_ptr_array_index (params, index);
+                  pair = (name_value_t*) g_ptr_array_index (params, index);
 
                   if (pair == NULL)
                     continue;
 
-                  if ((pair->name) && (pair->value)
+                  if ((pair->name)
+                      && (pair->value)
                       && (strcmp (pair->name, name) == 0))
                     {
                       index = 0; // end loop;
@@ -9101,11 +8752,10 @@ manage_run_wizard (const gchar *wizard_name,
 
                       if (g_regex_match_simple (regex, pair->value, 0, 0) == 0)
                         {
-                          *command_error =
-                            g_strdup_printf ("Value '%s' is not valid for"
-                                             " parameter '%s'.",
-                                             pair->value,
-                                             name);
+                          *command_error
+                            = g_strdup_printf ("Value '%s' is not valid for"
+                                              " parameter '%s'.",
+                                              pair->value, name);
                           free_entity (entity);
                           g_string_free (params_xml, TRUE);
                           return 6;
@@ -9122,6 +8772,8 @@ manage_run_wizard (const gchar *wizard_name,
               free_entity (entity);
               return 6;
             }
+
+
         }
       param_defs = next_entities (param_defs);
     }
@@ -9134,7 +8786,7 @@ manage_run_wizard (const gchar *wizard_name,
         {
           name_value_t *pair;
 
-          pair = (name_value_t *) g_ptr_array_index (params, index);
+          pair = (name_value_t*) g_ptr_array_index (params, index);
           xml_string_append (params_xml,
                              "<param>"
                              "<name>%s</name>"
@@ -9168,7 +8820,8 @@ manage_run_wizard (const gchar *wizard_name,
           command = entity_child (step, "command");
           if (command == NULL)
             {
-              g_warning ("%s: Wizard STEP missing COMMAND", __FUNCTION__);
+              g_warning ("%s: Wizard STEP missing COMMAND",
+                         __FUNCTION__);
               free_entity (entity);
               g_free (response);
               g_free (extra);
@@ -9181,7 +8834,8 @@ manage_run_wizard (const gchar *wizard_name,
           xsl_fd = mkstemp (xsl_file_name);
           if (xsl_fd == -1)
             {
-              g_warning ("%s: Wizard XSL file create failed", __FUNCTION__);
+              g_warning ("%s: Wizard XSL file create failed",
+                         __FUNCTION__);
               free_entity (entity);
               g_free (response);
               g_free (extra);
@@ -9192,7 +8846,8 @@ manage_run_wizard (const gchar *wizard_name,
           xsl_file = fdopen (xsl_fd, "w");
           if (xsl_file == NULL)
             {
-              g_warning ("%s: Wizard XSL file open failed", __FUNCTION__);
+              g_warning ("%s: Wizard XSL file open failed",
+                         __FUNCTION__);
               close (xsl_fd);
               free_entity (entity);
               g_free (response);
@@ -9209,7 +8864,8 @@ manage_run_wizard (const gchar *wizard_name,
           xml_fd = mkstemp (xml_file_name);
           if (xml_fd == -1)
             {
-              g_warning ("%s: Wizard XML file create failed", __FUNCTION__);
+              g_warning ("%s: Wizard XML file create failed",
+                         __FUNCTION__);
               fclose (xsl_file);
               unlink (xsl_file_name);
               free_entity (entity);
@@ -9222,7 +8878,8 @@ manage_run_wizard (const gchar *wizard_name,
           xml_file = fdopen (xml_fd, "w");
           if (xml_file == NULL)
             {
-              g_warning ("%s: Wizard XML file open failed", __FUNCTION__);
+              g_warning ("%s: Wizard XML file open failed",
+                         __FUNCTION__);
               fclose (xsl_file);
               unlink (xsl_file_name);
               close (xml_fd);
@@ -9251,7 +8908,8 @@ manage_run_wizard (const gchar *wizard_name,
               fclose (xml_file);
               unlink (xml_file_name);
               free_entity (entity);
-              g_warning ("%s: Wizard failed to write XML", __FUNCTION__);
+              g_warning ("%s: Wizard failed to write XML",
+                         __FUNCTION__);
               g_free (response);
               g_free (extra);
               g_string_free (params_xml, TRUE);
@@ -9262,14 +8920,16 @@ manage_run_wizard (const gchar *wizard_name,
 
           /* Combine XSL and XML to get the GMP command. */
 
-          gmp = xsl_transform (xsl_file_name, xml_file_name, NULL, NULL);
+          gmp = xsl_transform (xsl_file_name, xml_file_name, NULL,
+                               NULL);
           fclose (xsl_file);
           unlink (xsl_file_name);
           fclose (xml_file);
           unlink (xml_file_name);
           if (gmp == NULL)
             {
-              g_warning ("%s: Wizard XSL transform failed", __FUNCTION__);
+              g_warning ("%s: Wizard XSL transform failed",
+                         __FUNCTION__);
               free_entity (entity);
               g_free (response);
               g_free (extra);
@@ -9282,41 +8942,9 @@ manage_run_wizard (const gchar *wizard_name,
           g_free (response);
           response = NULL;
           ret = run_command (run_command_data, gmp, &response);
-          if (ret == 3)
-            {
-              /* Parent after a start_task fork. */
-              forked = 1;
-            }
-          else if (ret == 0)
+          if (ret == 0)
             {
               /* Command succeeded. */
-            }
-          else if (ret == 2)
-            {
-              /* Process forked to run a task. */
-              free_entity (entity);
-              g_free (response);
-              g_free (extra);
-              g_string_free (params_xml, TRUE);
-              return 2;
-            }
-          else if (ret == -10)
-            {
-              /* Process forked to run a task.  Task start failed. */
-              free_entity (entity);
-              g_free (response);
-              g_free (extra);
-              g_string_free (params_xml, TRUE);
-              return -10;
-            }
-          else if (ret == -2)
-            {
-              /* to_scanner buffer full. */
-              free_entity (entity);
-              g_free (response);
-              g_free (extra);
-              g_string_free (params_xml, TRUE);
-              return -2;
             }
           else
             {
@@ -9347,7 +8975,8 @@ manage_run_wizard (const gchar *wizard_name,
                 }
 
               status = entity_attribute (response_entity, "status");
-              if ((status == NULL) || (strlen (status) == 0)
+              if ((status == NULL)
+                  || (strlen (status) == 0)
                   || (status[0] != '2'))
                 {
                   g_debug ("response was %s", response);
@@ -9384,7 +9013,7 @@ manage_run_wizard (const gchar *wizard_name,
               if (xsl_fd == -1)
                 {
                   g_warning ("%s: Wizard extra_data XSL file create failed",
-                             __FUNCTION__);
+                            __FUNCTION__);
                   free_entity (entity);
                   g_free (response);
                   g_free (extra);
@@ -9396,7 +9025,7 @@ manage_run_wizard (const gchar *wizard_name,
               if (xsl_file == NULL)
                 {
                   g_warning ("%s: Wizard extra_data XSL file open failed",
-                             __FUNCTION__);
+                            __FUNCTION__);
                   close (xsl_fd);
                   free_entity (entity);
                   g_free (response);
@@ -9413,7 +9042,8 @@ manage_run_wizard (const gchar *wizard_name,
               xml_fd = mkstemp (extra_xml_file_name);
               if (xml_fd == -1)
                 {
-                  g_warning ("%s: Wizard XML file create failed", __FUNCTION__);
+                  g_warning ("%s: Wizard XML file create failed",
+                            __FUNCTION__);
                   fclose (xsl_file);
                   unlink (xsl_file_name);
                   free_entity (entity);
@@ -9426,7 +9056,8 @@ manage_run_wizard (const gchar *wizard_name,
               xml_file = fdopen (xml_fd, "w");
               if (xml_file == NULL)
                 {
-                  g_warning ("%s: Wizard XML file open failed", __FUNCTION__);
+                  g_warning ("%s: Wizard XML file open failed",
+                            __FUNCTION__);
                   fclose (xsl_file);
                   unlink (xsl_file_name);
                   close (xml_fd);
@@ -9457,7 +9088,8 @@ manage_run_wizard (const gchar *wizard_name,
                   fclose (xml_file);
                   unlink (extra_xml_file_name);
                   free_entity (entity);
-                  g_warning ("%s: Wizard failed to write XML", __FUNCTION__);
+                  g_warning ("%s: Wizard failed to write XML",
+                            __FUNCTION__);
                   g_free (response);
                   g_free (extra);
                   g_string_free (params_xml, TRUE);
@@ -9467,8 +9099,8 @@ manage_run_wizard (const gchar *wizard_name,
               fflush (xml_file);
 
               g_free (extra);
-              extra = xsl_transform (
-                extra_xsl_file_name, extra_xml_file_name, NULL, NULL);
+              extra = xsl_transform (extra_xsl_file_name, extra_xml_file_name,
+                                     NULL, NULL);
               fclose (xsl_file);
               unlink (extra_xsl_file_name);
               fclose (xml_file);
@@ -9479,7 +9111,8 @@ manage_run_wizard (const gchar *wizard_name,
     }
 
   if (extra)
-    extra_wrapped = g_strdup_printf ("<extra_data>%s</extra_data>", extra);
+    extra_wrapped = g_strdup_printf ("<extra_data>%s</extra_data>",
+                                     extra);
   else
     extra_wrapped = NULL;
   g_free (extra);
@@ -9487,7 +9120,7 @@ manage_run_wizard (const gchar *wizard_name,
   if (ret_response)
     *ret_response = response;
 
-  if (extra_wrapped && (forked == 0))
+  if (extra_wrapped)
     {
       entity_t extra_entity, status_entity, status_text_entity;
       ret = parse_entity (extra_wrapped, &extra_entity);
@@ -9521,8 +9154,6 @@ manage_run_wizard (const gchar *wizard_name,
 
   /* All the steps succeeded. */
 
-  if (forked)
-    return 3;
   return 0;
 }
 
@@ -9537,6 +9168,7 @@ get_termination_signal ()
   return termination_signal;
 }
 
+
 /* Resources. */
 
 /**
@@ -9554,6 +9186,8 @@ delete_resource (const char *type, const char *resource_id, int ultimate)
 {
   if (strcasecmp (type, "ticket") == 0)
     return delete_ticket (resource_id, ultimate);
+  if (strcasecmp (type, "tls_certificate") == 0)
+    return delete_tls_certificate (resource_id, ultimate);
   assert (0);
   return -1;
 }

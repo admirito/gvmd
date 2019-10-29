@@ -4,14 +4,14 @@
   xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
   xmlns:str="http://exslt.org/strings"
   xmlns:func="http://exslt.org/functions"
-  xmlns:openvas="http://openvas.org"
-  extension-element-prefixes="str func openvas">
+  xmlns:gvm="http://greenbone.net"
+  extension-element-prefixes="str func gvm">
   <xsl:output
     method = "text"
     indent = "no" />
 
 <!--
-Copyright (C) 2011-2018 Greenbone Networks GmbH
+Copyright (C) 2011-2019 Greenbone Networks GmbH
 
 SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -30,7 +30,7 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
 -->
 
-  <func:function name="openvas:max-cvss">
+  <func:function name="gvm:max-cvss">
     <xsl:param name="current_host"/>
     <xsl:variable name="max">
       <xsl:for-each select="/report/results/result[host/text() = $current_host]/severity">
@@ -41,7 +41,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <func:result select="$max"/>
   </func:function>
 
-  <func:function name="openvas:ip-pad">
+  <func:function name="gvm:ip-pad">
     <xsl:param name="current_host"/>
     <func:result>
       <xsl:for-each select="str:split ($current_host, '.')">
@@ -54,7 +54,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     Add a single quote to strings that could otherwise be interpreted as
     formulas in common spreadsheet software.
   -->
-  <func:function name="openvas:formula_quote">
+  <func:function name="gvm:formula_quote">
     <xsl:param name="string" select="''"/>
     <xsl:choose>
       <xsl:when test="string(number($string)) != 'NaN'">
@@ -71,27 +71,27 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
   </func:function>
 
   <xsl:template match="report">
-    <xsl:text>IP,Hostname,OS,Scan Start,Scan End,CVSS,Severity,High,Medium,Low,Log,False Positive,Total
+    <xsl:text>IP,Hostname,OS,Scan Start,Scan End,CVSS,Severity,High,Medium,Low,Log,False Positive,Total,Ports,Apps,Distance,Auth
 </xsl:text>
     <xsl:for-each select="host">
-      <xsl:sort select="openvas:max-cvss (ip/text())" data-type="number" order="descending"/>
-      <xsl:sort select="openvas:ip-pad (ip/text())" data-type="number" order="ascending"/>
+      <xsl:sort select="gvm:max-cvss (ip/text())" data-type="number" order="descending"/>
+      <xsl:sort select="gvm:ip-pad (ip/text())" data-type="number" order="ascending"/>
       <xsl:sort select="start/text()"/>
 
       <xsl:variable name="current_host" select="ip/text()"/>
 
-      <xsl:value-of select="openvas:formula_quote ($current_host)"/>
+      <xsl:value-of select="gvm:formula_quote ($current_host)"/>
       <xsl:text>,</xsl:text>
-      <xsl:value-of select="openvas:formula_quote (detail[name/text() = 'hostname']/value/text())"/>
+      <xsl:value-of select="gvm:formula_quote (detail[name/text() = 'hostname']/value/text())"/>
       <xsl:text>,</xsl:text>
-      <xsl:value-of select="openvas:formula_quote (detail[name/text() = 'best_os_cpe']/value/text())"/>
+      <xsl:value-of select="gvm:formula_quote (detail[name/text() = 'best_os_cpe']/value/text())"/>
       <xsl:text>,</xsl:text>
       <xsl:value-of select="start/text()"/>
       <xsl:text>,</xsl:text>
       <xsl:value-of select="end/text()"/>
       <xsl:text>,</xsl:text>
 
-      <xsl:value-of select="openvas:max-cvss ($current_host)"/><xsl:text>,</xsl:text>
+      <xsl:value-of select="gvm:max-cvss ($current_host)"/><xsl:text>,</xsl:text>
 
       <xsl:variable name="cnt_high"
                     select="count(/report/results/result[host/text() = $current_host][threat/text() = 'High'])"/>
@@ -127,6 +127,39 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <xsl:value-of select="$cnt_fp"/><xsl:text>,</xsl:text>
 
       <xsl:value-of select="$cnt_high + $cnt_medium + $cnt_low + $cnt_log + $cnt_fp"/>
+      <xsl:text>,</xsl:text>
+
+      <xsl:value-of select="port_count/page"/>
+      <xsl:text>,</xsl:text>
+
+      <xsl:value-of select="count(detail[name/text() = 'App'])"/>
+      <xsl:text>,</xsl:text>
+
+      <xsl:variable name="traceroute" select="detail[name/text() = 'traceroute']"/>
+      <xsl:value-of select="string-length($traceroute) - string-length(translate($traceroute, ',', ''))"/>
+
+      <xsl:text>,</xsl:text>
+      <xsl:if test="detail[name/text() = 'Auth-SSH-Success']">
+        <xsl:text>SSH</xsl:text>
+      </xsl:if>
+      <xsl:if test="detail[name/text() = 'Auth-SMB-Success']">
+        <xsl:if test="detail[name/text() = 'Auth-SSH-Success']">
+          <xsl:text> </xsl:text>
+        </xsl:if>
+        <xsl:text>SMB</xsl:text>
+      </xsl:if>
+      <xsl:if test="detail[name/text() = 'Auth-SNMP-Success']">
+        <xsl:if test="detail[name/text() = 'Auth-SSH-Success' or name/text() = 'Auth-SMB-Success']">
+          <xsl:text> </xsl:text>
+        </xsl:if>
+        <xsl:text>SNMP</xsl:text>
+      </xsl:if>
+      <xsl:if test="detail[name/text() = 'Auth-ESXi-Success']">
+        <xsl:if test="detail[name/text() = 'Auth-SSH-Success' or name/text() = 'Auth-SMB-Success' or name/text() = 'Auth-SNMP-Success']">
+          <xsl:text> </xsl:text>
+        </xsl:if>
+        <xsl:text>ESXi</xsl:text>
+      </xsl:if>
 
       <!-- add newline -->
       <xsl:text>
