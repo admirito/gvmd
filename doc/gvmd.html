@@ -234,9 +234,10 @@
       <p><b>--optimize=<em>NAME</em></b></p>
       
         <p>Run an optimization: vacuum, analyze, cleanup-config-prefs,
-           cleanup-port-names, cleanup-report-formats,
+           cleanup-port-names, cleanup-report-formats, cleanup-result-nvts,
            cleanup-result-severities, cleanup-schedule-times,
-           rebuild-report-cache or update-report-cache.</p>
+           migrate-relay-sensors, rebuild-report-cache
+           or update-report-cache.</p>
       
     
     
@@ -264,6 +265,15 @@
       
     
     
+      <p><b>--rebuild-scap=<em>TYPE</em></b></p>
+      
+        <p>
+          Rebuild SCAP data of type <em>TYPE</em>
+          (currently only supports 'ovaldefs').
+        </p>
+      
+    
+    
       <p><b>--relay-mapper=<em>FILE</em></b></p>
       
         <p>Executable for mapping scanner hosts to relays.
@@ -285,6 +295,14 @@
       
     
     
+      <p><b>--scanner-credential=<em>SCANNER-CREDENTIAL</em></b></p>
+      
+        <p>Scanner credential for --create-scanner and --modify-scanner.</p>
+        <p>Can be blank to unset or a credential UUID. If omitted, a new
+          credential can be created instead.</p>
+      
+    
+    
       <p><b>--scanner-host=<em>SCANNER-HOST</em></b></p>
       
         <p>Scanner host for --create-scanner and --modify-scanner.</p>
@@ -293,13 +311,15 @@
     
       <p><b>--scanner-key-priv=<em>SCANNER-KEY-PRIVATE</em></b></p>
       
-        <p>Scanner private key path for --[create|modify]-scanner.</p>
+        <p>Scanner private key path for --[create|modify]-scanner
+          if --scanner-credential is not given.</p>
       
     
     
       <p><b>--scanner-key-pub=<em>SCANNER-KEY-PUBLIC</em></b></p>
       
-        <p>Scanner Certificate path for --[create|modify]-scanner.</p>
+        <p>Scanner Certificate path for --[create|modify]-scanner
+          if --scanner-credential is not given.</p>
       
     
     
@@ -318,6 +338,8 @@
       <p><b>--scanner-type=<em>SCANNER-TYPE</em></b></p>
       
         <p>Scanner type for --create-scanner and --modify-scanner.</p>
+        <p>Either 'OpenVAS', 'OSP', 'GMP', 'OSP-Sensor' or a number
+           as used in GMP.</p>
       
     
     

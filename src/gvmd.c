@@ -1608,6 +1608,7 @@ gvmd (int argc, char** argv)
   static gchar *scanner_port = NULL;
   static gchar *scanner_type = NULL;
   static gchar *scanner_ca_pub = NULL;
+  static gchar *scanner_credential = NULL;
   static gchar *scanner_key_pub = NULL;
   static gchar *scanner_key_priv = NULL;
   static int schedule_timeout = SCHEDULE_TIMEOUT_DEFAULT;
@@ -1633,6 +1634,8 @@ gvmd (int argc, char** argv)
   static gchar *scanner_name = NULL;
   static gchar *rc_name = NULL;
   static gchar *relay_mapper = NULL;
+  static gboolean rebuild = FALSE;
+  static gchar *rebuild_scap = NULL;
   static gchar *role = NULL;
   static gchar *disable = NULL;
   static gchar *value = NULL;
@@ -1776,8 +1779,9 @@ gvmd (int argc, char** argv)
         { "optimize", '\0', 0, G_OPTION_ARG_STRING,
           &optimize,
           "Run an optimization: vacuum, analyze, cleanup-config-prefs,"
-          " cleanup-port-names, cleanup-report-formats,"
-          " cleanup-result-severities, cleanup-schedule-times,"
+          " cleanup-port-names, cleanup-report-formats, cleanup-result-encoding,"
+          " cleanup-result-nvts, cleanup-result-severities,"
+          " cleanup-schedule-times, migrate-relay-sensors,"
           " rebuild-report-cache or update-report-cache.",
           "<name>" },
         { "osp-vt-update", '\0', 0, G_OPTION_ARG_STRING,
@@ -1797,6 +1801,15 @@ gvmd (int argc, char** argv)
           &manager_port_string_2,
           "Use port number <number> for address 2.",
           "<number>" },
+        { "rebuild", 'm', 0, G_OPTION_ARG_NONE,
+          &rebuild,
+          "Remove NVT db, and rebuild it from the scanner.",
+          NULL },
+        { "rebuild-scap", '\0', 0, G_OPTION_ARG_STRING,
+          &rebuild_scap,
+          "Rebuild SCAP data of type <type>"
+          " (currently only supports 'ovaldefs').",
+          "<type>" },
         { "relay-mapper", '\0', 0, G_OPTION_ARG_FILENAME,
           &relay_mapper,
           "Executable for mapping scanner hosts to relays."
@@ -1812,17 +1825,25 @@ gvmd (int argc, char** argv)
           &scanner_ca_pub,
           "Scanner CA Certificate path for --[create|modify]-scanner.",
           "<scanner-ca-pub>" },
+        { "scanner-credential", '\0', 0, G_OPTION_ARG_STRING,
+          &scanner_credential,
+          "Scanner credential for --create-scanner and --modify-scanner."
+          " Can be blank to unset or a credential UUID."
+          " If omitted, a new credential can be created instead.",
+          "<scanner-credential>" },
         { "scanner-host", '\0', 0, G_OPTION_ARG_STRING,
           &scanner_host,
           "Scanner host for --create-scanner and --modify-scanner.",
           "<scanner-host>" },
         { "scanner-key-priv", '\0', 0, G_OPTION_ARG_STRING,
           &scanner_key_priv,
-          "Scanner private key path for --[create|modify]-scanner.",
+          "Scanner private key path for --[create|modify]-scanner"
+          " if --scanner-credential is not given.",
           "<scanner-key-private>" },
         { "scanner-key-pub", '\0', 0, G_OPTION_ARG_STRING,
           &scanner_key_pub,
-          "Scanner Certificate path for --[create|modify]-scanner.",
+          "Scanner Certificate path for --[create|modify]-scanner"
+          " if --scanner-credential is not given.",
           "<scanner-key-public>" },
         { "scanner-name", '\0', 0, G_OPTION_ARG_STRING,
           &scanner_name,
@@ -1836,7 +1857,8 @@ gvmd (int argc, char** argv)
         { "scanner-type", '\0', 0, G_OPTION_ARG_STRING,
           &scanner_type,
           "Scanner type for --create-scanner and --modify-scanner."
-          " Either 'OpenVAS' or 'OSP'.",
+          " Either 'OpenVAS', 'OSP', 'GMP', 'OSP-Sensor'"
+          " or a number as used in GMP.",
           "<scanner-type>" },
         { "schedule-timeout", '\0', 0, G_OPTION_ARG_INT,
           &schedule_timeout,
@@ -2218,6 +2240,41 @@ gvmd (int argc, char** argv)
       return EXIT_SUCCESS;
     }
 
+  if (rebuild)
+    {
+      int ret;
+
+      proctitle_set ("gvmd: --rebuild");
+
+      if (option_lock (&lockfile_checking))
+        return EXIT_FAILURE;
+
+      ret = manage_rebuild (log_config, database);
+      log_config_free ();
+      if (ret)
+        return EXIT_FAILURE;
+      return EXIT_SUCCESS;
+    }
+
+  if (rebuild_scap)
+    {
+      int ret;
+
+      proctitle_set ("gvmd: --rebuild-scap");
+
+      if (option_lock (&lockfile_checking))
+        return EXIT_FAILURE;
+
+      ret = manage_rebuild_scap (log_config, database, rebuild_scap);
+      log_config_free ();
+      if (ret)
+        {
+          printf ("Failed to rebuild SCAP data.\n");
+          return EXIT_FAILURE;
+        }
+      return EXIT_SUCCESS;
+    }
+
   if (create_scanner)
     {
       int ret;
@@ -2249,16 +2306,26 @@ gvmd (int argc, char** argv)
         type = SCANNER_TYPE_OPENVAS;
       else if (!strcasecmp (scanner_type, "OSP"))
         type = SCANNER_TYPE_OSP;
+      else if (!strcasecmp (scanner_type, "GMP"))
+        type = SCANNER_TYPE_GMP;
+      else if (!strcasecmp (scanner_type, "OSP-Sensor"))
+        type = SCANNER_TYPE_OSP_SENSOR;
       else
         {
-          printf ("Invalid scanner type value.\n");
-          return EXIT_FAILURE;
+          type = atoi (scanner_type);
+          if (type <= SCANNER_TYPE_NONE
+              || type >= SCANNER_TYPE_MAX
+              || type == SCANNER_TYPE_CVE)
+            {
+              fprintf (stderr, "Invalid scanner type value.\n");
+              return EXIT_FAILURE;
+            }
         }
       stype = g_strdup_printf ("%u", type);
       ret = manage_create_scanner (log_config, database, create_scanner,
                                    scanner_host, scanner_port, stype,
-                                   scanner_ca_pub, scanner_key_pub,
-                                   scanner_key_priv);
+                                   scanner_ca_pub, scanner_credential,
+                                   scanner_key_pub, scanner_key_priv);
       g_free (stype);
       log_config_free ();
       if (ret)
@@ -2286,10 +2353,20 @@ gvmd (int argc, char** argv)
             type = SCANNER_TYPE_OPENVAS;
           else if (strcasecmp (scanner_type, "OSP") == 0)
             type = SCANNER_TYPE_OSP;
+          else if (!strcasecmp (scanner_type, "GMP"))
+            type = SCANNER_TYPE_GMP;
+          else if (!strcasecmp (scanner_type, "OSP-Sensor"))
+            type = SCANNER_TYPE_OSP_SENSOR;
           else
             {
-              g_warning ("Invalid scanner type value");
-              return EXIT_FAILURE;
+              type = atoi (scanner_type);
+              if (type <= SCANNER_TYPE_NONE
+                  || type >= SCANNER_TYPE_MAX
+                  || type == SCANNER_TYPE_CVE)
+                {
+                  fprintf (stderr, "Invalid scanner type value.\n");
+                  return EXIT_FAILURE;
+                }
             }
 
           stype = g_strdup_printf ("%u", type);
@@ -2299,8 +2376,8 @@ gvmd (int argc, char** argv)
 
       ret = manage_modify_scanner (log_config, database, modify_scanner,
                                    scanner_name, scanner_host, scanner_port,
-                                   stype, scanner_ca_pub, scanner_key_pub,
-                                   scanner_key_priv);
+                                   stype, scanner_ca_pub, scanner_credential,
+                                   scanner_key_pub, scanner_key_priv);
       g_free (stype);
       log_config_free ();
       if (ret)
@@ -2683,29 +2760,13 @@ gvmd (int argc, char** argv)
   if (gvm_auth_init ())
     exit (EXIT_FAILURE);
 
-  /* Try to get OSP VT update socket from default OpenVAS if it
-   *  was not set with the --osp-vt-update option.
-   */
-  if (get_osp_vt_update_socket () == NULL)
+  if (check_osp_vt_update_socket ())
     {
-      char *default_socket = openvas_default_scanner_host ();
-      if (default_socket)
-        {
-          g_debug ("%s: Using OSP VT update socket from default OpenVAS"
-                   " scanner: %s",
-                   __FUNCTION__,
-                   default_socket);
-          set_osp_vt_update_socket (default_socket);
-        }
-      else
-        {
-          g_critical ("%s: No OSP VT update socket found."
-                      " Use --osp-vt-update or change the 'OpenVAS Default'"
-                      " scanner to use the main ospd-openvas socket.",
-                      __FUNCTION__);
-          return EXIT_FAILURE;
-        }
-      free (default_socket);
+      g_critical ("%s: No OSP VT update socket found."
+                  " Use --osp-vt-update or change the 'OpenVAS Default'"
+                  " scanner to use the main ospd-openvas socket.",
+                  __FUNCTION__);
+      exit (EXIT_FAILURE);
     }
 
   /* Enter the main forever-loop. */

@@ -17,9 +17,10 @@ Prerequisites:
 * glib-2.0 >= 2.42
 * gnutls >= 3.2.15
 * libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 11.0.0
-* PostgreSQL database
+* PostgreSQL database >= 9.6
 * pkg-config
 * libical >= 1.0.0
+* xml_split (recommended, lowers sync RAM usage, Debian package: xml-twig-tools)
 
 Prerequisites for certificate generation:
 * GnuTLS certtool
@@ -411,6 +412,11 @@ supported values for `<name>` are:
   using the DELETE_REPORT_FORMAT GMP command, for example after a built-in
   report format has been removed.
 
+- `cleanup-result-nvts`
+
+  This cleans up results with missing result_nvt entries which can result
+  in filters and overrides not working properly.
+
 - `cleanup-result-severities`
 
   This cleans up results with no severity by assigning the default
@@ -418,6 +424,13 @@ supported values for `<name>` are:
   All new results should have a severity assigned but this was not ensured in
   older versions, so this function can be used to correct missing severity
   scores in older reports.
+
+- `migrate-relay-sensors`
+
+  If relays are active, this can be used to make sure all sensor type
+  scanners have a matching relay, i.e. OSP sensors have an OSP relay
+  and GMP scanners have a GMP relay.
+  GMP scanners are migrated to OSP sensors if an OSP relay is available.
 
 - `rebuild-report-cache`
 

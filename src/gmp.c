@@ -400,7 +400,7 @@ try_gpgme_import (const char *key_str, GArray *key_types,
   gpgme_release (ctx);
   gvm_file_remove_recurse (gpg_temp_dir);
 
-  return (ret != 0);
+  return ret != 0;
 }
 
 /**
@@ -468,11 +468,18 @@ check_private_key (const char *key_str, const char *key_phrase)
                                      key_phrase, 0);
   if (ret)
     {
-      g_message ("%s: import failed: %s",
-                 __FUNCTION__, gnutls_strerror (ret));
-      gnutls_x509_privkey_deinit (key);
-      g_free (data.data);
-      return 1;
+      gchar *public_key;
+      public_key = gvm_ssh_public_from_private (key_str, key_phrase);
+
+      if (public_key == NULL)
+        {
+          gnutls_x509_privkey_deinit (key);
+          g_free (data.data);
+          g_message ("%s: import failed: %s",
+                    __FUNCTION__, gnutls_strerror (ret));
+          return 1;
+        }
+      g_free (public_key);
     }
   g_free (data.data);
   gnutls_x509_privkey_deinit (key);
@@ -7254,7 +7261,10 @@ gmp_xml_handle_start_element (/* unused */ GMarkupParseContext* context,
 
       case CLIENT_MODIFY_PERMISSION:
         if (strcasecmp ("COMMENT", element_name) == 0)
-          set_client_state (CLIENT_MODIFY_PERMISSION_COMMENT);
+          {
+            gvm_append_string (&modify_permission_data->comment, "");
+            set_client_state (CLIENT_MODIFY_PERMISSION_COMMENT);
+          }
         else if (strcasecmp ("NAME", element_name) == 0)
           set_client_state (CLIENT_MODIFY_PERMISSION_NAME);
         else if (strcasecmp ("RESOURCE", element_name) == 0)
@@ -7683,7 +7693,10 @@ gmp_xml_handle_start_element (/* unused */ GMarkupParseContext* context,
 
       case CLIENT_MODIFY_USER:
         if (strcasecmp ("COMMENT", element_name) == 0)
-          set_client_state (CLIENT_MODIFY_USER_COMMENT);
+          {
+            gvm_append_string (&modify_user_data->comment, "");
+            set_client_state (CLIENT_MODIFY_USER_COMMENT);
+          }
         else if (strcasecmp ("GROUPS", element_name) == 0)
           {
             if (modify_user_data->groups)
@@ -9843,7 +9856,7 @@ strdiff (const gchar *one, const gchar *two)
   cmd = (gchar **) g_malloc (7 * sizeof (gchar *));
 
   cmd[0] = g_strdup ("diff");
-  cmd[1] = g_strdup ("--ignore-space");
+  cmd[1] = g_strdup ("--ignore-all-space");
   cmd[2] = g_strdup ("--ignore-blank-lines");
   cmd[3] = g_strdup ("-u");
   cmd[4] = g_strdup ("Report 1");
@@ -9928,6 +9941,8 @@ buffer_result_notes_xml (GString *buffer, result_t result, task_t task,
     {
       get_data_t get;
       iterator_t notes;
+      GString *temp_buffer;
+
       memset (&get, '\0', sizeof (get));
       /* Most recent first. */
       get.filter = "sort-reverse=created owner=any permission=any";
@@ -9941,15 +9956,20 @@ buffer_result_notes_xml (GString *buffer, result_t result, task_t task,
                           result,
                           task);
 
-      if (lean == 0 || next (&notes))
-        g_string_append (buffer, "<notes>");
-      buffer_notes_xml (buffer,
+      temp_buffer = g_string_new ("");
+      buffer_notes_xml (temp_buffer,
                         &notes,
                         include_notes_details,
                         0,
                         NULL);
-      if (lean == 0 || next (&notes))
-        g_string_append (buffer, "</notes>");
+
+      if (lean == 0 || strlen (temp_buffer->str))
+        {
+          g_string_append (buffer, "<notes>");
+          g_string_append (buffer, temp_buffer->str);
+          g_string_append (buffer, "</notes>");
+        }
+      g_string_free (temp_buffer, TRUE);
 
       cleanup_iterator (&notes);
     }
@@ -10812,7 +10832,7 @@ strcasecmp_reverse (gchar *s1, gchar *s2)
 static int
 compare_count_data (gconstpointer c1, gconstpointer c2, gpointer dummy)
 {
-  return (((count_data_t*)c2)->count - ((count_data_t*)c1)->count);
+  return ((count_data_t*)c2)->count - ((count_data_t*)c1)->count;
 }
 
 /**
@@ -10827,7 +10847,7 @@ compare_count_data (gconstpointer c1, gconstpointer c2, gpointer dummy)
 static int
 compare_count_data_reverse (gconstpointer c1, gconstpointer c2, gpointer dummy)
 {
-  return (((count_data_t*)c1)->count - ((count_data_t*)c2)->count);
+  return ((count_data_t*)c1)->count - ((count_data_t*)c2)->count;
 }
 
 /**
@@ -10908,7 +10928,7 @@ buffer_word_counts_tree (gpointer key, gpointer value, gpointer data)
   if (count_data->limit > 0)
     count_data->limit--;
 
-  return (count_data->limit == 0);
+  return count_data->limit == 0;
 }
 
 /**
@@ -15827,6 +15847,10 @@ handle_get_reports (gmp_parser_t *gmp_parser, GError **error)
       if (request_report)
         cleanup_iterator (&reports);
 
+      /* Always enable details when using a report to test an alert. */
+      if (get_reports_data->alert_id)
+        get_reports_data->get.details = 1;
+
       ret = manage_send_report (report,
                                 delta_report,
                                 report_format,
@@ -16380,6 +16404,8 @@ handle_get_results (gmp_parser_t *gmp_parser, GError **error)
       iterator_t results;
       int notes, overrides;
       int count, ret, first;
+      gchar *report_id;
+      report_t report;
 
       if (get_results_data->get.filt_id
           && strcmp (get_results_data->get.filt_id, FILT_ID_NONE))
@@ -16397,8 +16423,32 @@ handle_get_results (gmp_parser_t *gmp_parser, GError **error)
       // Do not allow ignore_pagination here
       get_results_data->get.ignore_pagination = 0;
 
+      /* Note: This keyword may be removed or renamed at any time once there
+       * is a better solution like an operator for conditions that must always
+       * apply or support for parentheses in filters. */
+      report_id = filter_term_value (filter,
+                                     "_and_report_id");
+      report = 0;
+
+      if (report_id)
+        {
+          if (find_report_with_permission (report_id,
+                                           &report,
+                                           NULL))
+            {
+              g_free (report_id);
+              g_warning ("Failed to get report");
+              SEND_TO_CLIENT_OR_FAIL (XML_INTERNAL_ERROR ("get_results"));
+              return;
+            }
+
+          if (report == 0)
+            report = -1;
+        }
+      g_free (report_id);
+
       init_result_get_iterator (&results, &get_results_data->get,
-                                0,  /* No report restriction */
+                                report,  /* report restriction */
                                 NULL, /* No host restriction */
                                 NULL);  /* No extra order SQL. */
 
@@ -16472,7 +16522,7 @@ handle_get_results (gmp_parser_t *gmp_parser, GError **error)
 
           filtered = get_results_data->get.id
                       ? 1 : result_count (&get_results_data->get,
-                                          0 /* No report */,
+                                          report /* No report */,
                                           NULL /* No host */);
 
           if (send_get_end ("result", &get_results_data->get, count, filtered,
@@ -28193,8 +28243,13 @@ gmp_xml_handle_end_element (/* unused */ GMarkupParseContext* context,
                                            "Service unavailable"));
                   break;
                 case 3:
-                  SEND_TO_CLIENT_OR_FAIL
-                   (XML_ERROR_SYNTAX ("verify_scanner", "No CA certificate"));
+                  SENDF_TO_CLIENT_OR_FAIL
+                   ("<verify_scanner_response status=\"%s\""
+                    " status_text=\"Failed to authenticate\">"
+                    "<version>%s</version>"
+                    "</verify_scanner_response>",
+                    STATUS_SERVICE_UNAVAILABLE,
+                    version);
                   break;
                 case 99:
                   SEND_TO_CLIENT_OR_FAIL

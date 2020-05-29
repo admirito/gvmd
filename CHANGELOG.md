@@ -4,6 +4,81 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [9.0.1] (2020-05-12)
+
+### Added
+- Add option --optimize migrate-relay-sensors [#827](https://github.com/greenbone/gvmd/pull/827)
+- Add host_id filter for tls_certificates [#835](https://github.com/greenbone/gvmd/pull/835)
+- Allow use of public key auth in SCP alert [#845](https://github.com/greenbone/gvmd/pull/845)
+- Refuse to import config with missing NVT preference ID [#856](https://github.com/greenbone/gvmd/pull/856) [#860](https://github.com/greenbone/gvmd/pull/860)
+- Add "Base" scan config [#862](https://github.com/greenbone/gvmd/pull/862)
+- Add setting "BPM Data" [#914](https://github.com/greenbone/gvmd/pull/914)
+- Add --optimize option cleanup-result-encoding [#1014](https://github.com/greenbone/gvmd/pull/1014) [#1031](https://github.com/greenbone/gvmd/pull/1031)
+- Add --rebuild [#1016](https://github.com/greenbone/gvmd/pull/1016)
+- Lock a file around the NVT sync [#1017](https://github.com/greenbone/gvmd/pull/1017)
+- Add --rebuild-scap option [#1050](https://github.com/greenbone/gvmd/pull/1050)
+
+
+### Changed
+- Extend command line options for managing scanners [#815](https://github.com/greenbone/gvmd/pull/815)
+- Update SCAP and CERT feed info in sync scripts [#809](https://github.com/greenbone/gvmd/pull/809)
+- Try authentication when verifying GMP scanners [#837](https://github.com/greenbone/gvmd/pull/837)
+- Try importing private keys with libssh if GnuTLS fails [#841](https://github.com/greenbone/gvmd/pull/841)
+- Allow resuming OSPd-based OpenVAS tasks [#869](https://github.com/greenbone/gvmd/pull/869)
+- Require PostgreSQL 9.6 as a minimum [#872](https://github.com/greenbone/gvmd/pull/872)
+- Speed up the SCAP sync [#875](https://github.com/greenbone/gvmd/pull/875) [#877](https://github.com/greenbone/gvmd/pull/877) [#879](https://github.com/greenbone/gvmd/pull/879) [#881](https://github.com/greenbone/gvmd/pull/881) [#883](https://github.com/greenbone/gvmd/pull/883) [#887](https://github.com/greenbone/gvmd/pull/887) [#889](https://github.com/greenbone/gvmd/pull/889) [#890](https://github.com/greenbone/gvmd/pull/890) [#891](https://github.com/greenbone/gvmd/pull/891) [#901](https://github.com/greenbone/gvmd/pull/901)
+- Change rows of built-in default filters to -2 (use "Rows Per Page" setting) [#896](https://github.com/greenbone/gvmd/pull/896)
+- Force NVT update in migrate_219_to_220 [#895](https://github.com/greenbone/gvmd/pull/895)
+- Use temp tables to speed up migrate_213_to_214 [#911](https://github.com/greenbone/gvmd/pull/911)
+- Add a delay for re-requesting scan information via osp [#1009](https://github.com/greenbone/gvmd/pull/1009)
+- Count only best OS matches for OS asset hosts [#1028](https://github.com/greenbone/gvmd/pull/1028)
+- Clean up NVTs set to name in cleanup-result-nvts [#1038](https://github.com/greenbone/gvmd/pull/1038)
+- New Community Feed download URL in sync tools [#1042](https://github.com/greenbone/gvmd/pull/1042)
+- Do not ignore empty hosts_allow and ifaces_allow [#1063](https://github.com/greenbone/gvmd/pull/1063)
+
+### Fixed
+- Consider results_trash when deleting users [#799](https://github.com/greenbone/gvmd/pull/799)
+- Try to get NVT preferences by id in create_config [#821](https://github.com/greenbone/gvmd/pull/821)
+- Fix preference ID in "Host Discovery" config [#828](https://github.com/greenbone/gvmd/pull/828)
+- Fix order of fingerprints in get_tls_certificates [#833](https://github.com/greenbone/gvmd/pull/833)
+- Update config preferences after updating NVTs [#832](https://github.com/greenbone/gvmd/pull/832)
+- Fix asset host details insertion SQL [#839](https://github.com/greenbone/gvmd/pull/839)
+- Fix notes XML for lean reports [#836](https://github.com/greenbone/gvmd/pull/836)
+- MODIFY_USER saves comment when COMMENT is empty [#842](https://github.com/greenbone/gvmd/pull/842)
+- MODIFY_PERMISSION saves comment when COMMENT is empty [#918](https://github.com/greenbone/gvmd/pull/918)
+- Fix result diff generation to ignore white space in delta reports [#861](https://github.com/greenbone/gvmd/pull/861)
+- Fix resource type checks for permissions [#863](https://github.com/greenbone/gvmd/pull/863)
+- Fix result_nvt for new OSP and slave results [#865](https://github.com/greenbone/gvmd/pull/865)
+- Use right format specifier for merge_ovaldef version [#874](https://github.com/greenbone/gvmd/pull/874)
+- Fix creation of "Super" permissions [#892](https://github.com/greenbone/gvmd/pull/892)
+- Setup general task preferences to launch an osp openvas task. [#898](https://github.com/greenbone/gvmd/pull/898)
+- Add tags used for result NVTs to update_nvti_cache [#916](https://github.com/greenbone/gvmd/pull/916)
+- Apply usage_type of tasks in get_aggregates [#912](https://github.com/greenbone/gvmd/pull/912)
+- Setup target's alive test setting to launch an osp openvas task [#936](https://github.com/greenbone/gvmd/pull/936)
+- Remove incorrect duplicates from config preference migrator [#940](https://github.com/greenbone/gvmd/pull/940)
+- Correct pref ID in migrate_219_to_220 [#941](https://github.com/greenbone/gvmd/pull/941)
+- Fix alive test. Target's alive test setting has priority over scan config [#943](https://github.com/greenbone/gvmd/pull/943)
+- Set run status only after getting OSP-OpenVAS scan [#948](https://github.com/greenbone/gvmd/pull/948) [#951](https://github.com/greenbone/gvmd/pull/951)
+- Fix get_system_reports for GMP scanners [#949](https://github.com/greenbone/gvmd/pull/949)
+- Use stop_osp_task for SCANNER_TYPE_OSP_SENSOR [#955](https://github.com/greenbone/gvmd/pull/955)
+- Setup target's reverse_lookup_* settings to launch an osp openvas task [#958](https://github.com/greenbone/gvmd/pull/958)
+- Always use details testing alerts with a report [#964](https://github.com/greenbone/gvmd/pull/964)
+- Remove extra XML declaration in Anonymous XML [#965](https://github.com/greenbone/gvmd/pull/965)
+- Fix Verinice ISM report format and update version [#962](https://github.com/greenbone/gvmd/pull/962)
+- Fix SCP alert authentication and logging [#972](https://github.com/greenbone/gvmd/pull/972)
+- Accept expanded scheme OIDs in parse_osp_report [#983](https://github.com/greenbone/gvmd/pull/983)
+- Fix SCAP update not finishing when CPEs are older [#985](https://github.com/greenbone/gvmd/pull/985)
+- Add user limits on hosts and ifaces to OSP prefs [#1032](https://github.com/greenbone/gvmd/pull/1032)
+- Fix scanner_options not inserted correctly when starting ospd task [#1056](https://github.com/greenbone/gvmd/pull/1056)
+- Fix QoD handling in NVTi cache and sensor scans [#1060](https://github.com/greenbone/gvmd/pull/1060)
+- Fix doc of get_tasks in GMP doc [#1065](https://github.com/greenbone/gvmd/pull/1065)
+- Fix deletion of OVAL definition data [#1080](https://github.com/greenbone/gvmd/pull/1080)
+
+### Removed
+- Remove 1.3.6.1.4.1.25623.1.0.90011 from Discovery config (9.0) [#847](https://github.com/greenbone/gvmd/pull/847)
+
+[9.0.1]: https://github.com/greenbone/gvmd/compare/v9.0.0...v9.0.1
+
 ## [9.0.0] (2019-10-11)
 
 ### Added
@@ -11,7 +86,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Update NVTs via OSP [#392](https://github.com/greenbone/gvmd/pull/392) [#609](https://github.com/greenbone/gvmd/pull/609) [#626](https://github.com/greenbone/gvmd/pull/626) [#753](https://github.com/greenbone/gvmd/pull/753) [#767](https://github.com/greenbone/gvmd/pull/767)
 - Handle addition of ID to NVT preferences. [#413](https://github.com/greenbone/gvmd/pull/413) [#744](https://github.com/greenbone/gvmd/pull/744)
 - Add setting 'OMP Slave Check Period' [#491](https://github.com/greenbone/gvmd/pull/491)
-- Document switching between releases when using Postgres. [#563](https://github.com/greenbone/gvmd/pull/563)
+- Document switching between releases when using PostgreSQL. [#563](https://github.com/greenbone/gvmd/pull/563)
 - Cgreen based unit tests for gvmd has been added. [#579](https://github.com/greenbone/gvmd/pull/579)
 - New usage_type property to distinguish normal scan tasks and configs from compliance audits and policies [#613](https://github.com/greenbone/gvmd/pull/613) [#625](https://github.com/greenbone/gvmd/pull/625) [#633](https://github.com/greenbone/gvmd/pull/633)
 - Command cleanup-report-formats for --optimize option [#652](https://github.com/greenbone/gvmd/pull/652)
@@ -34,7 +109,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Expect NVT sync script in bin directory. [#546](https://github.com/greenbone/gvmd/pull/546)
 - Change internal handling of NVT XML to use nvti_t. [#562](https://github.com/greenbone/gvmd/pull/562)
 - Change NVT references like CVEs and BID to general vt_refs. [#570](https://github.com/greenbone/gvmd/pull/570) [#574](https://github.com/greenbone/gvmd/pull/574) [#582](https://github.com/greenbone/gvmd/pull/582)
-- Update Postgres to SQLite migration. [#581](https://github.com/greenbone/gvmd/pull/581) [#601](https://github.com/greenbone/gvmd/pull/601) [#604](https://github.com/greenbone/gvmd/pull/604) [#605](https://github.com/greenbone/gvmd/pull/605)
+- Update SQLite to PostgreSQL migration script and documentation. [#581](https://github.com/greenbone/gvmd/pull/581) [#601](https://github.com/greenbone/gvmd/pull/601) [#604](https://github.com/greenbone/gvmd/pull/604) [#605](https://github.com/greenbone/gvmd/pull/605)
 - Update result diff generation at delta reports [#650](https://github.com/greenbone/gvmd/pull/650)
 - Check and create default permissions individually [#671](https://github.com/greenbone/gvmd/pull/671)
 - Add -f arg to sendmail call in email alert [#676](https://github.com/greenbone/gvmd/pull/676) [#678](https://github.com/greenbone/gvmd/pull/678)
@@ -68,6 +143,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Add NULL check in nvts_feed_version_epoch [#773](https://github.com/greenbone/gvmd/pull/773)
 - Fix percent sign escaping in report_port_count [#782](https://github.com/greenbone/gvmd/pull/782)
 - If the nvt preference is "file" type, encode it into Base64 format [#785](https://github.com/greenbone/gvmd/pull/785)
+- Fix missing report ids in alert filenames [#966](https://github.com/greenbone/gvmd/pull/966)
 
 ### Removed
 - The handling of NVT updates via OTP has been removed. [#575](https://github.com/greenbone/gvmd/pull/575)

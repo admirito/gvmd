@@ -170,6 +170,11 @@ extern volatile int termination_signal;
 static gchar *relay_mapper_path = NULL;
 
 /**
+ * @brief Whether to migrate sensors if relays do not match.
+ */
+static int relay_migrate_sensors = 0;
+
+/**
  * @brief Number of minutes before overdue tasks timeout.
  */
 static int schedule_timeout = SCHEDULE_TIMEOUT_DEFAULT;
@@ -514,11 +519,11 @@ gchar *
 certificate_iso_time (time_t time)
 {
   if (time == 0)
-    return (g_strdup ("unlimited"));
+    return g_strdup ("unlimited");
   else if (time == -1)
-    return (g_strdup ("unknown"));
+    return g_strdup ("unknown");
   else
-    return (g_strdup (iso_time (&time)));
+    return g_strdup (iso_time (&time));
 }
 
 /**
@@ -885,21 +890,21 @@ severity_to_level (double severity, int mode)
   else if (severity > 0.0 && severity <= 10.0)
     {
       if (mode == 1)
-        return ("Alarm");
+        return "Alarm";
       else if (severity_in_level (severity, "high"))
-        return ("High");
+        return "High";
       else if (severity_in_level (severity, "medium"))
-        return ("Medium");
+        return "Medium";
       else if (severity_in_level (severity, "low"))
-        return ("Low");
+        return "Low";
       else
-        return ("Log");
+        return "Log";
     }
   else
     {
       g_warning ("%s: Invalid severity score given: %f",
                  __FUNCTION__, severity);
-      return (NULL);
+      return NULL;
     }
 }
 
@@ -927,7 +932,7 @@ severity_to_type (double severity)
     {
       g_warning ("%s: Invalid severity score given: %f",
                  __FUNCTION__, severity);
-      return (NULL);
+      return NULL;
     }
 }
 
@@ -3555,6 +3560,7 @@ handle_osp_scan (task_t task, report_t report, const char *scan_id)
   char *host, *ca_pub, *key_pub, *key_priv;
   int rc, port;
   scanner_t scanner;
+  gboolean started;
 
   scanner = task_scanner (task);
   host = scanner_host (scanner);
@@ -3562,6 +3568,7 @@ handle_osp_scan (task_t task, report_t report, const char *scan_id)
   ca_pub = scanner_ca_pub (scanner);
   key_pub = scanner_key_pub (scanner);
   key_priv = scanner_key_priv (scanner);
+  started = FALSE;
 
   while (1)
     {
@@ -3637,8 +3644,18 @@ handle_osp_scan (task_t task, report_t report, const char *scan_id)
                   rc = 0;
                   break;
                 }
+              else if (osp_scan_status == OSP_SCAN_STATUS_RUNNING
+                       && started == FALSE)
+                {
+                  set_task_run_status (task, TASK_STATUS_RUNNING);
+                  set_report_scan_run_status (global_current_report,
+                                              TASK_STATUS_RUNNING);
+                  started = TRUE;
+                }
             }
         }
+
+      gvm_sleep (5);
     }
 
   g_free (host);
@@ -3951,42 +3968,222 @@ target_osp_snmp_credential (target_t target)
 }
 
 /**
+ * @brief Prepare a report for resuming an OSP scan
+ *
+ * @param[in]  task     The task of the scan.
+ * @param[in]  scan_id  The scan uuid.
+ * @param[out] error    Error return.
+ *
+ * @return 0 scan finished or still running,
+ *         1 scan must be started,
+ *         -1 error
+ */
+static int
+prepare_osp_scan_for_resume (task_t task, const char *scan_id, char **error)
+{
+  osp_connection_t *connection;
+  osp_get_scan_status_opts_t status_opts;
+  osp_scan_status_t status;
+
+  assert (task);
+  assert (scan_id);
+  assert (global_current_report);
+  assert (error);
+
+  status_opts.scan_id = scan_id;
+
+  connection = osp_scanner_connect (task_scanner (task));
+  if (!connection)
+    {
+      *error = g_strdup ("Could not connect to Scanner");
+      return -1;
+    }
+  status = osp_get_scan_status_ext (connection, status_opts, error);
+
+  if (status == OSP_SCAN_STATUS_ERROR)
+    {
+      if (g_str_has_prefix (*error, "Failed to find scan"))
+        {
+          g_debug ("%s: Scan %s not found", __func__, scan_id);
+          g_free (*error);
+          *error = NULL;
+          osp_connection_close (connection);
+          trim_partial_report (global_current_report);
+          return 1;
+        }
+      else
+        {
+          g_warning ("%s: Error getting status of scan %s: %s",
+                     __func__, scan_id, *error);
+          osp_connection_close (connection);
+          return -1;
+        }
+    }
+  else if (status == OSP_SCAN_STATUS_RUNNING
+           || status == OSP_SCAN_STATUS_FINISHED)
+    {
+      g_debug ("%s: Scan %s running or finished", __func__, scan_id);
+      /* It would be possible to simply continue getting the results
+       * from the scanner, but gvmd may have crashed while receiving
+       * or storing the results, so some may be missing. */
+      if (osp_stop_scan (connection, scan_id, error))
+        {
+          osp_connection_close (connection);
+          return -1;
+        }
+      if (osp_delete_scan (connection, scan_id))
+        {
+          *error = g_strdup ("Failed to delete old report");
+          osp_connection_close (connection);
+          return -1;
+        }
+      osp_connection_close (connection);
+      trim_partial_report (global_current_report);
+      return 1;
+    }
+  else if (status == OSP_SCAN_STATUS_STOPPED)
+    {
+      g_debug ("%s: Scan %s stopped", __func__, scan_id);
+      if (osp_delete_scan (connection, scan_id))
+        {
+          *error = g_strdup ("Failed to delete old report");
+          osp_connection_close (connection);
+          return -1;
+        }
+      osp_connection_close (connection);
+      trim_partial_report (global_current_report);
+      return 1;
+    }
+
+  g_warning ("%s: Unexpected scanner status %d", __func__, status);
+  *error = g_strdup_printf ("Unexpected scanner status %d", status);
+  osp_connection_close (connection);
+  return -1;
+}
+
+/**
+ * @brief Add OSP preferences for limiting ifaces and hosts for users.
+ *
+ * @param[in]  scanner_options  The scanner preferences table to add to.
+ */
+static void
+add_user_scan_preferences (GHashTable *scanner_options)
+{
+  gchar *hosts, *ifaces, *name;
+  int hosts_allow, ifaces_allow;
+
+  // Limit access to hosts
+  hosts = user_hosts (current_credentials.uuid);
+  hosts_allow = user_hosts_allow (current_credentials.uuid);
+
+  if (hosts_allow == 1)
+    name = g_strdup ("hosts_allow");
+  else if (hosts_allow == 0)
+    name = g_strdup ("hosts_deny");
+  else
+    name = NULL;
+
+  if (name
+      && (hosts_allow || (hosts && strlen (hosts))))
+    g_hash_table_replace (scanner_options,
+                          name,
+                          hosts ? hosts : g_strdup (""));
+  else
+    g_free (hosts);
+
+  // Limit access to ifaces
+  ifaces = user_ifaces (current_credentials.uuid);
+  ifaces_allow = user_ifaces_allow (current_credentials.uuid);
+
+  if (ifaces_allow == 1)
+    name = g_strdup ("ifaces_allow");
+  else if (ifaces_allow == 0)
+    name = g_strdup ("ifaces_deny");
+  else
+    name = NULL;
+
+  if (name
+      && (ifaces_allow || (ifaces && strlen (ifaces))))
+    g_hash_table_replace (scanner_options,
+                          name,
+                          ifaces ? ifaces : g_strdup (""));
+  else
+    g_free (ifaces);
+}
+
+/**
  * @brief Launch an OpenVAS via OSP task.
  *
  * @param[in]   task        The task.
  * @param[in]   target      The target.
- * @param[out]  scan_id     The new scan uuid.
+ * @param[in]   scan_id     The scan uuid.
+ * @param[in]   from        0 start from beginning, 1 continue from stopped,
+ *                          2 continue if stopped else start from beginning.
  * @param[out]  error       Error return.
  *
  * @return 0 success, -1 if scanner is down.
  */
 static int
 launch_osp_openvas_task (task_t task, target_t target, const char *scan_id,
-                         char **error)
+                         int from, char **error)
 {
   osp_connection_t *connection;
-  char *hosts_str, *ports_str, *exclude_hosts_str;
+  char *hosts_str, *ports_str, *exclude_hosts_str, *finished_hosts_str;
   osp_target_t *osp_target;
   GSList *osp_targets, *vts;
   GHashTable *vts_hash_table;
   osp_credential_t *ssh_credential, *smb_credential, *esxi_credential;
   osp_credential_t *snmp_credential;
+  gchar *max_checks, *max_hosts, *source_iface, *hosts_ordering;
+  gchar *reverse_lookup_unify, *reverse_lookup_only;
   GHashTable *scanner_options;
   int ret;
   config_t config;
   iterator_t scanner_prefs_iter, families, prefs;
   osp_start_scan_opts_t start_scan_opts;
+  alive_test_t alive_test;
+  osp_vt_single_t *alive_test_vt;
 
   config = task_config (task);
 
   connection = NULL;
 
+  /* Prepare the report */
+  if (from)
+    {
+      ret = prepare_osp_scan_for_resume (task, scan_id, error);
+      if (ret == 0)
+        return 0;
+      else if (ret == -1)
+        return -1;
+      finished_hosts_str = report_finished_hosts_str (global_current_report);
+    }
+  else
+    finished_hosts_str = NULL;
+
   /* Set up target(s) */
   hosts_str = target_hosts (target);
   ports_str = target_port_range (target);
   exclude_hosts_str = target_exclude_hosts (target);
+  if (finished_hosts_str)
+    {
+      gchar *new_exclude_hosts;
+
+      new_exclude_hosts = g_strdup_printf ("%s,%s",
+                                           exclude_hosts_str,
+                                           finished_hosts_str);
+      free (exclude_hosts_str);
+      exclude_hosts_str = new_exclude_hosts;
+    }
 
   osp_target = osp_target_new (hosts_str, ports_str, exclude_hosts_str);
+  if (finished_hosts_str)
+    osp_target_set_finished_hosts (osp_target, finished_hosts_str);
+
+  free (hosts_str);
+  free (ports_str);
+  free (exclude_hosts_str);
+  free (finished_hosts_str);
   osp_targets = g_slist_append (NULL, osp_target);
 
   ssh_credential = target_osp_ssh_credential (target);
@@ -4030,6 +4227,48 @@ launch_osp_openvas_task (task_t task, target_t target, const char *scan_id,
                                 g_strdup (osp_value));
         }
     }
+
+  /* Setup user-specific scanner preference */
+  add_user_scan_preferences (scanner_options);
+
+  /* Setup general task preferences */
+  max_checks = task_preference_value (task, "max_checks");
+  g_hash_table_insert (scanner_options, g_strdup ("max_checks"),
+                       max_checks ? max_checks : g_strdup (MAX_CHECKS_DEFAULT));
+
+  max_hosts = task_preference_value (task, "max_hosts");
+  g_hash_table_insert (scanner_options, g_strdup ("max_hosts"),
+                       max_hosts ? max_hosts : g_strdup (MAX_HOSTS_DEFAULT));
+
+  source_iface = task_preference_value (task, "source_iface");
+  if (source_iface)
+    g_hash_table_insert (scanner_options, g_strdup ("source_iface"),
+                        source_iface);
+
+  hosts_ordering = task_hosts_ordering (task);
+  if (hosts_ordering)
+    g_hash_table_insert (scanner_options, g_strdup ("hosts_ordering"),
+                         hosts_ordering);
+
+  /* Setup reverse_lookup_only preference. */
+  reverse_lookup_only = target_reverse_lookup_only (target);
+  if (reverse_lookup_only == NULL || strcmp (reverse_lookup_only, "0") == 0)
+    g_hash_table_insert (scanner_options, g_strdup ("reverse_lookup_only"),
+                         g_strdup ("no"));
+  else
+    g_hash_table_insert (scanner_options, g_strdup ("reverse_lookup_only"),
+                         g_strdup ("yes"));
+  g_free (reverse_lookup_only);
+
+  /* Send reverse_lookup_unify preference. */
+  reverse_lookup_unify = target_reverse_lookup_unify (target);
+  if (reverse_lookup_unify == NULL || strcmp (reverse_lookup_unify, "0") == 0)
+    g_hash_table_insert (scanner_options, g_strdup ("reverse_lookup_unify"),
+                         g_strdup("no"));
+  else
+    g_hash_table_insert (scanner_options, g_strdup ("reverse_lookup_unify"),
+                         g_strdup ("yes"));
+  g_free (reverse_lookup_unify);
 
   /* Setup vulnerability tests (without preferences) */
   vts = NULL;
@@ -4108,12 +4347,62 @@ launch_osp_openvas_task (task_t task, target_t target, const char *scan_id,
     }
   cleanup_iterator (&prefs);
 
+  /* Setup alive tests. This has priority over scan config settings */
+  alive_test = target_alive_tests (target);
+  if (alive_test != 0)
+    {
+      alive_test_vt = g_hash_table_lookup (vts_hash_table, OID_PING_HOST);
+      if (alive_test_vt == NULL)
+        {
+          alive_test_vt = osp_vt_single_new (OID_PING_HOST);
+          vts = g_slist_prepend (vts, alive_test_vt);
+          g_hash_table_replace (vts_hash_table, g_strdup (OID_PING_HOST),
+                                alive_test_vt);
+
+        }
+
+      osp_vt_single_add_value (alive_test_vt, "1",
+                               (alive_test & ALIVE_TEST_TCP_ACK_SERVICE
+                                || alive_test & ALIVE_TEST_TCP_SYN_SERVICE)
+                               ? "1" : "0");
+
+      osp_vt_single_add_value (alive_test_vt, "2",
+                               ((alive_test & ALIVE_TEST_TCP_SYN_SERVICE)
+                                && (alive_test & ALIVE_TEST_TCP_ACK_SERVICE))
+                               ? "1" : "0");
+
+      osp_vt_single_add_value (alive_test_vt, "7",
+                               ((alive_test & ALIVE_TEST_TCP_SYN_SERVICE)
+                                && !(alive_test & ALIVE_TEST_TCP_ACK_SERVICE))
+                               ? "1" : "0");
+
+      osp_vt_single_add_value (alive_test_vt, "3",
+                               (alive_test & ALIVE_TEST_ICMP) ? "1" : "0");
+
+      osp_vt_single_add_value (alive_test_vt, "4",
+                               (alive_test & ALIVE_TEST_ARP) ? "1" : "0");
+
+      osp_vt_single_add_value (alive_test_vt, "5",
+                               (alive_test & ALIVE_TEST_CONSIDER_ALIVE)
+                               ? "0" : "1");
+
+      if (alive_test == ALIVE_TEST_CONSIDER_ALIVE)
+        {
+          /* Also select a method, otherwise Ping Host logs a warning. */
+          osp_vt_single_add_value (alive_test_vt, "1", "1");
+        }
+    }
+
   /* Start the scan */
   connection = osp_scanner_connect (task_scanner (task));
   if (!connection)
     {
       if (error)
         *error = g_strdup ("Could not connect to Scanner");
+      g_slist_free_full (osp_targets, (GDestroyNotify) osp_target_free);
+      // Credentials are freed with target
+      g_slist_free_full (vts, (GDestroyNotify) osp_vt_single_free);
+      g_hash_table_destroy (scanner_options);
       return -1;
     }
 
@@ -4133,24 +4422,93 @@ launch_osp_openvas_task (task_t task, target_t target, const char *scan_id,
   // Credentials are freed with target
   g_slist_free_full (vts, (GDestroyNotify) osp_vt_single_free);
   g_hash_table_destroy (scanner_options);
-  free (hosts_str);
-  free (ports_str);
-  free (exclude_hosts_str);
   return ret;
+}
+
+/**
+ * @brief Get the last stopped report or a new one for an OSP scan.
+ *
+ * @param[in]   task      The task.
+ * @param[in]   from      0 start from beginning, 1 continue from stopped,
+ *                        2 continue if stopped else start from beginning.
+ * @param[out]  report_id UUID of the report.
+ *
+ * @return 0 success, -1 error
+ */
+static int
+run_osp_scan_get_report (task_t task, int from, char **report_id)
+{
+  report_t resume_report;
+
+  resume_report = 0;
+  *report_id = NULL;
+
+  if (from == 1
+      && scanner_type (task_scanner (task)) == SCANNER_TYPE_OSP)
+    {
+      g_warning ("%s: Scanner type does not support resuming scans",
+                 __FUNCTION__);
+      return -1;
+    }
+
+  if (from
+      && scanner_type (task_scanner (task)) != SCANNER_TYPE_OSP
+      && task_last_resumable_report (task, &resume_report))
+    {
+      g_warning ("%s: error getting report to resume", __func__);
+      return -1;
+    }
+
+  if (resume_report)
+    {
+      // Report to resume found
+      if (global_current_report)
+        {
+           g_warning ("%s: global_current_report already set", __func__);
+          return -1;
+        }
+      global_current_report = resume_report;
+      *report_id = report_uuid (resume_report);
+
+      /* Ensure the report is marked as requested. */
+      set_report_scan_run_status (resume_report, TASK_STATUS_REQUESTED);
+
+      /* Clear the end times of the task and partial report. */
+      set_task_start_time_epoch (task,
+                                 scan_start_time_epoch (resume_report));
+      set_task_end_time (task, NULL);
+      set_scan_end_time (resume_report, NULL);
+    }
+  else if (from == 1)
+    // No report to resume and starting a new one is not allowed
+    return -1;
+
+  // Try starting a new report
+  if (resume_report == 0
+      && create_current_report (task, report_id, TASK_STATUS_REQUESTED))
+    {
+      g_debug ("   %s: failed to create report", __func__);
+      return -1;
+    }
+
+  return 0;
 }
 
 /**
  * @brief Fork a child to handle an OSP scan's fetching and inserting.
  *
- * @param[in]   task               The task.
- * @param[in]   target             The target.
+ * @param[in]   task       The task.
+ * @param[in]   target     The target.
+ * @param[in]   from       0 start from beginning, 1 continue from stopped,
+ *                         2 continue if stopped else start from beginning.
  * @param[out]  report_id_return   UUID of the report.
  *
  * @return Parent returns with 0 if success, -1 if failure. Child process
  *         doesn't return and simply exits.
  */
 static int
-fork_osp_scan_handler (task_t task, target_t target, char **report_id_return)
+fork_osp_scan_handler (task_t task, target_t target, int from,
+                       char **report_id_return)
 {
   char *report_id, title[128], *error = NULL;
   int rc;
@@ -4161,11 +4519,8 @@ fork_osp_scan_handler (task_t task, target_t target, char **report_id_return)
   if (report_id_return)
     *report_id_return = NULL;
 
-  if (create_current_report (task, &report_id, TASK_STATUS_REQUESTED))
-    {
-      g_debug ("   %s: failed to create report", __FUNCTION__);
-      return -1;
-    }
+  if (run_osp_scan_get_report (task, from, &report_id))
+    return -1;
 
   set_task_run_status (task, TASK_STATUS_REQUESTED);
 
@@ -4207,7 +4562,7 @@ fork_osp_scan_handler (task_t task, target_t target, char **report_id_return)
   if (scanner_type (task_scanner (task)) == SCANNER_TYPE_OPENVAS
       || scanner_type (task_scanner (task) == SCANNER_TYPE_OSP_SENSOR))
     {
-      rc = launch_osp_openvas_task (task, target, report_id, &error);
+      rc = launch_osp_openvas_task (task, target, report_id, from, &error);
     }
   else
     {
@@ -4232,9 +4587,6 @@ fork_osp_scan_handler (task_t task, target_t target, char **report_id_return)
       g_free (report_id);
       exit (-1);
     }
-
-  set_task_run_status (task, TASK_STATUS_RUNNING);
-  set_report_scan_run_status (global_current_report, TASK_STATUS_RUNNING);
 
   snprintf (title, sizeof (title), "gvmd: OSP: Handling scan %s", report_id);
   proctitle_set (title);
@@ -4266,12 +4618,14 @@ fork_osp_scan_handler (task_t task, target_t target, char **report_id_return)
  * @brief Start a task on an OSP or OpenVAS via OSP scanner.
  *
  * @param[in]   task       The task.
+ * @param[in]   from       0 start from beginning, 1 continue from stopped,
+ *                         2 continue if stopped else start from beginning.
  * @param[out]  report_id  The report ID.
  *
  * @return 0 success, 99 permission denied, -1 error.
  */
 static int
-run_osp_task (task_t task, char **report_id)
+run_osp_task (task_t task, int from, char **report_id)
 {
   target_t target;
 
@@ -4292,7 +4646,7 @@ run_osp_task (task_t task, char **report_id)
         return 99;
     }
 
-  if (fork_osp_scan_handler (task, target, report_id))
+  if (fork_osp_scan_handler (task, target, from, report_id))
     {
       g_warning ("Couldn't fork OSP scan handler");
       return -1;
@@ -4908,6 +5262,158 @@ set_relay_mapper_path (const char *new_path)
 }
 
 /**
+ * @brief Gets whether to migrate sensors if relays do not match.
+ *
+ * @return Whether to migrate sensors if relays do not match.
+ */
+int
+get_relay_migrate_sensors ()
+{
+  return relay_migrate_sensors;
+}
+
+/**
+ * @brief Sets whether to migrate sensors if relays do not match.
+ *
+ * @param[in]  new_value  The new value.
+ */
+void
+set_relay_migrate_sensors (int new_value)
+{
+  relay_migrate_sensors = new_value;
+}
+
+/**
+ * @brief Gets the info about a scanner relay as an XML entity_t.
+ *
+ * @param[in]  original_host    The original hostname or IP address.
+ * @param[in]  original_port    The original port number.
+ * @param[in]  protocol         The protocol to look for, e.g. "GMP" or "OSP".
+ * @param[out] ret_entity       Return location for the parsed XML.
+ *
+ * @return 0: success, -1 error.
+ */
+static int
+get_relay_info_entity (const char *original_host, int original_port,
+                       const char *protocol, entity_t *ret_entity)
+{
+  gchar **cmd, *stdout_str, *stderr_str;
+  int ret, exit_code;
+  GError *err;
+  entity_t relay_entity;
+
+  if (ret_entity == NULL)
+    return -1;
+
+  *ret_entity = NULL;
+  stdout_str = NULL;
+  stderr_str = NULL;
+  ret = -1;
+  exit_code = -1;
+  err = NULL;
+
+  cmd = (gchar **) g_malloc (8 * sizeof (gchar *));
+  cmd[0] = g_strdup (relay_mapper_path);
+  cmd[1] = g_strdup ("--host");
+  cmd[2] = g_strdup (original_host);
+  cmd[3] = g_strdup ("--port");
+  cmd[4] = g_strdup_printf ("%d", original_port);
+  cmd[5] = g_strdup ("--protocol");
+  cmd[6] = g_strdup (protocol);
+  cmd[7] = NULL;
+
+  if (g_spawn_sync (NULL,
+                    cmd,
+                    NULL,
+                    G_SPAWN_SEARCH_PATH,
+                    NULL,
+                    NULL,
+                    &stdout_str,
+                    &stderr_str,
+                    &exit_code,
+                    &err) == FALSE)
+    {
+      g_warning ("%s: g_spawn_sync failed: %s",
+                  __FUNCTION__, err ? err->message : "");
+      g_strfreev (cmd);
+      g_free (stdout_str);
+      g_free (stderr_str);
+      return -1;
+    }
+  else if (exit_code)
+    {
+      g_warning ("%s: mapper exited with code %d",
+                  __FUNCTION__, exit_code);
+      g_message ("%s: mapper stderr:\n%s", __FUNCTION__, stderr_str);
+      g_debug ("%s: mapper stdout:\n%s", __FUNCTION__, stdout_str);
+      g_strfreev (cmd);
+      g_free (stdout_str);
+      g_free (stderr_str);
+      return -1;
+    }
+
+  relay_entity = NULL;
+  if (parse_entity (stdout_str, &relay_entity))
+    {
+      g_warning ("%s: failed to parse mapper output",
+                  __FUNCTION__);
+      g_message ("%s: mapper stdout:\n%s", __FUNCTION__, stdout_str);
+      g_message ("%s: mapper stderr:\n%s", __FUNCTION__, stderr_str);
+    }
+  else
+    {
+      ret = 0;
+      *ret_entity = relay_entity;
+    }
+
+  g_strfreev (cmd);
+  g_free (stdout_str);
+  g_free (stderr_str);
+
+  return ret;
+}
+
+/**
+ * @brief Gets whether there is a relay supporting the scanner type.
+ *
+ * @param[in]  original_host    The original hostname or IP address.
+ * @param[in]  original_port    The original port number.
+ * @param[in]  type             The scanner type to check.
+ *
+ * @return Whether there is a relay supporting the scanner type.
+ */
+gboolean
+relay_supports_scanner_type (const char *original_host, int original_port,
+                             scanner_type_t type)
+{
+  entity_t relay_entity = NULL;
+  const char *protocol;
+  gboolean ret = FALSE;
+
+  if (type == SCANNER_TYPE_GMP)
+    protocol = "GMP";
+  else if (type == SCANNER_TYPE_OSP_SENSOR)
+    protocol = "OSP";
+  else
+    return FALSE;
+
+  if (get_relay_info_entity (original_host, original_port,
+                             protocol, &relay_entity) == 0)
+    {
+      entity_t host_entity;
+      host_entity = entity_child (relay_entity, "host");
+
+      if (host_entity
+          && strcmp (entity_text (host_entity), ""))
+        {
+          ret = TRUE;
+        }
+    }
+  free_entity (relay_entity);
+  return ret;
+}
+
+/**
  * @brief Gets a relay hostname and port for a sensor scanner.
  *
  * If no mapper is available, a copy of the original host, port and
@@ -4948,65 +5454,10 @@ slave_get_relay (const char *original_host,
     }
   else
     {
-      gchar **cmd, *stdout_str, *stderr_str;
-      int exit_code;
-      GError *err;
-      entity_t relay_entity;
+      entity_t relay_entity = NULL;
 
-      stdout_str = NULL;
-      stderr_str = NULL;
-      exit_code = -1;
-      err = NULL;
-
-      cmd = (gchar **) g_malloc (8 * sizeof (gchar *));
-      cmd[0] = g_strdup (relay_mapper_path);
-      cmd[1] = g_strdup ("--host");
-      cmd[2] = g_strdup (original_host);
-      cmd[3] = g_strdup ("--port");
-      cmd[4] = g_strdup_printf ("%d", original_port);
-      cmd[5] = g_strdup ("--protocol");
-      cmd[6] = g_strdup (protocol);
-      cmd[7] = NULL;
-
-      if (g_spawn_sync (NULL,
-                        cmd,
-                        NULL,
-                        G_SPAWN_SEARCH_PATH,
-                        NULL,
-                        NULL,
-                        &stdout_str,
-                        &stderr_str,
-                        &exit_code,
-                        &err) == FALSE)
-        {
-          g_warning ("%s: g_spawn_sync failed: %s",
-                     __FUNCTION__, err ? err->message : "");
-          g_strfreev (cmd);
-          g_free (stdout_str);
-          g_free (stderr_str);
-          return -1;
-        }
-      else if (exit_code)
-        {
-          g_warning ("%s: mapper exited with code %d",
-                     __FUNCTION__, exit_code);
-          g_message ("%s: mapper stderr:\n%s", __FUNCTION__, stderr_str);
-          g_debug ("%s: mapper stdout:\n%s", __FUNCTION__, stdout_str);
-          g_strfreev (cmd);
-          g_free (stdout_str);
-          g_free (stderr_str);
-          return -1;
-        }
-
-      relay_entity = NULL;
-      if (parse_entity (stdout_str, &relay_entity))
-        {
-          g_warning ("%s: failed to parse mapper output",
-                     __FUNCTION__);
-          g_message ("%s: mapper stdout:\n%s", __FUNCTION__, stdout_str);
-          g_message ("%s: mapper stderr:\n%s", __FUNCTION__, stderr_str);
-        }
-      else
+      if (get_relay_info_entity (original_host, original_port,
+                                 protocol, &relay_entity) == 0)
         {
           entity_t host_entity, port_entity, ca_cert_entity;
 
@@ -5049,9 +5500,6 @@ slave_get_relay (const char *original_host,
             }
           free_entity (relay_entity);
         }
-      g_strfreev (cmd);
-      g_free (stdout_str);
-      g_free (stderr_str);
     }
 
   return ret;
@@ -5255,7 +5703,7 @@ run_task (const char *task_id, char **report_id, int from)
   if (scanner_type (scanner) == SCANNER_TYPE_OPENVAS
       || scanner_type (scanner) == SCANNER_TYPE_OSP
       || scanner_type (scanner) == SCANNER_TYPE_OSP_SENSOR)
-    return run_osp_task (task, report_id);
+    return run_osp_task (task, from, report_id);
 
   return -1; // Unknown scanner type
 }
@@ -5405,7 +5853,8 @@ stop_task (const char *task_id)
     return 3;
 
   if (scanner_type (task_scanner (task)) == SCANNER_TYPE_OPENVAS
-      || scanner_type (task_scanner (task)) == SCANNER_TYPE_OSP)
+      || scanner_type (task_scanner (task)) == SCANNER_TYPE_OSP
+      || scanner_type (task_scanner (task)) == SCANNER_TYPE_OSP_SENSOR)
     return stop_osp_task (task);
 
   return stop_task_internal (task);
@@ -5845,13 +6294,13 @@ get_system_report_types (const char *required_type, gchar ***start,
       scanner_type_t slave_type;
 
       slave = 0;
-      slave_type = SCANNER_TYPE_NONE;
 
       if (find_scanner_with_permission (slave_id, &slave, "get_scanners"))
         return -1;
       if (slave == 0)
         return 2;
 
+      slave_type = scanner_type (slave);
       if (slave_type == SCANNER_TYPE_GMP)
         return get_slave_system_report_types (required_type, start, types,
                                               slave);
@@ -8555,10 +9004,11 @@ manage_update_nvts_osp (const gchar *update_socket)
  * @param[in]  read_only         Whether to only allow wizards marked as
  *                               read only.
  * @param[in]  mode              Name of the mode to run the wizard in.
- * @param[out] command_error     Address for error message from failed command
- *                               when return is 4, or NULL.
- * @param[out] command_error_code Address for status code from failed command
- *                                when return is 4, or NULL.
+ * @param[out] command_error     Either NULL or an address for an error message
+ *                               when return is 0, 4 or 6.
+ * @param[out] command_error_code  Either NULL or an address for a status code
+ *                                 from the failed command when return is 0
+ *                                 or 4.
  * @param[out] ret_response      Address for response string of last command.
  *
  * @return 0 success,

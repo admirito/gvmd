@@ -1186,6 +1186,9 @@ report_host_count (report_t);
 int
 report_result_host_count (report_t, int);
 
+char *
+report_finished_hosts_str (report_t);
+
 gboolean
 find_report_with_permission (const char *, report_t *, const char *);
 
@@ -1510,6 +1513,9 @@ result_iterator_has_cert_bunds (iterator_t*);
 int
 result_iterator_has_dfn_certs (iterator_t*);
 
+int
+cleanup_result_nvts ();
+
 void
 init_report_host_iterator (iterator_t*, report_t, const char *, report_host_t);
 
@@ -1782,6 +1788,7 @@ typedef struct
   array_t *alts;   ///< Array of gchar's.  Alternate values for radio type.
   char *default_value; ///< Default value of preference.
   char *hr_name;   ///< Extended, more human-readable name used by OSP.
+  int free_strings;///< Whether string fields are freed by preference_free.
 } preference_t;
 
 /**
@@ -2679,12 +2686,12 @@ manage_system_report (const char *, const char *, const char *, const char *,
 int
 manage_create_scanner (GSList *, const char *, const char *, const char *,
                        const char *, const char *, const char *, const char *,
-                       const char *);
+                       const char *, const char *);
 
 int
 manage_modify_scanner (GSList *, const gchar *, const char *, const char *,
                        const char *, const char *, const char *, const char *,
-                       const char *, const char *);
+                       const char *, const char *, const char *);
 
 int
 manage_delete_scanner (GSList *, const gchar *, const gchar *);
@@ -2854,6 +2861,15 @@ get_relay_mapper_path ();
 
 void
 set_relay_mapper_path (const char *);
+
+int
+get_relay_migrate_sensors ();
+
+void
+set_relay_migrate_sensors (int);
+
+gboolean
+relay_supports_scanner_type (const char *, int, scanner_type_t);
 
 int
 slave_get_relay (const char *,
@@ -4236,6 +4252,9 @@ gvm_get_sync_script_feed_version (const gchar *, gchar **);
 
 int
 manage_update_nvts_osp (const gchar *);
+
+int
+manage_rebuild (GSList *, const gchar *);
 
 
 /* Wizards. */

@@ -251,9 +251,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <p><opt>--optimize=<arg>NAME</arg></opt></p>
       <optdesc>
         <p>Run an optimization: vacuum, analyze, cleanup-config-prefs,
-           cleanup-port-names, cleanup-report-formats,
+           cleanup-port-names, cleanup-report-formats, cleanup-result-nvts,
            cleanup-result-severities, cleanup-schedule-times,
-           rebuild-report-cache or update-report-cache.</p>
+           migrate-relay-sensors, rebuild-report-cache
+           or update-report-cache.</p>
       </optdesc>
     </option>
     <option>
@@ -281,6 +282,15 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       </optdesc>
     </option>
     <option>
+      <p><opt>--rebuild-scap=<arg>TYPE</arg></opt></p>
+      <optdesc>
+        <p>
+          Rebuild SCAP data of type <arg>TYPE</arg>
+          (currently only supports 'ovaldefs').
+        </p>
+      </optdesc>
+    </option>
+    <option>
       <p><opt>--relay-mapper=<arg>FILE</arg></opt></p>
       <optdesc>
         <p>Executable for mapping scanner hosts to relays.
@@ -302,6 +312,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       </optdesc>
     </option>
     <option>
+      <p><opt>--scanner-credential=<arg>SCANNER-CREDENTIAL</arg></opt></p>
+      <optdesc>
+        <p>Scanner credential for --create-scanner and --modify-scanner.</p>
+        <p>Can be blank to unset or a credential UUID. If omitted, a new
+          credential can be created instead.</p>
+      </optdesc>
+    </option>
+    <option>
       <p><opt>--scanner-host=<arg>SCANNER-HOST</arg></opt></p>
       <optdesc>
         <p>Scanner host for --create-scanner and --modify-scanner.</p>
@@ -310,13 +328,15 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <option>
       <p><opt>--scanner-key-priv=<arg>SCANNER-KEY-PRIVATE</arg></opt></p>
       <optdesc>
-        <p>Scanner private key path for --[create|modify]-scanner.</p>
+        <p>Scanner private key path for --[create|modify]-scanner
+          if --scanner-credential is not given.</p>
       </optdesc>
     </option>
     <option>
       <p><opt>--scanner-key-pub=<arg>SCANNER-KEY-PUBLIC</arg></opt></p>
       <optdesc>
-        <p>Scanner Certificate path for --[create|modify]-scanner.</p>
+        <p>Scanner Certificate path for --[create|modify]-scanner
+          if --scanner-credential is not given.</p>
       </optdesc>
     </option>
     <option>
@@ -335,6 +355,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <p><opt>--scanner-type=<arg>SCANNER-TYPE</arg></opt></p>
       <optdesc>
         <p>Scanner type for --create-scanner and --modify-scanner.</p>
+        <p>Either 'OpenVAS', 'OSP', 'GMP', 'OSP-Sensor' or a number
+           as used in GMP.</p>
       </optdesc>
     </option>
     <option>
