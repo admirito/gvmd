@@ -2,8 +2,8 @@ Source: gvmd
 Section: admin
 Priority: optional
 Maintainer: Mohammad Razavi <mrazavi64@gmail.com>
-Build-Depends: debhelper (>= 9.0.0), cmake, pkg-config, cppcheck, xmltoman, doxygen, libglib2.0-dev, libgnutls28-dev, libgcrypt11-dev, libgpgme-dev, libgvm-dev (>= 11.0.0), libical-dev, libpq-dev, postgresql-server-dev-10
-Standards-Version: 4.1.4
+Build-Depends: debhelper-compat (= 12), cmake, pkg-config, cppcheck, xmltoman, doxygen, libglib2.0-dev, libgnutls28-dev, libgcrypt20-dev, libgpgme-dev, libgvm-dev (>= 11.0.1), libical-dev, libpq-dev, postgresql-server-dev-12
+Standards-Version: 4.4.1
 Homepage: https://community.greenbone.net/
 Vcs-Browser: https://github.com/greenbone/gvmd
 Vcs-git: https://github.com/greenbone/gvmd.git

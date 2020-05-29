@@ -107,7 +107,7 @@ override_dh_auto_install:
 	cp debian/gvmd-pg.dbconfig-common.install-dbadmin debian/gvmd-pg/usr/share/dbconfig-common/data/gvmd-pg/install-dbadmin/pgsql
 
 #	# move /usr/lib files from gvmd-common to libgvm-pg-server0
-	mkdir debian/libgvm-pg-server0/usr
+	mkdir -p debian/libgvm-pg-server0/usr
 	mv debian/gvmd-common/usr/lib debian/libgvm-pg-server0/usr/
 
 #	# remove extra files not required by any of debain packages
