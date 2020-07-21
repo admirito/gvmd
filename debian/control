@@ -11,7 +11,7 @@ Vcs-git: https://github.com/greenbone/gvmd.git
 Package: gvmd-common
 Architecture: any
 Depends: lsb-base, ${shlibs:Depends}, ${misc:Depends}
-Recommends: texlive-latex-base, xsltproc, gnutls-bin, rsync
+Recommends: texlive-latex-base, xsltproc, xml-twig-tools, gnutls-bin, rsync
 Conflicts: openvas9-manager
 Suggests: xmlstarlet, zip, python3, python3-lxml, smbclient, snmp, gnupg, openssh-client, sshpass, socat, haveged
 Description: remote network security auditor - manager

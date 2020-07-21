@@ -5,3 +5,8 @@ include:
 
 variables:
   DISTRIBUTION: focal
+
+build_job:
+  artifacts:
+    paths:
+      - src/
