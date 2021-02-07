@@ -1,21 +1,20 @@
 <!--
-Copyright (C) 2010-2019 Greenbone Networks GmbH
+Copyright (C) 2010-2020 Greenbone Networks GmbH
 
-SPDX-License-Identifier: GPL-2.0-or-later
+SPDX-License-Identifier: AGPL-3.0-or-later
 
-This program is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License
-as published by the Free Software Foundation; either version 2
-of the License, or (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+GNU Affero General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
 -->
 
 <!-- GMP schema with embedded documentation, in GMP. -->
@@ -531,6 +530,127 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <name>md5_fingerprint</name>
       <summary>MD5 fingerprint of the certificate</summary>
       <pattern>text</pattern>
+    </ele>
+  </element>
+  <element>
+    <name>nvt</name>
+    <summary>Meta information of a network vulnerability test</summary>
+    <pattern>
+      <attrib>
+        <name>id</name>
+        <type>oid</type>
+        <required>1</required>
+      </attrib>
+      <e>name</e>
+      <e>creation_time</e>
+      <e>modification_time</e>
+      <e>category</e>
+      <e>family</e>
+      <e>cvss_base</e>
+      <e>qod</e>
+      <e>refs</e>
+      <e>tags</e>
+      <e>preference_count</e>
+      <e>timeout</e>
+      <e>default_timeout</e>
+      <e>solution</e>
+      <e>preferences</e>
+    </pattern>
+    <ele>
+      <name>name</name>
+      <summary>Name of the vulnerability test</summary>
+      <pattern><t>text</t></pattern>
+    </ele>
+    <ele>
+      <name>creation_time</name>
+      <summary>Date and time the vulnerability test was created</summary>
+      <pattern><t>iso_time</t></pattern>
+    </ele>
+    <ele>
+      <name>modification_time</name>
+      <summary>Date and time the vulnerability test was last modified</summary>
+      <pattern><t>iso_time</t></pattern>
+    </ele>
+    <ele>
+      <name>category</name>
+      <summary>Category of the vulnerability test</summary>
+      <pattern><t>integer</t></pattern>
+    </ele>
+    <ele>
+      <name>family</name>
+      <summary>Family of the vulnerability test</summary>
+      <pattern><t>text</t></pattern>
+    </ele>
+    <ele>
+      <name>cvss_base</name>
+      <summary>CVSS base score of the vulnerability test</summary>
+      <pattern><t>text</t></pattern>
+    </ele>
+    <ele>
+      <name>qod</name>
+      <summary>Quality of Detection</summary>
+      <pattern>
+        <e>value</e>
+        <e>type</e>
+      </pattern>
+        <ele>
+          <name>value</name>
+	  <summary>The value of the QoD</summary>
+          <pattern><t>integer</t></pattern>
+        </ele>
+        <ele>
+          <name>type</name>
+          <summary>The type of the QoD</summary>
+          <pattern><t>name</t></pattern>
+        </ele>
+    </ele>
+    <ele>
+      <name>refs</name>
+      <summary>List of references of the vulnerability test</summary>
+      <pattern><any><e>ref</e></any></pattern>
+    </ele>
+    <ele>
+      <name>tags</name>
+      <summary>Additional information about vulnerability test in pipe-separated syntax</summary>
+      <pattern><t>text</t></pattern>
+    </ele>
+    <ele>
+      <name>preference_count</name>
+      <summary>The number of preferences</summary>
+      <pattern><t>integer</t></pattern>
+    </ele>
+    <ele>
+      <name>timeout</name>
+      <summary>The timeout of the vulnerability test</summary>
+      <pattern><t>integer</t></pattern>
+    </ele>
+    <ele>
+      <name>default_timeout</name>
+      <summary>The default timeout of the vulnerability test</summary>
+      <pattern><t>integer</t></pattern>
+    </ele>
+    <ele>
+      <name>solution</name>
+      <summary>The solution information for the vulnerability test</summary>
+      <pattern>
+        <attrib>
+          <name>type</name>
+          <summary>The solution type, for example "VendorFix"</summary>
+          <type>name</type>
+          <required>0</required>
+        </attrib>
+        <attrib>
+          <name>method</name>
+          <summary>The solution method, for example "DebianAPTUpgrade"</summary>
+          <type>name</type>
+          <required>0</required>
+        </attrib>
+      </pattern>
+    </ele>
+    <ele>
+      <name>preferences</name>
+      <summary>The list of preferences</summary>
+      <pattern><t>text</t></pattern>
     </ele>
   </element>
   <element>
@@ -1234,6 +1354,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <o><e>task</e></o>
       <e>host</e>
       <e>port</e>
+      <o><e>path</e></o>
       <e>nvt</e>
       <e>scan_nvt_version</e>
       <e>threat</e>
@@ -1391,6 +1512,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <ele>
       <name>port</name>
       <summary>The port on the host</summary>
+      <pattern>text</pattern>
+    </ele>
+    <ele>
+      <name>path</name>
+      <summary>The local path on the host, e.g. a file location</summary>
       <pattern>text</pattern>
     </ele>
     <ele>
@@ -2945,8 +3071,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       </p>
       <p>
         The client normally executes this command at the beginning of each
-        connection.  The only commands permitted before authentication are
-        get_version and commands.
+        connection.  The only command permitted before authentication is
+        get_version.
       </p>
     </description>
     <pattern>
@@ -3038,368 +3164,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <response>
         <authenticate_response status="400"
                                status_text="Authentication failed"/>
-      </response>
-    </example>
-  </command>
-  <command>
-    <name>commands</name>
-    <summary>Run a list of commands</summary>
-    <description>
-      The client uses the commands command to run a list of commands.  The
-      elements are executed as GMP commands in the given sequence.  The reply
-      contains the result of each command, in the same order as the given
-      commands.
-    </description>
-    <pattern>
-      <any>
-        <or>
-          <c>authenticate</c>
-          <c>commands</c>
-          <c>create_agent</c>
-          <c>create_alert</c>
-          <c>create_asset</c>
-          <c>create_config</c>
-          <c>create_credential</c>
-          <c>create_filter</c>
-          <c>create_group</c>
-          <c>create_note</c>
-          <c>create_override</c>
-          <c>create_permission</c>
-          <c>create_port_list</c>
-          <c>create_port_range</c>
-          <c>create_report_format</c>
-          <c>create_role</c>
-          <c>create_scanner</c>
-          <c>create_schedule</c>
-          <c>create_tag</c>
-          <c>create_target</c>
-          <c>create_task</c>
-          <c>create_ticket</c>
-          <c>create_tls_certificate</c>
-          <c>create_user</c>
-          <c>delete_agent</c>
-          <c>delete_alert</c>
-          <c>delete_asset</c>
-          <c>delete_config</c>
-          <c>delete_credential</c>
-          <c>delete_filter</c>
-          <c>delete_group</c>
-          <c>delete_note</c>
-          <c>delete_override</c>
-          <c>delete_permission</c>
-          <c>delete_report</c>
-          <c>delete_report_format</c>
-          <c>delete_role</c>
-          <c>delete_port_list</c>
-          <c>delete_port_range</c>
-          <c>delete_scanner</c>
-          <c>delete_schedule</c>
-          <c>delete_tag</c>
-          <c>delete_target</c>
-          <c>delete_task</c>
-          <c>delete_ticket</c>
-          <c>delete_user</c>
-          <c>describe_auth</c>
-          <c>empty_trashcan</c>
-          <c>get_agents</c>
-          <c>get_alerts</c>
-          <c>get_assets</c>
-          <c>get_configs</c>
-          <c>get_credentials</c>
-          <c>get_feeds</c>
-          <c>get_filters</c>
-          <c>get_groups</c>
-          <c>get_info</c>
-          <c>get_notes</c>
-          <c>get_nvts</c>
-          <c>get_nvt_families</c>
-          <c>get_overrides</c>
-          <c>get_permissions</c>
-          <c>get_port_lists</c>
-          <c>get_preferences</c>
-          <c>get_reports</c>
-          <c>get_report_formats</c>
-          <c>get_results</c>
-          <c>get_roles</c>
-          <c>get_scanners</c>
-          <c>get_schedules</c>
-          <c>get_settings</c>
-          <c>get_system_reports</c>
-          <c>get_tags</c>
-          <c>get_targets</c>
-          <c>get_tasks</c>
-          <c>get_tickets</c>
-          <c>get_tls_certificates</c>
-          <c>get_users</c>
-          <c>get_version</c>
-          <c>get_vulns</c>
-          <c>help</c>
-          <c>modify_agent</c>
-          <c>modify_alert</c>
-          <c>modify_asset</c>
-          <c>modify_auth</c>
-          <c>modify_config</c>
-          <c>modify_credential</c>
-          <c>modify_filter</c>
-          <c>modify_group</c>
-          <c>modify_note</c>
-          <c>modify_override</c>
-          <c>modify_permission</c>
-          <c>modify_port_list</c>
-          <c>modify_report</c>
-          <c>modify_report_format</c>
-          <c>modify_role</c>
-          <c>modify_scanner</c>
-          <c>modify_schedule</c>
-          <c>modify_setting</c>
-          <c>modify_tag</c>
-          <c>modify_target</c>
-          <c>modify_task</c>
-          <c>modify_ticket</c>
-          <c>modify_tls_certificate</c>
-          <c>modify_user</c>
-          <c>restore</c>
-          <c>resume_task</c>
-          <c>run_wizard</c>
-          <c>start_task</c>
-          <c>stop_task</c>
-          <c>sync_config</c>
-          <c>test_alert</c>
-          <c>verify_agent</c>
-          <c>verify_report_format</c>
-          <c>verify_scanner</c>
-        </or>
-      </any>
-    </pattern>
-    <response>
-      <pattern>
-        <attrib>
-          <name>status</name>
-          <type>status</type>
-          <required>1</required>
-        </attrib>
-        <attrib>
-          <name>status_text</name>
-          <type>text</type>
-          <required>1</required>
-        </attrib>
-        <any>
-          <or>
-            <r>authenticate</r>
-            <r>commands</r>
-            <r>create_agent</r>
-            <r>create_alert</r>
-            <r>create_asset</r>
-            <r>create_config</r>
-            <r>create_credential</r>
-            <r>create_filter</r>
-            <r>create_group</r>
-            <r>create_note</r>
-            <r>create_override</r>
-            <r>create_permission</r>
-            <r>create_port_list</r>
-            <r>create_port_range</r>
-            <r>create_role</r>
-            <r>create_scanner</r>
-            <r>create_schedule</r>
-            <r>create_tag</r>
-            <r>create_target</r>
-            <r>create_task</r>
-            <r>create_ticket</r>
-            <r>create_tls_certificate</r>
-            <r>create_user</r>
-            <r>delete_agent</r>
-            <r>delete_alert</r>
-            <r>delete_asset</r>
-            <r>delete_config</r>
-            <r>delete_credential</r>
-            <r>delete_filter</r>
-            <r>delete_group</r>
-            <r>delete_note</r>
-            <r>delete_override</r>
-            <r>delete_permission</r>
-            <r>delete_port_list</r>
-            <r>delete_port_range</r>
-            <r>delete_report</r>
-            <r>delete_report_format</r>
-            <r>delete_role</r>
-            <r>delete_scanner</r>
-            <r>delete_schedule</r>
-            <r>delete_tag</r>
-            <r>delete_target</r>
-            <r>delete_task</r>
-            <r>delete_ticket</r>
-            <r>delete_user</r>
-            <r>describe_auth</r>
-            <r>empty_trashcan</r>
-            <r>get_agents</r>
-            <r>get_alerts</r>
-            <r>get_assets</r>
-            <r>get_configs</r>
-            <r>get_credentials</r>
-            <r>get_groups</r>
-            <r>get_info</r>
-            <r>get_feeds</r>
-            <r>get_filters</r>
-            <r>get_notes</r>
-            <r>get_nvts</r>
-            <r>get_nvt_families</r>
-            <r>get_overrides</r>
-            <r>get_permissions</r>
-            <r>get_port_lists</r>
-            <r>get_preferences</r>
-            <r>get_reports</r>
-            <r>get_report_formats</r>
-            <r>get_results</r>
-            <r>get_roles</r>
-            <r>get_scanners</r>
-            <r>get_schedules</r>
-            <r>get_settings</r>
-            <r>get_system_reports</r>
-            <r>get_tags</r>
-            <r>get_targets</r>
-            <r>get_tasks</r>
-            <r>get_tickets</r>
-            <r>get_tls_certificates</r>
-            <r>get_users</r>
-            <r>get_version</r>
-            <r>get_vulns</r>
-            <r>help</r>
-            <r>modify_agent</r>
-            <r>modify_alert</r>
-            <r>modify_asset</r>
-            <r>modify_auth</r>
-            <r>modify_config</r>
-            <r>modify_credential</r>
-            <r>modify_filter</r>
-            <r>modify_group</r>
-            <r>modify_note</r>
-            <r>modify_override</r>
-            <r>modify_permission</r>
-            <r>modify_port_list</r>
-            <r>modify_report</r>
-            <r>modify_report_format</r>
-            <r>modify_role</r>
-            <r>modify_scanner</r>
-            <r>modify_schedule</r>
-            <r>modify_setting</r>
-            <r>modify_tag</r>
-            <r>modify_target</r>
-            <r>modify_ticket</r>
-            <r>modify_tls_certificate</r>
-            <r>modify_task</r>
-            <r>modify_user</r>
-            <r>restore</r>
-            <r>resume_task</r>
-            <r>run_wizard</r>
-            <r>start_task</r>
-            <r>stop_task</r>
-            <r>sync_config</r>
-            <r>test_alert</r>
-            <r>verify_agent</r>
-            <r>verify_report_format</r>
-            <r>verify_scanner</r>
-          </or>
-        </any>
-      </pattern>
-    </response>
-  </command>
-  <command>
-    <name>create_agent</name>
-    <summary>Create an agent</summary>
-    <description>
-      <p>
-        The client uses the create_agent command to create a new agent.
-      </p>
-    </description>
-    <pattern>
-      <e>installer</e>
-      <e>name</e>
-      <o><e>comment</e></o>
-      <o><e>copy</e></o>
-      <o><e>howto_install</e></o>
-      <o><e>howto_use</e></o>
-    </pattern>
-    <ele>
-      <name>installer</name>
-      <summary>A file that installs the agent on a target machine</summary>
-      <pattern>
-        <t>base64</t>
-        <e>signature</e>
-      </pattern>
-      <ele>
-        <name>signature</name>
-        <summary>A detached OpenPGP signature of the installer</summary>
-        <pattern><t>base64</t></pattern>
-      </ele>
-    </ele>
-    <ele>
-      <name>name</name>
-      <summary>A name for the installer</summary>
-      <pattern><t>name</t></pattern>
-    </ele>
-    <ele>
-      <name>comment</name>
-      <summary>A comment on the agent</summary>
-      <pattern>
-        text
-      </pattern>
-    </ele>
-    <ele>
-      <name>copy</name>
-      <summary>The UUID of an existing agent</summary>
-      <pattern>
-        <t>uuid</t>
-      </pattern>
-    </ele>
-    <ele>
-      <name>howto_install</name>
-      <summary>A file that describes how to install the agent</summary>
-      <pattern>
-        <t>base64</t>
-      </pattern>
-    </ele>
-    <ele>
-      <name>howto_use</name>
-      <summary>A file that describes how to use the agent</summary>
-      <pattern>
-        <t>base64</t>
-      </pattern>
-    </ele>
-    <response>
-      <pattern>
-        <attrib>
-          <name>status</name>
-          <type>status</type>
-          <required>1</required>
-        </attrib>
-        <attrib>
-          <name>status_text</name>
-          <type>text</type>
-          <required>1</required>
-        </attrib>
-        <attrib>
-          <name>id</name>
-          <type>uuid</type>
-          <required>1</required>
-        </attrib>
-      </pattern>
-    </response>
-    <example>
-      <summary>Create an agent</summary>
-      <request>
-        <create_agent>
-          <installer>
-            asdf3235saf3kjBVF...
-            <signature>iEYEABECAAYFA...</signature>
-          </installer>
-          <name>SLAD</name>
-        </create_agent>
-      </request>
-      <response>
-        <create_agent_response status="201" status_text="OK, resource created"
-                               id="254cd3ef-bbe1-4d58-859d-21b8d0c046c6">
-        </create_agent_response>
       </response>
     </example>
   </command>
@@ -3670,7 +3434,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       </pattern>
       <ele>
         <name>name</name>
-        <summary>A name for the asset</summary>
+        <summary>A name for the asset. Must be an IPv4 or IPv6 address for hosts</summary>
         <pattern>
           <t>name</t>
         </pattern>
@@ -4356,7 +4120,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     </ele>
     <ele>
       <name>active</name>
-      <summary>Seconds note will be active.  -1 on always, 0 off</summary>
+      <summary>Days note will be active. -1 on always, 0 off</summary>
       <pattern><t>integer</t></pattern>
     </ele>
     <ele>
@@ -4485,7 +4249,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     </ele>
     <ele>
       <name>active</name>
-      <summary>Seconds override will be active.  -1 on always, 0 off</summary>
+      <summary>Days override will be active. -1 on always, 0 off</summary>
       <pattern><t>integer</t></pattern>
     </ele>
     <ele>
@@ -5058,7 +4822,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
                 CPE stands for Common Platform Enumeration.  It is a
                 <truncated>...</truncated>
               </description>
-              <predefined>1</predefined>
               <trust>
                 yes
                 <time>Thu Dec  2 13:22:26 2010</time>
@@ -5271,9 +5034,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <o><e>comment</e></o>
       <o><e>copy</e></o>
       <o><e>icalendar</e></o>
-      <o><e>first_time</e></o>
-      <o><e>duration</e></o>
-      <o><e>period</e></o>
       <o><e>timezone</e></o>
     </pattern>
     <ele>
@@ -5303,63 +5063,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       </pattern>
     </ele>
     <ele>
-      <name>first_time</name>
-      <summary>The first time the schedule will run</summary>
-      <pattern>
-        <e>minute</e>
-        <e>hour</e>
-        <e>day_of_month</e>
-        <e>month</e>
-        <e>year</e>
-      </pattern>
-      <ele>
-        <name>minute</name>
-        <pattern><t>integer</t></pattern>
-      </ele>
-      <ele>
-        <name>hour</name>
-        <pattern><t>integer</t></pattern>
-      </ele>
-      <ele>
-        <name>day_of_month</name>
-        <pattern><t>integer</t></pattern>
-      </ele>
-      <ele>
-        <name>month</name>
-        <pattern><t>integer</t></pattern>
-      </ele>
-      <ele>
-        <name>year</name>
-        <pattern><t>integer</t></pattern>
-      </ele>
-    </ele>
-    <ele>
-      <name>duration</name>
-      <summary>How long the Manager will run the scheduled task for</summary>
-      <description>A duration of 0 means to run to completion.</description>
-      <pattern>
-        <e>unit</e>
-      </pattern>
-      <ele>
-        <name>unit</name>
-        <summary>Duration time unit</summary>
-        <pattern><t>time_unit</t></pattern>
-      </ele>
-    </ele>
-    <ele>
-      <name>period</name>
-      <summary>How often the Manager will repeat the scheduled task</summary>
-      <description>A period of 0 means to run once.</description>
-      <pattern>
-        <e>unit</e>
-      </pattern>
-      <ele>
-        <name>unit</name>
-        <summary>Period time unit</summary>
-        <pattern><t>time_unit</t></pattern>
-      </ele>
-    </ele>
-    <ele>
       <name>timezone</name>
       <summary>The timezone the schedule will follow</summary>
       <pattern>timezone</pattern>
@@ -5387,28 +5090,18 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <summary>Create a schedule</summary>
       <request>
         <create_schedule>
-          <name>Every night</name>
-          <first_time>
-            <day_of_month>1</day_of_month>
-            <hour>0</hour>
-            <minute>0</minute>
-            <month>1</month>
-            <year>2011</year>
-          </first_time>
-          <duration>
-            3
-            <unit>hour</unit>
-          </duration>
-          <period>
-            1
-            <unit>day</unit>
-          </period>
+          <name>Every day</name>
+          <timezone>UTC</timezone>
+          <icalendar>
+            <truncated>...</truncated>
+            DTSTART;TZID=/UTC:20200603T162600
+          </icalendar>
         </create_schedule>
       </request>
       <response>
         <create_schedule_response status="201"
-                                   status_text="OK, resource created"
-                                   id="254cd3ef-bbe1-4d58-859d-21b8d0c046c6">
+                                  status_text="OK, resource created"
+                                  id="254cd3ef-bbe1-4d58-859d-21b8d0c046c6">
         </create_schedule_response>
       </response>
     </example>
@@ -5555,8 +5248,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <o><e>alive_tests</e></o>
       <o><e>reverse_lookup_only</e></o>
       <o><e>reverse_lookup_unify</e></o>
-      <o><e>port_range</e></o>
-      <o><e>port_list</e></o>
+      <or>
+        <e>port_range</e>
+        <e>port_list</e>
+      </or>
     </pattern>
     <ele>
       <name>name</name>
@@ -6291,57 +5986,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       </request>
       <response>
         <create_user_response status="201" status_text="OK, resource created"/>
-      </response>
-    </example>
-  </command>
-  <command>
-    <name>delete_agent</name>
-    <summary>Delete an agent</summary>
-    <description>
-      <p>
-        The client uses the delete_agent command to delete an existing agent.
-      </p>
-      <p>
-        Since this is a destructive command, the client is advised to ask
-        for confirmation from the user before sending this command to the
-        Manager.
-      </p>
-    </description>
-    <pattern>
-      <attrib>
-        <name>agent_id</name>
-        <type>uuid</type>
-        <required>1</required>
-      </attrib>
-      <attrib>
-        <name>ultimate</name>
-        <summary>Whether to remove entirely, or to the trashcan</summary>
-        <type>boolean</type>
-        <required>1</required>
-      </attrib>
-    </pattern>
-    <response>
-      <pattern>
-        <attrib>
-          <name>status</name>
-          <type>status</type>
-          <required>1</required>
-        </attrib>
-        <attrib>
-          <name>status_text</name>
-          <type>text</type>
-          <required>1</required>
-        </attrib>
-      </pattern>
-    </response>
-    <example>
-      <summary>Delete an agent</summary>
-      <request>
-        <delete_agent agent_id="267a3405-e84a-47da-97b2-5fa0d2e8995e">
-        </delete_agent>
-      </request>
-      <response>
-        <delete_agent_response status="200" status_text="OK"/>
       </response>
     </example>
   </command>
@@ -7559,478 +7203,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     </example>
   </command>
   <command>
-    <name>get_agents</name>
-    <summary>Get one or many agents</summary>
-    <description>
-      <p>
-        The client uses the get_agents command to get agent information.
-        If the command sent by the client was valid, the manager will
-        reply with a list of agents to the client.
-      </p>
-      <p>
-        If the request includes a format then the agents in the response
-        include installer elements, otherwise they include trust state and
-        time. If the details attribute is set, the response will include
-        the installer.
-      </p>
-    </description>
-    <pattern>
-      <attrib>
-        <name>agent_id</name>
-        <summary>ID of single agent to get</summary>
-        <type>uuid</type>
-      </attrib>
-      <attrib>
-        <name>filter</name>
-        <summary>Filter term to use to filter query</summary>
-        <type>text</type>
-        <filter_keywords>
-          <column>
-            <name>uuid</name>
-            <type>uuid</type>
-            <summary>Unique ID</summary>
-          </column>
-          <column>
-            <name>name</name>
-            <type>name</type>
-            <summary>Name</summary>
-          </column>
-          <column>
-            <name>comment</name>
-            <type>text</type>
-            <summary>Comment text</summary>
-          </column>
-          <column>
-            <name>created</name>
-            <type>iso_time</type>
-            <summary>Creation time</summary>
-          </column>
-          <column>
-            <name>modified</name>
-            <type>iso_time</type>
-            <summary>Modification time</summary>
-          </column>
-          <column>
-            <name>owner</name>
-            <type>name</type>
-            <summary>Name of the owner</summary>
-          </column>
-          <column>
-            <name>trust</name>
-            <type>boolean</type>
-            <summary>Whether the the agent is trusted</summary>
-          </column>
-        </filter_keywords>
-      </attrib>
-      <attrib>
-        <name>filt_id</name>
-        <summary>ID of filter to use to filter query</summary>
-        <type>uuid</type>
-      </attrib>
-      <attrib>
-        <name>trash</name>
-        <summary>Whether to get the trashcan agents instead</summary>
-        <type>boolean</type>
-      </attrib>
-      <attrib>
-        <name>details</name>
-        <summary>
-          Whether to include agents package information when no format
-          was provided
-        </summary>
-        <type>boolean</type>
-      </attrib>
-      <attrib>
-        <name>format</name>
-        <type>
-          <alts>
-            <alt>installer</alt>
-            <alt>howto_install</alt>
-            <alt>howto_use</alt>
-          </alts>
-        </type>
-      </attrib>
-    </pattern>
-    <response>
-      <pattern>
-        <attrib>
-          <name>status</name>
-          <type>status</type>
-          <required>1</required>
-        </attrib>
-        <attrib>
-          <name>status_text</name>
-          <type>text</type>
-          <required>1</required>
-        </attrib>
-        <any><e>agent</e></any>
-        <e>filters</e>
-        <e>sort</e>
-        <e>agents</e>
-        <e>agent_count</e>
-      </pattern>
-      <ele>
-        <name>agent</name>
-        <pattern>
-          <attrib>
-            <name>id</name>
-            <type>uuid</type>
-            <required>1</required>
-          </attrib>
-          <e>owner</e>
-          <e>name</e>
-          <e>comment</e>
-          <e>creation_time</e>
-          <e>modification_time</e>
-          <e>in_use</e>
-          <e>writable</e>
-          <e>permissions</e>
-          <o><e>user_tags</e></o>
-          <or>
-            <e>installer</e>
-            <e>package</e>
-          </or>
-        </pattern>
-        <ele>
-          <name>owner</name>
-          <summary>Owner of the agent</summary>
-          <pattern>
-            <e>name</e>
-          </pattern>
-          <ele>
-            <name>name</name>
-            <summary>The name of the owner</summary>
-            <pattern><t>name</t></pattern>
-          </ele>
-        </ele>
-        <ele>
-          <name>name</name>
-          <summary>The name of the agent</summary>
-          <pattern><t>name</t></pattern>
-        </ele>
-        <ele>
-          <name>comment</name>
-          <summary>The comment on the agent</summary>
-          <pattern>text</pattern>
-        </ele>
-        <ele>
-          <name>creation_time</name>
-          <summary>Date and time the agent was created</summary>
-          <pattern><t>iso_time</t></pattern>
-        </ele>
-        <ele>
-          <name>modification_time</name>
-          <summary>Date and time the agent was last modified</summary>
-          <pattern><t>iso_time</t></pattern>
-        </ele>
-        <ele>
-          <name>in_use</name>
-          <summary>Whether the agent is in use</summary>
-          <pattern><t>boolean</t></pattern>
-        </ele>
-        <ele>
-          <name>writable</name>
-          <summary>Whether the agent is writable</summary>
-          <pattern><t>boolean</t></pattern>
-        </ele>
-        <ele>
-          <name>permissions</name>
-          <summary>Permissions that the current user has on the agent</summary>
-          <pattern>
-            <any><e>permission</e></any>
-          </pattern>
-          <ele>
-            <name>permission</name>
-            <pattern>
-              <e>name</e>
-            </pattern>
-            <ele>
-              <name>name</name>
-              <summary>The name of the permission</summary>
-              <pattern><t>name</t></pattern>
-            </ele>
-          </ele>
-        </ele>
-        <ele>
-          <name>user_tags</name>
-          <summary>Info on tags attached to the agent</summary>
-          <pattern>
-            <e>count</e>
-            <any><e>tag</e></any>
-          </pattern>
-          <ele>
-            <name>count</name>
-            <summary>Number of attached tags</summary>
-            <pattern><t>integer</t></pattern>
-          </ele>
-          <ele>
-            <name>tag</name>
-            <summary>
-              Short info on an individual tag
-              (only if details were requested)
-            </summary>
-            <pattern>
-              <attrib>
-                <name>id</name>
-                <type>uuid</type>
-                <summary>UUID of the tag</summary>
-                <required>1</required>
-              </attrib>
-              <e>name</e>
-              <e>value</e>
-              <e>comment</e>
-            </pattern>
-            <ele>
-              <name>name</name>
-              <summary>Name of the tag (usually namespace:predicate)</summary>
-              <pattern>text</pattern>
-            </ele>
-            <ele>
-              <name>value</name>
-              <summary>Value of the tag</summary>
-              <pattern>text</pattern>
-            </ele>
-            <ele>
-              <name>comment</name>
-              <summary>Comment for the tag</summary>
-              <pattern>text</pattern>
-            </ele>
-          </ele>
-        </ele>
-        <ele>
-          <name>installer</name>
-          <pattern>
-            <e>trust</e>
-          </pattern>
-          <ele>
-            <name>trust</name>
-            <summary>Whether signature verification succeeded</summary>
-            <pattern>
-              <t>
-                <alts>
-                  <alt>yes</alt>
-                  <alt>no</alt>
-                  <alt>unknown</alt>
-                </alts>
-              </t>
-              <e>time</e>
-            </pattern>
-            <ele>
-              <name>time</name>
-              <summary>When the signature was verified</summary>
-              <pattern><t>iso_time</t></pattern>
-            </ele>
-          </ele>
-        </ele>
-        <ele>
-          <name>package</name>
-          <summary>Either the installer or one of the HOWTOs</summary>
-          <pattern>
-            <e>filename</e>
-            <t>base64</t>
-          </pattern>
-          <ele>
-            <name>filename</name>
-            <summary>The filename of the package</summary>
-            <pattern>text</pattern>
-          </ele>
-        </ele>
-      </ele>
-      <ele>
-        <name>filters</name>
-        <pattern>
-          <attrib>
-            <name>id</name>
-            <summary>UUID of filter if any, else 0</summary>
-            <type>uuid</type>
-            <required>1</required>
-          </attrib>
-          <e>term</e>
-          <o><e>name</e></o>
-          <e>keywords</e>
-        </pattern>
-        <ele>
-          <name>term</name>
-          <summary>Filter term</summary>
-          <pattern>text</pattern>
-        </ele>
-        <ele>
-          <name>name</name>
-          <summary>Filter name, if applicable</summary>
-          <pattern>text</pattern>
-        </ele>
-        <ele>
-          <name>keywords</name>
-          <summary>Filter broken down into keywords</summary>
-          <pattern><any><e>keyword</e></any></pattern>
-          <ele>
-            <name>keyword</name>
-            <pattern>
-              <e>column</e>
-              <e>relation</e>
-              <e>value</e>
-            </pattern>
-            <ele>
-              <name>column</name>
-              <summary>Column prefix</summary>
-              <pattern>text</pattern>
-            </ele>
-            <ele>
-              <name>relation</name>
-              <summary>Relation operator</summary>
-              <pattern>
-                <alts>
-                  <alt>=</alt>
-                  <alt>:</alt>
-                  <alt>~</alt>
-                  <alt>&gt;</alt>
-                  <alt>&lt;</alt>
-                </alts>
-              </pattern>
-            </ele>
-            <ele>
-              <name>value</name>
-              <summary>The filter text</summary>
-              <pattern>text</pattern>
-            </ele>
-          </ele>
-        </ele>
-      </ele>
-      <ele>
-        <name>sort</name>
-        <pattern>
-          text
-          <e>field</e>
-        </pattern>
-        <ele>
-          <name>field</name>
-          <pattern>
-            <e>order</e>
-          </pattern>
-          <ele>
-            <name>order</name>
-            <pattern>
-              <t>
-                <alts>
-                  <alt>ascending</alt>
-                  <alt>descending</alt>
-                </alts>
-              </t>
-            </pattern>
-          </ele>
-        </ele>
-      </ele>
-      <ele>
-        <name>agents</name>
-        <pattern>
-          <attrib>
-            <name>start</name>
-            <summary>First agent</summary>
-            <type>integer</type>
-            <required>1</required>
-          </attrib>
-          <attrib>
-            <name>max</name>
-            <summary>Maximum number of agents</summary>
-            <type>integer</type>
-            <required>1</required>
-          </attrib>
-        </pattern>
-      </ele>
-      <ele>
-        <name>agent_count</name>
-        <pattern>
-          <e>filtered</e>
-          <e>page</e>
-        </pattern>
-        <ele>
-          <name>filtered</name>
-          <summary>Number of agents after filtering</summary>
-          <pattern><t>integer</t></pattern>
-        </ele>
-        <ele>
-          <name>page</name>
-          <summary>Number of agents on current page</summary>
-          <pattern><t>integer</t></pattern>
-        </ele>
-      </ele>
-    </response>
-    <example>
-      <summary>Get one or many agents</summary>
-      <request>
-        <get_agents></get_agents>
-      </request>
-      <response>
-        <get_agents_response status="200" status_text="OK">
-          <agent id="c33864a9-d3fd-44b3-8717-972bfb01dfcf">
-            <name>Custom Scan Agent</name>
-            <comment>Custom agent for use on the Web servers.</comment>
-            <creation_time>2012-01-23T10:44:00+01:00</creation_time>
-            <modification_time>2013-01-23T10:44:00+01:00</modification_time>
-            <writable>1</writable>
-            <in_use>0</in_use>
-            <installer>
-              <trust>
-                yes
-                <time>Wed Jun 30 21:49:08 2012</time>
-              </trust>
-            </installer>
-          </agent>
-          <truncated>...</truncated>
-        </get_agents_response>
-      </response>
-    </example>
-    <example>
-      <summary>Get one agent</summary>
-      <request>
-        <get_agents agent_id="c33864a9-d3fd-44b3-8717-972bfb01dfcf">
-        </get_agents>
-      </request>
-      <response>
-        <get_agents_response status="200" status_text="OK">
-          <agent id="c33864a9-d3fd-44b3-8717-972bfb01dfcf">
-            <name>Custom Scan Agent</name>
-            <comment>Custom agent for use on the Web servers.</comment>
-            <creation_time>2012-01-23T10:44:00+01:00</creation_time>
-            <modification_time>2013-01-23T10:44:00+01:00</modification_time>
-            <writable>1</writable>
-            <in_use>0</in_use>
-            <installer>
-              <trust>
-                yes
-                <time>Wed Jun 30 21:49:08 2012</time>
-              </trust>
-            </installer>
-          </agent>
-        </get_agents_response>
-      </response>
-    </example>
-    <example>
-      <summary>Get one agent, including the installer package</summary>
-      <request>
-        <get_agents agent_id="c33864a9-d3fd-44b3-8717-972bfb01dfcf"
-                    format="installer">
-        </get_agents>
-      </request>
-      <response>
-        <get_agents_response status="200" status_text="OK">
-          <agent id="c33864a9-d3fd-44b3-8717-972bfb01dfcf">
-            <name>Custom Scan Agent</name>
-            <comment>Custom agent for use on the Web servers.</comment>
-            <creation_time>2012-01-23T10:44:00+01:00</creation_time>
-            <modification_time>2013-01-23T10:44:00+01:00</modification_time>
-            <writable>1</writable>
-            <in_use>0</in_use>
-            <package format="installer">
-              <filename>agent.deb</filename>
-              CgoKCgoKCgoKCgoKCSAgI...
-            </package>
-          </agent>
-        </get_agents_response>
-      </response>
-    </example>
-  </command>
-  <command>
     <name>get_configs</name>
     <summary>Get one or many configs</summary>
     <description>
@@ -8124,6 +7296,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             </type>
             <summary>Usage type</summary>
           </column>
+          <column>
+            <name>predefined</name>
+            <type>boolean</type>
+            <summary>Whether the config was created from the feed</summary>
+          </column>
         </filter_keywords>
       </attrib>
       <attrib>
@@ -8214,6 +7391,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           <o><e>families</e></o>
           <o><e>preferences</e></o>
           <o><e>nvt_selectors</e></o>
+          <e>predefined</e>
         </pattern>
         <ele>
           <name>owner</name>
@@ -8598,6 +7776,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             </ele>
           </ele>
         </ele>
+        <ele>
+          <name>predefined</name>
+          <summary>Whether the config was predefined by the feed</summary>
+          <pattern><t>boolean</t></pattern>
+        </ele>
       </ele>
       <ele>
         <name>filters</name>
@@ -8915,13 +8098,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <summary>Optional tuples of sort criteria</summary>
       <pattern>
         <attrib>
-          <name>sort_field</name>
+          <name>field</name>
           <summary>The column to sort the aggregated rows by.
-          With a subgroup column, groups will be sorted by the group_column first.</summary>
+          With a subgroup column, groups will be sorted by the group_column first</summary>
           <type>text</type>
         </attrib>
         <attrib>
-          <name>sort_order</name>
+          <name>order</name>
           <summary>The order to sort by</summary>
           <type>
             <alts>
@@ -8931,7 +8114,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           </type>
         </attrib>
         <attrib>
-          <name>sort_stat</name>
+          <name>stat</name>
           <summary>The statistic to sort the aggregated rows by</summary>
           <type>
             <alts>
@@ -12298,7 +11481,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <pattern>
       <attrib>
         <name>type</name>
-        <summary>Type must be either CERT_BUND_ADV, CPE, CVE, DFN_CERT_ADV, OVALDEF, NVT or ALLINFO</summary>
+        <summary>Type must be either CERT_BUND_ADV, CPE, CVE, DFN_CERT_ADV, OVALDEF or NVT</summary>
         <type>text</type>
         <required>1</required>
       </attrib>
@@ -12563,19 +11746,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <summary>Alias for severity</summary>
           </column>
         </filter_keywords>
-        <filter_keywords>
-          <condition>type is "allinfo"</condition>
-          <column>
-            <name>type</name>
-            <type>text</type>
-            <summary>Type of SecInfo as given in the "type" parameter</summary>
-          </column>
-          <column>
-            <name>extra</name>
-            <type>text</type>
-            <summary>Title or similar text</summary>
-          </column>
-        </filter_keywords>
       </attrib>
       <attrib>
         <name>filt_id</name>
@@ -12629,7 +11799,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <e>dfn_cert_adv</e>
             <e>ovaldef</e>
             <e>nvt</e>
-            <e>allinfo</e>
           </or>
         </pattern>
         <ele>
@@ -13131,36 +12300,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <summary>Source representation of the information. Only when details were requested</summary>
             <pattern>
               text
-            </pattern>
-          </ele>
-        </ele>
-        <ele>
-          <name>allinfo</name>
-          <pattern>
-            <e>type</e>
-            <e>extra</e>
-            <e>severity</e>
-          </pattern>
-          <summary>A SecInfo entry. Could be CPE, CVE, NVT, OVALDEF or DFN-CERT Advisory</summary>
-          <ele>
-            <name>type</name>
-            <summary>Type of SecInfo entry</summary>
-            <pattern>
-              <t>text</t>
-            </pattern>
-          </ele>
-          <ele>
-            <name>extra</name>
-            <summary>Extra information from the entry like title or description</summary>
-            <pattern>
-              <t>text</t>
-            </pattern>
-          </ele>
-          <ele>
-            <name>severity</name>
-            <summary>Severity rating (CVSS score) of the entry</summary>
-            <pattern>
-              <t>severity</t>
             </pattern>
           </ele>
         </ele>
@@ -13899,6 +13038,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
               <o><e>preference_count</e></o>
               <o><e>timeout</e></o>
               <o><e>default_timeout</e></o>
+              <e>solution</e>
               <o><e>preferences</e></o>
             </g>
           </o>
@@ -14054,6 +13194,23 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           <pattern>text</pattern>
         </ele>
         <ele>
+          <name>solution</name>
+          <summary>Solution for the vulnerability</summary>
+          <pattern>
+            <attrib>
+              <name>type</name>
+              <summary>The solution type, for example "VendorFix"</summary>
+              <type>text</type>
+            </attrib>
+            <attrib>
+              <name>method</name>
+              <summary>The solution method, for example "DebianAPTUpgrade"</summary>
+              <type>text</type>
+            </attrib>
+            text
+          </pattern>
+        </ele>
+        <ele>
           <name>preferences</name>
           <summary>List of preferences of the NVT</summary>
           <pattern>
@@ -14077,6 +13234,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <pattern>
               <e>nvt</e>
               <e>name</e>
+              <e>hr_name</e>
+              <e>id</e>
               <e>type</e>
               <e>value</e>
               <any><e>alt</e></any>
@@ -14102,6 +13261,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <ele>
               <name>name</name>
               <summary>The name of the preference</summary>
+              <pattern>text</pattern>
+            </ele>
+            <ele>
+              <name>hr_name</name>
+              <summary>The full, more "human readable" name of the preference</summary>
+              <pattern>text</pattern>
+            </ele>
+            <ele>
+              <name>id</name>
+              <summary>The ID of the preference</summary>
               <pattern>text</pattern>
             </ele>
             <ele>
@@ -15144,6 +14313,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <type>integer</type>
             <summary>Number of UDP ports in the Port List</summary>
           </column>
+          <column>
+            <name>predefined</name>
+            <type>boolean</type>
+            <summary>Whether the Port List was created from the feed</summary>
+          </column>
         </filter_keywords>
       </attrib>
       <attrib>
@@ -15205,6 +14379,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           <e>port_count</e>
           <o><e>port_ranges</e></o>
           <o><e>targets</e></o>
+          <e>predefined</e>
         </pattern>
         <ele>
           <name>owner</name>
@@ -15403,6 +14578,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
               <pattern></pattern>
             </ele>
           </ele>
+        </ele>
+        <ele>
+          <name>predefined</name>
+          <summary>Whether the port list was predefined by the feed</summary>
+          <pattern><t>boolean</t></pattern>
         </ele>
       </ele>
       <ele>
@@ -15613,6 +14793,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
         <name>preference</name>
         <pattern>
           <e>nvt</e>
+          <e>hr_name</e>
           <e>name</e>
           <e>id</e>
           <e>type</e>
@@ -15636,6 +14817,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <summary>The name of the NVT</summary>
             <pattern><t>name</t></pattern>
           </ele>
+        </ele>
+        <ele>
+          <name>hr_name</name>
+          <summary>The full, more "human readable" name of the preference</summary>
+          <pattern><t>name</t></pattern>
         </ele>
         <ele>
           <name>name</name>
@@ -16612,6 +15798,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <type>boolean</type>
             <summary>Whether the report format is active</summary>
           </column>
+          <column>
+            <name>predefined</name>
+            <type>boolean</type>
+            <summary>Whether the report format was created from the feed</summary>
+          </column>
         </filter_keywords>
       </attrib>
       <attrib>
@@ -16678,7 +15869,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           <e>content_type</e>
           <e>summary</e>
           <e>description</e>
-          <e>predefined</e>
           <o><e>alerts</e></o>
           <o>
             <g>
@@ -16688,6 +15878,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           </o>
           <e>trust</e>
           <e>active</e>
+          <e>predefined</e>
           <any><e>param</e></any>
         </pattern>
         <ele>
@@ -16806,10 +15997,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
         <ele>
           <name>content_type</name>
           <pattern>text</pattern>
-        </ele>
-        <ele>
-          <name>predefined</name>
-          <pattern><t>boolean</t></pattern>
         </ele>
         <ele>
           <name>alerts</name>
@@ -16969,6 +16156,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           <summary>Whether the report format is active</summary>
           <pattern><t>boolean</t></pattern>
         </ele>
+        <ele>
+          <name>predefined</name>
+          <summary>Whether the report format was predefined by the feed</summary>
+          <pattern><t>boolean</t></pattern>
+        </ele>
       </ele>
       <ele>
         <name>filters</name>
@@ -17110,7 +16302,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
               A single HTML page listing results of a scan.  Style information
               <truncated>...</truncated>
             </description>
-            <predefined>1</predefined>
             <trust>
               no
               <time>Thu Dec  2 13:22:26 2010</time>
@@ -17144,7 +16335,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
               A single HTML page listing results of a scan.  Style information
               <truncated>...</truncated>
             </description>
-            <predefined>1</predefined>
             <file name="HTML.xsl">
               PD9ldD4K
               <truncated>...</truncated>
@@ -17207,11 +16397,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <summary>Severity levels to select</summary>
           </option>
           <option>
-            <name>min_qod</name>
-            <type>integer</type>
-            <summary>Minimum QoD of the results</summary>
-          </option>
-          <option>
             <name>notes</name>
             <type>boolean</type>
             <summary>Whether to include Notes in the report</summary>
@@ -17250,6 +16435,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <name>owner</name>
             <type>name</type>
             <summary>Name of the owner</summary>
+          </column>
+          <column>
+            <name>min_qod</name>
+            <type>integer</type>
+            <summary>Minimum QoD of the results</summary>
           </column>
           <column>
             <name>host</name>
@@ -18632,11 +17822,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <summary>Timezone the schedule uses</summary>
           </column>
           <column>
-            <name>initial_offset</name>
-            <type>integer</type>
-            <summary>Initial offset in seconds</summary>
-          </column>
-          <column>
             <name>first_run</name>
             <type>iso_time</type>
             <summary>Alias for first_time</summary>
@@ -18699,16 +17884,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           <e>in_use</e>
           <e>permissions</e>
           <o><e>user_tags</e></o>
-          <e>first_time</e>
-          <e>next_time</e>
           <e>icalendar</e>
           <e>timezone</e>
-          <e>timezone_abbrev</e>
-          <e>period</e>
-          <e>period_months</e>
-          <e>simple_period</e>
-          <e>duration</e>
-          <e>simple_duration</e>
           <o>
             <e>tasks</e>
           </o>
@@ -18822,16 +17999,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           </ele>
         </ele>
         <ele>
-          <name>first_time</name>
-          <summary>First time the task ran or will run</summary>
-          <pattern><t>iso_time</t></pattern>
-        </ele>
-        <ele>
-          <name>next_time</name>
-          <summary>The next time the task will run</summary>
-          <pattern><t>iso_time</t></pattern>
-        </ele>
-        <ele>
           <name>icalendar</name>
           <summary>iCalendar text containing the time data.</summary>
           <pattern>
@@ -18842,50 +18009,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           <name>timezone</name>
           <summary>The timezone that the schedule follows</summary>
           <pattern>timezone</pattern>
-        </ele>
-        <ele>
-          <name>timezone_abbrev</name>
-          <summary>The abbreviated name of the timezone</summary>
-          <pattern>text</pattern>
-        </ele>
-        <ele>
-          <name>period</name>
-          <summary>How often the task will run, in seconds</summary>
-          <pattern><t>integer</t></pattern>
-        </ele>
-        <ele>
-          <name>period_months</name>
-          <summary>How often the task will run, months portion</summary>
-          <pattern><t>integer</t></pattern>
-        </ele>
-        <ele>
-          <name>simple_period</name>
-          <summary>Simple representation of period, if available</summary>
-          <pattern>
-            text
-            <o><e>unit</e></o>
-          </pattern>
-          <ele>
-            <name>unit</name>
-            <pattern><t>time_unit</t></pattern>
-          </ele>
-        </ele>
-        <ele>
-          <name>duration</name>
-          <summary>How long the task will run for (0 for entire task)</summary>
-          <pattern><t>integer</t></pattern>
-        </ele>
-        <ele>
-          <name>simple_duration</name>
-          <summary>Simple representation of duration, if available</summary>
-          <pattern>
-            text
-            <o><e>unit</e></o>
-          </pattern>
-          <ele>
-            <name>unit</name>
-            <pattern><t>time_unit</t></pattern>
-          </ele>
         </ele>
         <ele>
           <name>tasks</name>
@@ -19043,28 +18166,26 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       </request>
       <response>
         <get_schedules_response status="200" status_text="OK">
-          <schedule id="c33864a9-d3fd-44b3-8717-972bfb01dfcf">
-            <name>Overnight</name>
-            <comment>3 hours, starting at 12h00.</comment>
-            <creation_time>2013-01-01T13:57:25+01:00</creation_time>
-            <modification_time>2013-01-18T12:07:36+01:00</modification_time>
-            <writable>0</writable>
-            <in_use>1</in_use>
-            <first_time>2010-07-29T00:00:00+02:00</first_time>
-            <next_time>2010-07-29T00:00:00+02:00</next_time>
-            <icalendar>[...]</icalendar>
-            <period>86400</period>
-            <period_months>0</period_months>
-            <simple_period>1<unit>day</unit></simple_period>
-            <duration>10800</duration>
-            <simple_duration>3<unit>hour</unit></simple_duration>
-            <timezone>Europe/Berlin</timezone>
-            <timezone_abbrev>CEST</timezone_abbrev>
-            <tasks>
-              <task id="d4daf4c4-25c7-40ac-87d3-38e489f34330">
-                <name>Task 1</name>
-              </task>
-            </tasks>
+          <schedule id="ddda859a-45be-4c58-85b3-517c66230232">
+            <owner>
+              <name>username</name>
+            </owner>
+            <name>Every day</name>
+            <comment></comment>
+            <creation_time>2020-06-03T16:27:05Z</creation_time>
+            <modification_time>2020-06-03T16:27:05Z</modification_time>
+            <writable>1</writable>
+            <in_use>0</in_use>
+            <permissions>
+              <permission>
+                <name>Everything</name>
+              </permission>
+            </permissions>
+            <icalendar>
+              <truncated>...</truncated>
+              DTSTART:20200603T162600Z DURATION:PT0S RRULE:FREQ=DAILY
+            </icalendar>
+            <timezone>UTC</timezone>
           </schedule>
           <truncate>...</truncate>
         </get_schedules_response>
@@ -20758,7 +19879,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
               <e>trend</e>
               <o><e>current_report</e></o>
               <o><e>last_report</e></o>
-              <any><e>reports</e></any>
               <o><e>average_duration</e></o>
               <e>result_count</e>
               <e>preferences</e>
@@ -20888,20 +20008,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           <summary>The percentage of the task that is complete</summary>
           <pattern>
             <t>integer</t>
-            <any><e>host_progress</e></any>
           </pattern>
-          <ele>
-            <name>host_progress</name>
-            <summary>Percentage complete for a particular host</summary>
-            <pattern>
-              <t>integer</t>
-              <e>host</e>
-            </pattern>
-            <ele>
-              <name>host</name>
-              <pattern>text</pattern>
-            </ele>
-          </ele>
         </ele>
         <ele>
           <name>alterable</name>
@@ -21096,12 +20203,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             </attrib>
             <e>name</e>
             <e>trash</e>
-            <o><e>first_time</e></o>
-            <o><e>next_time</e></o>
             <o><e>icalendar</e></o>
-            <o><e>period</e></o>
-            <o><e>period_months</e></o>
-            <o><e>duration</e></o>
             <o><e>timezone</e></o>
           </pattern>
           <ele>
@@ -21115,34 +20217,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <pattern><t>boolean</t></pattern>
           </ele>
           <ele>
-            <name>first_time</name>
-            <summary>The first time was or will be run</summary>
-            <pattern><t>iso_time</t></pattern>
-          </ele>
-          <ele>
-            <name>next_time</name>
-            <summary>The next date and time the schedule will be run in ISO format or "over".</summary>
-            <pattern><t>iso_time</t></pattern>
-          </ele>
-          <ele>
             <name>icalendar</name>
             <summary>iCalendar text containing the time data.</summary>
             <pattern><t>iso_time</t></pattern>
-          </ele>
-          <ele>
-            <name>period</name>
-            <summary>The time period between repeated runs of the schedule. Run only once if this and period_months is 0</summary>
-            <pattern><t>integer</t></pattern>
-          </ele>
-          <ele>
-            <name>period_months</name>
-            <summary>The number of months between repeated runs of the schedule. Run only once if this and period is 0</summary>
-            <pattern><t>integer</t></pattern>
-          </ele>
-          <ele>
-            <name>duration</name>
-            <summary>The maximum duration of the task in seconds or 0 for unlimited</summary>
-            <pattern><t>integer</t></pattern>
           </ele>
           <ele>
             <name>timezone</name>
@@ -21222,81 +20299,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <ele>
               <name>scan_end</name>
               <pattern><t>iso_time</t></pattern>
-            </ele>
-            <ele>
-              <name>result_count</name>
-              <summary>Result counts for this report</summary>
-              <pattern>
-                <e>debug</e>
-                <e>false_positive</e>
-                <e>log</e>
-                <e>info</e>
-                <e>warning</e>
-                <e>hole</e>
-              </pattern>
-              <ele>
-                <name>debug</name>
-                <pattern><t>integer</t></pattern>
-              </ele>
-              <ele>
-                <name>false_positive</name>
-                <pattern><t>integer</t></pattern>
-              </ele>
-              <ele>
-                <name>log</name>
-                <pattern><t>integer</t></pattern>
-              </ele>
-              <ele>
-                <name>info</name>
-                <pattern><t>integer</t></pattern>
-              </ele>
-              <ele>
-                <name>warning</name>
-                <pattern><t>integer</t></pattern>
-              </ele>
-              <ele>
-                <name>hole</name>
-                <pattern><t>integer</t></pattern>
-              </ele>
-            </ele>
-            <ele>
-              <name>severity</name>
-              <pattern><t>severity</t></pattern>
-              <summary>Maximum severity of the report</summary>
-            </ele>
-          </ele>
-        </ele>
-        <ele>
-          <name>reports</name>
-          <pattern>
-            <any><e>report</e></any>
-          </pattern>
-          <ele>
-            <name>report</name>
-            <pattern>
-              <attrib>
-                <name>id</name>
-                <type>uuid</type>
-                <required>1</required>
-              </attrib>
-              <e>timestamp</e>
-              <e>scan_end</e>
-              <e>scan_run_status</e>
-              <e>result_count</e>
-              <e>severity</e>
-            </pattern>
-            <ele>
-              <name>timestamp</name>
-              <pattern><t>iso_time</t></pattern>
-            </ele>
-            <ele>
-              <name>scan_end</name>
-              <pattern><t>iso_time</t></pattern>
-            </ele>
-            <ele>
-              <name>scan_run_status</name>
-              <summary>Run status of task scan</summary>
-              <pattern><t>task_status</t></pattern>
             </ele>
             <ele>
               <name>result_count</name>
@@ -21535,7 +20537,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <trend></trend>
             <schedule id="">
               <name></name>
-              <next_time>over</next_time>
+              <trash>0</trash>
             </schedule>
             <last_report>
               <report id="f0fdf522-276d-4893-9274-fb8699dc2270">
@@ -21611,7 +20613,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <trend></trend>
             <schedule id="">
               <name></name>
-              <next_time>over</next_time>
+              <trash>0</trash>
             </schedule>
             <last_report>
               <report id="2688e6c7-db29-4505-80f1-0fd4a09e1011">
@@ -21730,11 +20732,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
 			<report_count>1
 			<finished>1</finished></report_count>
 			<trend></trend>
-			<schedule id="">
-			  <name></name>
-			  <next_time>over</next_time>
-			  <trash>0</trash>
-			</schedule>
+            <schedule id="">
+              <name></name>
+              <trash>0</trash>
+            </schedule>
 			<last_report>
 			  <report id="5496f417-9b3b-4582-b450-c05ca99009d8">
 				<timestamp>2019-08-13T12:29:25+02:00</timestamp>
@@ -23598,6 +22599,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             <summary>Modification time</summary>
           </column>
           <column>
+            <name>min_qod</name>
+            <type>integer</type>
+            <summary>Minimum QoD of the vulnerability</summary>
+          </column>
+          <column>
             <name>results</name>
             <type>integer</type>
             <summary>Number of results</summary>
@@ -24093,8 +23099,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <response>
         <help_response status="200" status_text="OK">
     AUTHENTICATE           Authenticate with the manager.
-    COMMANDS               Run a list of commands.
-    CREATE_AGENT           Create an agent.
+    CREATE_ALERT           Create an alert.
     ...
     VERIFY_SCANNER         Verify a scanner.
         </help_response>
@@ -24129,61 +23134,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
             </protocol>
           </schema>
         </help_response>
-      </response>
-    </example>
-  </command>
-  <command>
-    <name>modify_agent</name>
-    <summary>Modify an existing agent</summary>
-    <description>
-      <p>
-        The client uses the modify_agent command to change an existing agent.
-      </p>
-    </description>
-    <pattern>
-      <attrib>
-        <name>agent_id</name>
-        <summary>ID of agent to modify</summary>
-        <type>uuid</type>
-        <required>1</required>
-      </attrib>
-      <o><e>name</e></o>
-      <o><e>comment</e></o>
-    </pattern>
-    <ele>
-      <name>comment</name>
-      <summary>Comment on agent</summary>
-      <pattern>text</pattern>
-    </ele>
-    <ele>
-      <name>name</name>
-      <summary>Name of agent</summary>
-      <pattern><t>name</t></pattern>
-    </ele>
-    <response>
-      <pattern>
-        <attrib>
-          <name>status</name>
-          <type>status</type>
-          <required>1</required>
-        </attrib>
-        <attrib>
-          <name>status_text</name>
-          <type>text</type>
-          <required>1</required>
-        </attrib>
-      </pattern>
-    </response>
-    <example>
-      <summary>Modify the comment on an agent</summary>
-      <request>
-        <modify_agent agent_id="c737f787-9473-410d-8956-9d7b57bdd11f">
-          <comment>Old Agent 1</comment>
-        </modify_agent>
-      </request>
-      <response>
-        <modify_agent_response status="200" status_text="OK">
-        </modify_agent_response>
       </response>
     </example>
   </command>
@@ -25060,7 +24010,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     </pattern>
     <ele>
       <name>active</name>
-      <summary>Seconds note will be active.  -1 on always, 0 off</summary>
+      <summary>Days note will be active. -1 on always, 0 off</summary>
       <pattern><t>integer</t></pattern>
     </ele>
     <ele>
@@ -25193,7 +24143,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     </pattern>
     <ele>
       <name>active</name>
-      <summary>Seconds override will be active.  -1 on always, 0 off</summary>
+      <summary>Days override will be active. -1 on always, 0 off</summary>
       <pattern><t>integer</t></pattern>
     </ele>
     <ele>
@@ -25453,58 +24403,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <response>
         <modify_port_list_response status="200" status_text="OK">
         </modify_port_list_response>
-      </response>
-    </example>
-  </command>
-  <command>
-    <name>modify_report</name>
-    <summary>Modify an existing report</summary>
-    <description>
-      <p>
-        The client uses the modify_report command to change an existing
-        report.
-      </p>
-    </description>
-    <pattern>
-      <attrib>
-        <name>report_id</name>
-        <summary>ID of report to modify</summary>
-        <type>uuid</type>
-        <required>1</required>
-      </attrib>
-      <e>comment</e>
-    </pattern>
-    <ele>
-      <name>comment</name>
-      <summary>The comment on the report</summary>
-      <pattern>
-        text
-      </pattern>
-    </ele>
-    <response>
-      <pattern>
-        <attrib>
-          <name>status</name>
-          <type>status</type>
-          <required>1</required>
-        </attrib>
-        <attrib>
-          <name>status_text</name>
-          <type>text</type>
-          <required>1</required>
-        </attrib>
-      </pattern>
-    </response>
-    <example>
-      <summary>Modify a report comment</summary>
-      <request>
-        <modify_report report_id="254cd3ef-bbe1-4d58-859d-21b8d0c046c6">
-          <comment>Monthly scan of the webserver.</comment>
-        </modify_report>
-      </request>
-      <response>
-        <modify_report_response status="200" status_text="OK">
-        </modify_report_response>
       </response>
     </example>
   </command>
@@ -25780,9 +24678,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       <o><e>comment</e></o>
       <o><e>name</e></o>
       <o><e>icalendar</e></o>
-      <o><e>first_time</e></o>
-      <o><e>duration</e></o>
-      <o><e>period</e></o>
       <o><e>timezone</e></o>
     </pattern>
     <ele>
@@ -25803,64 +24698,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
       </pattern>
     </ele>
     <ele>
-      <name>first_time</name>
-      <summary>First time the task will run. Missing subelements default to current system time</summary>
-      <pattern>
-        <o><e>day_of_month</e></o>
-        <o><e>hour</e></o>
-        <o><e>minute</e></o>
-        <o><e>month</e></o>
-        <o><e>year</e></o>
-      </pattern>
-      <ele>
-        <name>day_of_month</name>
-        <pattern>text</pattern>
-      </ele>
-      <ele>
-        <name>hour</name>
-        <pattern>text</pattern>
-      </ele>
-      <ele>
-        <name>minute</name>
-        <pattern>text</pattern>
-      </ele>
-      <ele>
-        <name>month</name>
-        <pattern>text</pattern>
-      </ele>
-      <ele>
-        <name>year</name>
-        <pattern>text</pattern>
-      </ele>
-    </ele>
-    <ele>
       <name>timezone</name>
       <summary>The timezone the schedule will follow. User's timezone is used if omitted</summary>
       <pattern>timezone</pattern>
-    </ele>
-    <ele>
-      <name>duration</name>
-      <summary>How long the task will run for</summary>
-      <pattern>
-        text
-        <o><e>unit</e></o>
-      </pattern>
-      <ele>
-        <name>unit</name>
-        <pattern><t>time_unit</t></pattern>
-      </ele>
-    </ele>
-    <ele>
-      <name>period</name>
-      <summary>How often the task will run</summary>
-      <pattern>
-        text
-        <o><e>unit</e></o>
-      </pattern>
-      <ele>
-        <name>unit</name>
-        <pattern><t>time_unit</t></pattern>
-      </ele>
     </ele>
     <response>
       <pattern>
@@ -26272,12 +25112,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
         <e>comment</e>
         <!-- Actually at least one, else command is empty. -->
         <any><e>alert</e></any>
+        <e>config</e>
         <e>name</e>
         <e>observers</e>
         <e>preferences</e>
         <e>schedule</e>
         <e>schedule_periods</e>
         <e>scanner</e>
+        <e>target</e>
         <e>file</e>
       </or>
     </pattern>
@@ -26291,6 +25133,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <ele>
       <name>alert</name>
       <summary>Task alert</summary>
+      <pattern>
+        <attrib>
+          <name>id</name>
+          <type>uuid</type>
+          <required>1</required>
+        </attrib>
+      </pattern>
+    </ele>
+    <ele>
+      <name>config</name>
+      <summary>The scan configuration used by the task</summary>
       <pattern>
         <attrib>
           <name>id</name>
@@ -26354,6 +25207,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     <ele>
       <name>scanner</name>
       <summary>Task scanner</summary>
+      <pattern>
+        <attrib>
+          <name>id</name>
+          <type>uuid</type>
+          <required>1</required>
+        </attrib>
+      </pattern>
+    </ele>
+    <ele>
+      <name>target</name>
+      <summary>The hosts scanned by the task</summary>
       <pattern>
         <attrib>
           <name>id</name>
@@ -27118,53 +25982,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
     </example>
   </command>
   <command>
-    <name>verify_agent</name>
-    <summary>Verify an agent</summary>
-    <description>
-      <p>
-        The client uses the verify_agent command to verify the trust
-        level of an existing agent.
-      </p>
-      <p>
-        The Manager checks whether the signature of the agent currently
-        matches the agent.  This includes the agent installer file.
-        The Manager searches for the signature first in the feed, then
-        in the agent itself.
-      </p>
-    </description>
-    <pattern>
-      <attrib>
-        <name>agent_id</name>
-        <type>uuid</type>
-        <required>1</required>
-      </attrib>
-    </pattern>
-    <response>
-      <pattern>
-        <attrib>
-          <name>status</name>
-          <type>status</type>
-          <required>1</required>
-        </attrib>
-        <attrib>
-          <name>status_text</name>
-          <type>text</type>
-          <required>1</required>
-        </attrib>
-      </pattern>
-    </response>
-    <example>
-      <summary>Verify an agent</summary>
-      <request>
-        <verify_agent agent_id="267a3405-e84a-47da-97b2-5fa0d2e8995e">
-        </verify_agent>
-      </request>
-      <response>
-        <verify_agent_response status="200" status_text="OK"/>
-      </response>
-    </example>
-  </command>
-  <command>
     <name>verify_report_format</name>
     <summary>Verify a report format</summary>
     <description>
@@ -27256,6 +26073,92 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
   </command>
 
   <!-- Compatibility changes between versions. -->
+
+  <change>
+    <command>CREATE_TARGET, RUN_WIZARD</command>
+    <summary>Default port list removed from CREATE_TARGET</summary>
+    <description>
+      <p>
+        CREATE_TARGET will no longer automatically add a port list to the
+        target if a port list or range is not given.  In other words, it
+        is now mandatory to supply either PORT_LIST or PORT_RANGE.
+      </p>
+      <p>
+        As a side effect wizards that use CREATE_TARGET now provide their
+        own default if no "port_list_id" param is given: "All IANA assigned
+        TCP", which has UUID 33d0cd82-57c6-11e1-8ed1-406186ea4fc5.
+      </p>
+    </description>
+    <version>20.08</version>
+  </change>
+  <change>
+    <command>CREATE_SCHEDULE, GET_SCHEDULES, MODIFY_SCHEDULE</command>
+    <summary>Classic schedule elements removed</summary>
+    <description>
+      <p>
+        The classic schedule elements like PERIOD, DURATION and BYDAY have been
+        removed.  Schedules are now always created, defined and modified using
+        the newer iCalendar elements.
+      </p>
+      <p>
+        This includes the filter keyword 'initial_offset'.
+      </p>
+    </description>
+    <version>20.08</version>
+  </change>
+  <change>
+    <command>GET_REPORTS</command>
+    <summary>HOST_PROGRESS has been removed</summary>
+    <description>
+      <p>
+        The element HOST_PROGRESS in PROGRESS has been removed.
+      </p>
+      <p>
+        To be precise, it is no longer possible for the element to be included
+        in reports, as it was only sent for OTP scanners, and OTP scanners were
+        removed in an earlier version.
+      </p>
+    </description>
+    <version>20.08</version>
+  </change>
+  <change>
+    <command>GET_SETTINGS, MODIFY_SETTING</command>
+    <summary>Setting UUID extended</summary>
+    <description>
+      <p>
+        The UUID of setting 'Notes Top Dashboard Configuration' was changed
+        to a valid UUID.  The UUID was extended by one character from
+        'ce7b121-c609-47b0-ab57-fd020a0336f4'
+        to 'ce7b121-c609-47b0-ab57-fd020a0336f4a'.
+      </p>
+    </description>
+    <version>20.08</version>
+  </change>
+  <change>
+    <command>COMMANDS</command>
+    <summary>COMMANDS has been removed</summary>
+    <description>
+      <p>
+        The command COMMANDS has been removed.  It is no longer possible
+        to group multiple commands into a single command.  It is, however,
+        still possible to run multiple commands sequentially on the same
+        GMP connection.
+      </p>
+    </description>
+    <version>20.08</version>
+  </change>
+  <change>
+    <command>CREATE_AGENT, DELETE_AGENT, GET_AGENTS, MODIFY_AGENT, VERIFY_AGENT</command>
+    <summary>The agents facility has been removed</summary>
+    <description>
+      <p>
+        Agents have been removed entirely.  This includes all agents commands
+        and the filter setting 'Agents Filter' (UUID
+        4a1334c1-cb93-4a79-8634-103b0a50bdcd).
+      </p>
+    </description>
+    <version>20.08</version>
+  </change>
   <change>
     <command>GET_... Commands using filters</command>
     <summary>GET_... commands will default to "rows=-2" filter</summary>
@@ -27270,6 +26173,38 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
         "Rows Per Page" setting and the maximum amount of rows has to be
         requested explicitly with a "rows=-1" filter keyword or 
         (where available) the ignore_pagination option.
+      </p>
+    </description>
+    <version>9.0</version>
+  </change>
+  <change>
+    <command>GET_INFO</command>
+    <summary>Attribute "type" can not be "ALLINFO" anymore</summary>
+    <description>
+      <p>
+        The type "ALLINFO" is not supported anymore.
+      </p>
+    </description>
+    <version>20.08</version>
+  </change>
+  <change>
+    <command>MODIFY_REPORT</command>
+    <summary>The command MODIFY_REPORT is removed</summary>
+    <description>
+      <p>
+        The command "MODIFY_REPORT" is not supported anymore.
+      </p>
+    </description>
+    <version>20.08</version>
+  </change>
+
+  <change>
+    <command>CREATE_CONFIG</command>
+    <summary>NVT preferences without IDs are no longer accepted</summary>
+    <description>
+      <p>
+        Importing of old scan configs that do not specify an ID for their
+        NVT preferences is no longer allowed.
       </p>
     </description>
     <version>9.0</version>

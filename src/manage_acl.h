@@ -1,20 +1,19 @@
-/* Copyright (C) 2013-2018 Greenbone Networks GmbH
+/* Copyright (C) 2013-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -27,6 +26,34 @@
 
 #include "manage_sql.h"
 #include <glib.h>
+
+/**
+ * @brief Generate SQL for user permission check.
+ *
+ * @param[in]  resource  Resource.
+ */
+#define ACL_USER_MAY_OPTS(resource)                                          \
+  /* This part is 'Any resource type' case from acl_where_owned_user. */     \
+  /* */                                                                      \
+  /* Either the user is the owner. */                                        \
+  " ((" resource ".owner = opts.user_id)"                                    \
+  /* Or the user has super permission on all. */                             \
+  "  OR EXISTS (SELECT * FROM permissions_subject"                           \
+  "             WHERE name = 'Super'"                                        \
+  "             AND (resource = 0))"                                         \
+  /* Or the user has super permission on the owner, */                       \
+  /* (directly, via the role, or via the group).    */                       \
+  "  OR " resource ".owner IN (SELECT *"                                     \
+  "                            FROM super_on_users)"                         \
+  /* Or there's a resource-level permission. */                              \
+  /* */                                                                      \
+  /* This part is permission_clause in acl_where_owned_user. */              \
+  "  OR EXISTS (SELECT id FROM permissions_subject"                          \
+  "             WHERE resource = " resource ".id"                            \
+  "             AND resource_type = opts.type"                               \
+  "             AND resource_location = " G_STRINGIFY (LOCATION_TABLE)       \
+  /*            Any permission. */                                           \
+  "             AND (t ())))"
 
 /**
  * @brief Generate SQL for user permission check.
@@ -97,6 +124,9 @@
   " ((" ACL_IS_GLOBAL () ")"                                   \
   "  OR (owner = (SELECT users.id FROM users"                  \
   "               WHERE users.uuid = '%s')))"
+
+command_t *
+acl_commands (gchar **);
 
 int
 acl_user_may (const char *);

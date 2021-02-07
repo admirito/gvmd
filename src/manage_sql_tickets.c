@@ -1,26 +1,19 @@
-/* GVM
- * $Id$
- * Description: GVM management layer SQL: Tickets.
+/* Copyright (C) 2018-2020 Greenbone Networks GmbH
  *
- * Authors:
- * Matthew Mundell <matthew.mundell@greenbone.net>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Copyright:
- * Copyright (C) 2018 Greenbone Networks GmbH
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -119,8 +112,9 @@ ticket_status_integer (const char *status)
      "                LIMIT 1)"                                               \
      "       AND result_new_severities.user"                                  \
      "           = (SELECT users.id"                                          \
-     "              FROM current_credentials, users"                          \
-     "              WHERE current_credentials.uuid = users.uuid)"             \
+     "              FROM users"                                               \
+     "              WHERE users.uuid"                                         \
+     "                    = (SELECT current_setting ('gvmd.user.uuid')))"     \
      "       AND result_new_severities.override = 1"                          \
      "       AND result_new_severities.dynamic = 0"                           \
      "       LIMIT 1)"                                                        \
@@ -707,7 +701,7 @@ trash_ticket_writable (ticket_t ticket)
  * @param[in]  ultimate   Whether to remove entirely, or to trashcan.
  *
  * @return 0 success, 1 fail because ticket is in use, 2 failed to find ticket,
- *         3 predefined ticket, 99 permission denied, -1 error.
+ *         99 permission denied, -1 error.
  */
 int
 delete_ticket (const char *ticket_id, int ultimate)
@@ -1051,7 +1045,8 @@ create_ticket (const char *comment, const char *result_id,
 
   /* Give assigned user permission to access ticket and ticket's task. */
 
-  if (create_permission_internal ("modify_ticket",
+  if (create_permission_internal (1,
+                                  "modify_ticket",
                                   "Automatically created for ticket",
                                   NULL,
                                   new_ticket_id,
@@ -1064,7 +1059,8 @@ create_ticket (const char *comment, const char *result_id,
     }
 
   task_uuid (task, &task_id);
-  if (create_permission_internal ("get_tasks",
+  if (create_permission_internal (1,
+                                  "get_tasks",
                                   "Automatically created for ticket",
                                   NULL,
                                   task_id,
@@ -1364,7 +1360,8 @@ modify_ticket (const gchar *ticket_id, const gchar *comment,
 
           /* Ensure that the user can access the ticket and task. */
 
-          if (create_permission_internal ("modify_ticket",
+          if (create_permission_internal (1,
+                                          "modify_ticket",
                                           "Automatically created for ticket",
                                           NULL,
                                           ticket_id,
@@ -1382,7 +1379,8 @@ modify_ticket (const gchar *ticket_id, const gchar *comment,
               char *task_id;
 
               task_uuid (task, &task_id);
-              if (create_permission_internal ("get_tasks",
+              if (create_permission_internal (1,
+                                              "get_tasks",
                                               "Automatically created for"
                                               " ticket",
                                               NULL,
@@ -1474,7 +1472,7 @@ check_tickets (task_t task)
     {
       g_warning ("%s: failed to get last report of task %llu,"
                  " skipping ticket check",
-                 __FUNCTION__,
+                 __func__,
                  task);
       return;
     }

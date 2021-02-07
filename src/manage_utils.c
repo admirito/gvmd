@@ -1,20 +1,19 @@
-/* Copyright (C) 2014-2018 Greenbone Networks GmbH
+/* Copyright (C) 2014-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -52,84 +51,6 @@
  */
 
 /**
- * @brief Get the offset from UTC of a timezone at a particular time.
- *
- * @param[in]  zone  Timezone, or NULL for UTC.
- * @param[in]  time  Time.
- *
- * @return Seconds east of UTC.
- */
-static long
-time_offset (const char *zone, time_t time)
-{
-  gchar *tz;
-  struct tm *time_broken;
-  int mins;
-  char buf[100];
-
-  if (zone == NULL || strcmp (zone, "UTC") == 0)
-    return 0;
-
-  /* Store current TZ. */
-  tz = getenv ("TZ") ? g_strdup (getenv ("TZ")) : NULL;
-
-  if (setenv ("TZ", zone, 1) == -1)
-    {
-      g_warning ("%s: Failed to switch to timezone", __FUNCTION__);
-      if (tz != NULL)
-        setenv ("TZ", tz, 1);
-      g_free (tz);
-      return 0;
-    }
-
-  tzset ();
-
-  time_broken = localtime (&time);
-  if (time_broken == NULL)
-    {
-      g_warning ("%s: localtime failed", __FUNCTION__);
-      if (tz != NULL)
-        setenv ("TZ", tz, 1);
-      g_free (tz);
-      return 0;
-    }
-  if (strftime (buf, 100, "%z", time_broken) == 0)
-    {
-      g_warning ("%s: Failed to format timezone", __FUNCTION__);
-      if (tz != NULL)
-        setenv ("TZ", tz, 1);
-      g_free (tz);
-      return 0;
-    }
-
-  if (strlen (buf) >= 3)
-    {
-      mins = atoi (buf);
-      mins /= 100;
-      mins *= 60;
-      mins += atoi (buf + 3);
-    }
-  else
-    mins = 0;
-
-  /* Revert to stored TZ. */
-  if (tz)
-    {
-      if (setenv ("TZ", tz, 1) == -1)
-        {
-          g_warning ("%s: Failed to switch to original TZ", __FUNCTION__);
-          g_free (tz);
-          return mins * 60;
-        }
-    }
-  else
-    unsetenv ("TZ");
-
-  g_free (tz);
-  return mins * 60;
-}
-
-/**
  * @brief Get the current offset from UTC of a timezone.
  *
  * @param[in]  zone  Timezone, or NULL for UTC.
@@ -152,7 +73,7 @@ current_offset (const char *zone)
 
   if (setenv ("TZ", zone, 1) == -1)
     {
-      g_warning ("%s: Failed to switch to timezone", __FUNCTION__);
+      g_warning ("%s: Failed to switch to timezone", __func__);
       if (tz != NULL)
         setenv ("TZ", tz, 1);
       g_free (tz);
@@ -165,7 +86,7 @@ current_offset (const char *zone)
   now_broken = localtime (&now);
   if (now_broken == NULL)
     {
-      g_warning ("%s: localtime failed", __FUNCTION__);
+      g_warning ("%s: localtime failed", __func__);
       if (tz != NULL)
         setenv ("TZ", tz, 1);
       g_free (tz);
@@ -173,7 +94,7 @@ current_offset (const char *zone)
     }
   if (setenv ("TZ", "UTC", 1) == -1)
     {
-      g_warning ("%s: Failed to switch to UTC", __FUNCTION__);
+      g_warning ("%s: Failed to switch to UTC", __func__);
       if (tz != NULL)
         setenv ("TZ", tz, 1);
       g_free (tz);
@@ -187,7 +108,7 @@ current_offset (const char *zone)
     {
       if (setenv ("TZ", tz, 1) == -1)
         {
-          g_warning ("%s: Failed to switch to original TZ", __FUNCTION__);
+          g_warning ("%s: Failed to switch to original TZ", __func__);
           g_free (tz);
           return 0;
         }
@@ -197,98 +118,6 @@ current_offset (const char *zone)
 
   g_free (tz);
   return offset;
-}
-
-
-/**
- * @brief Code fragment for months_between.
- */
-#define MONTHS_WITHIN_YEAR()                                 \
-  (same_month                                                \
-    ? 0                                                      \
-    : ((broken2->tm_mon - broken1.tm_mon)                    \
-       - (same_day                                           \
-           ? (same_hour                                      \
-               ? (same_minute                                \
-                   ? (same_second                            \
-                       ? 0                                   \
-                       : (broken2->tm_sec < broken1.tm_sec)) \
-                   : (broken2->tm_min < broken1.tm_min))     \
-               : (broken2->tm_hour < broken1.tm_hour))       \
-           : (broken2->tm_mday < broken1.tm_mday))))
-
-/**
- * @brief Count number of full months between two times.
- *
- * There are two full months between 0h00.00 1 February 2010 and 0h00.00 1
- * April 2010.  There is one full month between 0h00.00 1 February 2010 and
- * 23h59.59 31 March 2010.
- *
- * @param[in]  time1  Earlier time.
- * @param[in]  time2  Later time.
- *
- * @return Number of full months between time1 and time2.
- */
-static time_t
-months_between (time_t time1, time_t time2)
-{
-  struct tm broken1, *broken2;
-  int same_year, same_month, same_day, same_hour, same_minute, same_second;
-  int month1_less, day1_less, hour1_less, minute1_less;
-  int second1_less;
-
-  assert (time1 <= time2);
-
-  broken2 = localtime (&time2);
-  if ((localtime_r (&time1, &broken1) == NULL)
-      || (broken2 == NULL))
-    {
-      g_warning ("%s: localtime failed", __FUNCTION__);
-      return 0;
-    }
-
-  same_year = (broken1.tm_year == broken2->tm_year);
-  same_month = (broken1.tm_mon == broken2->tm_mon);
-  same_day = (broken1.tm_mday == broken2->tm_mday);
-  same_hour = (broken1.tm_hour == broken2->tm_hour);
-  same_minute = (broken1.tm_min == broken2->tm_min);
-  same_second = (broken1.tm_sec == broken2->tm_sec);
-
-  month1_less = (broken1.tm_mon < broken2->tm_mon);
-  day1_less = (broken1.tm_mday < broken2->tm_mday);
-  hour1_less = (broken1.tm_hour < broken2->tm_hour);
-  minute1_less = (broken1.tm_min < broken2->tm_min);
-  second1_less = (broken1.tm_sec < broken2->tm_sec);
-
-  return
-    (same_year
-      ? MONTHS_WITHIN_YEAR ()
-      : ((month1_less
-          || (same_month
-              && (day1_less
-                  || (same_day
-                      && (hour1_less
-                          || (same_hour
-                              && (minute1_less
-                                  || (same_minute
-                                      && second1_less))))))))
-         ? (/* time1 is earlier in the year than time2. */
-            ((broken2->tm_year - broken1.tm_year) * 12)
-            + MONTHS_WITHIN_YEAR ())
-         : (/* time1 is later in the year than time2. */
-            ((broken2->tm_year - broken1.tm_year - 1) * 12)
-            /* Months left in year of time1. */
-            + (11 - broken1.tm_mon)
-            /* Months past in year of time2. */
-            + broken2->tm_mon
-            /* Possible extra month due to position in month of each time. */
-            + (day1_less
-               || (same_day
-                   && (hour1_less
-                       || (same_hour
-                           && (minute1_less
-                               || (same_minute
-                                   && second1_less)))))))));
 }
 
 /**
@@ -305,195 +134,11 @@ add_months (time_t time, int months)
   struct tm *broken = localtime (&time);
   if (broken == NULL)
     {
-      g_warning ("%s: localtime failed", __FUNCTION__);
+      g_warning ("%s: localtime failed", __func__);
       return 0;
     }
   broken->tm_mon += months;
   return mktime (broken);
-}
-
-/**
- * @brief Calculate day of week corresponding to a time.
- *
- * @param[in]  time  Time.
- *
- * @return Day of week mask: 1 Monday, 2 Tuesday, 4 Wednesday...
- */
-static int
-day_of_week (time_t time)
-{
-  struct tm *tm;
-  int sunday_first;
-
-  tm = gmtime (&time);
-  if (tm == NULL)
-    {
-      g_warning ("%s: gmtime failed", __FUNCTION__);
-      return 0;
-    }
-
-  sunday_first = tm->tm_wday;     /* Sunday 0, Monday 1, ... */
-  return 1 << ((sunday_first + 6) % 7);
-}
-
-/**
- * @brief Get days till next occurrence.
- *
- * @param[in] day_of_week  Day of week flag: 1 Monday, 2 Tuesday, 4 Wednesday...
- * @param[in] byday        Byday mask.
- *
- * @return Number of days to next day flagged in byday.  -1 if no next day.
- */
-static int
-next_day (int day_of_week, int byday)
-{
-  int days;
-
-  days = 0;
-  while (days < 7)
-    {
-      if (byday & day_of_week)
-        return days;
-      if (day_of_week == (1 << 6))
-        /* Roll around to Monday. */
-        day_of_week = 1;
-      else
-        day_of_week = day_of_week << 1;
-      days++;
-    }
-  return -1;
-}
-
-/**
- * @brief Number of seconds in a day.
- */
-#define SECONDS_PER_DAY 86400
-
-/**
- * @brief Calculate the next time from now given a start time and a period.
- *
- * @param[in] first           The first time.
- * @param[in] period          The period in seconds.
- * @param[in] period_months   The period in months.
- * @param[in] byday           Days of week to run schedule.
- * @param[in] zone            The timezone to use.
- * @param[in] periods_offset  Number of periods to offset.
- *                            e.g. 0 = next time, -1 current/last time
- *
- * @return  the next time a schedule with the given times is due.
- */
-time_t
-next_time (time_t first, int period, int period_months, int byday,
-           const char* zone, int periods_offset)
-{
-  int periods_diff;
-  time_t now;
-  long offset_diff;
-
-  if (zone)
-    {
-      long first_offset_val, current_offset_val;
-
-      first_offset_val = time_offset (zone, first);
-      current_offset_val = current_offset (zone);
-      offset_diff = current_offset_val - first_offset_val;
-    }
-  else
-    {
-      offset_diff = 0;
-    }
-
-  now = time (NULL);
-
-  if (first >= now)
-    return first;
-
-  if (byday)
-    {
-      time_t next_day_multiple;
-
-      assert (now > first);
-
-      g_debug ("%s: byday: %i", __FUNCTION__, byday);
-
-      /* TODO does this need timezone offsetting? */
-
-      /* The next multiple of a day after the first time, but "now" at the
-       * earliest.  So if now is at the same time as the first time, this will
-       * be now.  If now is an hour after the first time, this will be one
-       * day after the first time.  If now is 7 days and 3 seconds after the
-       * first time, this will be 8 days after the first time.
-       *
-       * Simply: the next possible time on a daily schedule. */
-      next_day_multiple = now + (SECS_PER_DAY - ((now - first) % SECS_PER_DAY));
-
-      g_debug ("%s: next_day_multiple: %lli",
-               __FUNCTION__,
-               (long long) next_day_multiple);
-      g_debug ("%s: day_of_week (next_day_multiple): %i",
-               __FUNCTION__,
-               day_of_week (next_day_multiple));
-      g_debug ("%s: next_day (^, byday): %i",
-               __FUNCTION__,
-               next_day (day_of_week (next_day_multiple), byday));
-
-      /* Return the next possible daily time, offset according the next day of
-       * the week that the schedule must run on. */
-      return next_day_multiple
-             + next_day (day_of_week (next_day_multiple), byday)
-               * SECONDS_PER_DAY;
-    }
-
-  if (period > 0)
-    {
-      return first
-              + ((((now - first + offset_diff) / period) + 1 + periods_offset)
-                 * period)
-              - offset_diff;
-    }
-  else if (period_months > 0)
-    {
-      time_t ret;
-      gchar *tz;
-
-      /* Store current TZ. */
-      tz = getenv ("TZ") ? g_strdup (getenv ("TZ")) : NULL;
-
-      if (setenv ("TZ", zone ? zone : "UTC", 1) == -1)
-        {
-          g_warning ("%s: Failed to switch to timezone", __FUNCTION__);
-          if (tz != NULL)
-            setenv ("TZ", tz, 1);
-          g_free (tz);
-          return 0;
-        }
-
-      tzset ();
-
-      /* Calculate new time */
-      periods_diff = months_between (first, now) / period_months;
-      periods_diff += periods_offset;
-      ret = add_months (first, (periods_diff + 1) * period_months);
-      ret -= offset_diff;
-
-      /* Revert to stored TZ. */
-      if (tz)
-        {
-          if (setenv ("TZ", tz, 1) == -1)
-            g_warning ("%s: Failed to switch to original TZ", __FUNCTION__);
-
-          g_free (tz);
-        }
-      else
-        unsetenv ("TZ");
-
-      return ret;
-    }
-  else if (periods_offset == -1)
-    {
-      return first;
-    }
-  return 0;
 }
 
 /**
@@ -511,28 +156,46 @@ manage_count_hosts_max (const char *given_hosts, const char *exclude_hosts,
 {
   int count;
   gvm_hosts_t *hosts;
+  gchar *clean_hosts;
+  
+  clean_hosts = clean_hosts_string (given_hosts);
 
-  hosts = gvm_hosts_new_with_max (given_hosts, max_hosts);
+  hosts = gvm_hosts_new_with_max (clean_hosts, max_hosts);
   if (hosts == NULL)
-    return -1;
+    {
+      g_free (clean_hosts);
+      return -1;
+    }
 
   if (exclude_hosts)
     {
+      gchar *clean_exclude_hosts;
+
+      clean_exclude_hosts = clean_hosts_string (exclude_hosts);
       if (gvm_hosts_exclude_with_max (hosts,
-                                      exclude_hosts,
+                                      clean_exclude_hosts,
                                       max_hosts)
           < 0)
-        return -1;
+        {
+          g_free (clean_hosts);
+          g_free (clean_exclude_hosts);
+          return -1;
+        }
+      g_free (clean_exclude_hosts);
     }
 
   count = gvm_hosts_count (hosts);
   gvm_hosts_free (hosts);
+  g_free (clean_hosts);
 
   return count;
 }
 
 /**
  * @brief Get the minimum severity for a severity level and class.
+ *
+ * This function has a database equivalent in manage_pg_server.c.
+ * These two functions must stay in sync.
  *
  * @param[in] level  The name of the severity level.
  * @param[in] class  The severity class, NULL to get from current user setting.
@@ -573,6 +236,9 @@ level_min_severity (const char *level, const char *class)
 
 /**
  * @brief Get the minimum severity for a severity level and class.
+ *
+ * This function has a database equivalent in manage_pg_server.c.
+ * These two functions must stay in sync.
  *
  * @param[in] level  The name of the severity level.
  * @param[in] class  The severity class.
@@ -658,8 +324,7 @@ valid_db_resource_type (const char* type)
   if (type == NULL)
     return 0;
 
-  return (strcasecmp (type, "agent") == 0)
-         || (strcasecmp (type, "alert") == 0)
+  return (strcasecmp (type, "alert") == 0)
          || (strcasecmp (type, "config") == 0)
          || (strcasecmp (type, "cpe") == 0)
          || (strcasecmp (type, "credential") == 0)
@@ -712,30 +377,22 @@ blank_control_chars (char *string)
  *
  * @param[in]  tzid  The tzid or Olson city name.
  *
- * @return The built-in timezone if found or UTC otherwise.
+ * @return The built-in timezone if found, else NULL.
  */
-static icaltimezone*
-icalendar_timezone_from_tzid (const char *tzid)
+icaltimezone*
+icalendar_timezone_from_string (const char *tzid)
 {
-  icaltimezone *tz;
-
   if (tzid)
     {
-      /* tzid is not NULL, try to get a libical built-in. */
+      icaltimezone *tz;
+
       tz = icaltimezone_get_builtin_timezone_from_tzid (tzid);
       if (tz == NULL)
-        {
-          tz = icaltimezone_get_builtin_timezone (tzid);
-          if (tz == NULL)
-            /* tzid is not a built-in timezone, fall back to UTC. */
-            tz = icaltimezone_get_utc_timezone ();
-        }
+        tz = icaltimezone_get_builtin_timezone (tzid);
+      return tz;
     }
-  else
-    /* tzid is NULL, fall back to UTC. */
-    tz = icaltimezone_get_utc_timezone ();
 
-  return tz;
+  return NULL;
 }
 
 /**
@@ -877,13 +534,14 @@ icalendar_from_old_schedule_data (time_t first_time,
  * @brief Simplify an VEVENT iCal component.
  *
  * @param[in]  vevent          The VEVENT component to simplify.
+ * @param[in]  zone            Timezone.
  * @param[out] error           Output of iCal errors or warnings.
  * @param[out] warnings_buffer GString buffer to write warnings to.
  *
  * @return  A newly allocated, simplified VEVENT component.
  */
 static icalcomponent *
-icalendar_simplify_vevent (icalcomponent *vevent,
+icalendar_simplify_vevent (icalcomponent *vevent, icaltimezone *zone,
                            gchar **error, GString *warnings_buffer)
 {
   icalproperty *error_prop;
@@ -917,8 +575,7 @@ icalendar_simplify_vevent (icalcomponent *vevent,
       return NULL;
     }
 
-  dtstart = icaltime_convert_to_zone (original_dtstart,
-                                      icaltimezone_get_utc_timezone ());
+  dtstart = icaltime_convert_to_zone (original_dtstart, zone);
 
   // Get duration or try to calculate it from end time
   duration = icalcomponent_get_duration (vevent);
@@ -933,12 +590,11 @@ icalendar_simplify_vevent (icalcomponent *vevent,
         }
       else
         {
-          icaltimetype dtend_utc;
-          dtend_utc
-            = icaltime_convert_to_zone (original_dtend,
-                                        icaltimezone_get_utc_timezone ());
+          icaltimetype dtend_zone;
 
-          duration = icaltime_subtract (dtend_utc, dtstart);
+          dtend_zone = icaltime_convert_to_zone (original_dtend, zone);
+
+          duration = icaltime_subtract (dtend_zone, dtstart);
         }
     }
 
@@ -987,14 +643,12 @@ icalendar_simplify_vevent (icalcomponent *vevent,
       if (icalperiodtype_is_null_period (old_datetimeperiod.period))
         {
           new_datetimeperiod.time
-            = icaltime_convert_to_zone (old_datetimeperiod.time,
-                                        icaltimezone_get_utc_timezone ());
+            = icaltime_convert_to_zone (old_datetimeperiod.time, zone);
         }
       else
         {
           new_datetimeperiod.time
-            = icaltime_convert_to_zone (old_datetimeperiod.period.start,
-                                        icaltimezone_get_utc_timezone ());
+            = icaltime_convert_to_zone (old_datetimeperiod.period.start, zone);
         }
       new_rdate = icalproperty_new_rdate (new_datetimeperiod);
       icalcomponent_add_property (vevent_simplified, new_rdate);
@@ -1013,8 +667,7 @@ icalendar_simplify_vevent (icalcomponent *vevent,
 
       original_exdate_time = icalproperty_get_exdate (exdate_prop);
       exdate_time
-        = icaltime_convert_to_zone (original_exdate_time,
-                                    icaltimezone_get_utc_timezone ());
+        = icaltime_convert_to_zone (original_exdate_time, zone);
 
       prop_clone = icalproperty_new_exdate (exdate_time);
       icalcomponent_add_property (vevent_simplified, prop_clone);
@@ -1030,7 +683,7 @@ icalendar_simplify_vevent (icalcomponent *vevent,
   uid = NULL;
 
   // Set timestamp
-  dtstamp = icaltime_current_time_with_zone (icaltimezone_get_utc_timezone ());
+  dtstamp = icaltime_current_time_with_zone (zone);
   icalcomponent_set_dtstamp (vevent_simplified, dtstamp);
 
   return vevent_simplified;
@@ -1055,12 +708,14 @@ icalendar_simplify_vevent (icalcomponent *vevent,
  * @brief Creates a new, simplified VCALENDAR component from a string.
  *
  * @param[in]  ical_string  The ical_string to create the component from.
+ * @param[in]  zone         Timezone.
  * @param[out] error        Output of iCal errors or warnings.
  *
  * @return  A newly allocated, simplified VCALENDAR component.
  */
 icalcomponent *
-icalendar_from_string (const char *ical_string, gchar **error)
+icalendar_from_string (const char *ical_string, icaltimezone *zone,
+                       gchar **error)
 {
   icalcomponent *ical_new, *ical_parsed;
   icalproperty *error_prop;
@@ -1099,6 +754,8 @@ icalendar_from_string (const char *ical_string, gchar **error)
   icalcomponent_add_property (ical_new,
                               icalproperty_new_prodid (GVM_PRODID));
 
+  icalcomponent_add_component (ical_new, icaltimezone_get_component (zone));
+
   switch (icalcomponent_isa (ical_parsed))
     {
       case ICAL_NO_COMPONENT:
@@ -1124,6 +781,7 @@ icalendar_from_string (const char *ical_string, gchar **error)
                     {
                       new_vevent = icalendar_simplify_vevent
                                       (subcomp,
+                                       zone,
                                        error,
                                        warnings_buffer);
                       if (new_vevent == NULL)
@@ -1181,6 +839,7 @@ icalendar_from_string (const char *ical_string, gchar **error)
           icalcomponent *new_vevent;
 
           new_vevent = icalendar_simplify_vevent (ical_parsed,
+                                                  zone,
                                                   error,
                                                   warnings_buffer);
           if (new_vevent == NULL)
@@ -1469,7 +1128,7 @@ icalendar_next_time_from_recurrence (struct icalrecurrencetype recurrence,
 {
   icalrecur_iterator *recur_iter;
   icaltimetype recur_time, prev_time, next_time;
-  time_t rrule_time, rdates_time;
+  time_t rdates_time;
 
   // Start iterating over rule-based times
   recur_iter = icalrecur_iterator_new (recurrence, dtstart);
@@ -1496,7 +1155,7 @@ icalendar_next_time_from_recurrence (struct icalrecurrencetype recurrence,
        *  DTSTART is excluded by EXDATEs.  */
 
       while (icaltime_is_null_time (recur_time) == FALSE
-            && icalendar_time_matches_array (recur_time, exdates))
+             && icalendar_time_matches_array (recur_time, exdates))
         {
           recur_time = icalrecur_iterator_next (recur_iter);
         }
@@ -1514,7 +1173,7 @@ icalendar_next_time_from_recurrence (struct icalrecurrencetype recurrence,
       /* Iterate over rule-based recurrences up to first time after
        * reference time */
       while (icaltime_is_null_time (recur_time) == FALSE
-            && icaltime_compare (recur_time, reference_time) < 0)
+             && icaltime_compare (recur_time, reference_time) < 0)
         {
           if (icalendar_time_matches_array (recur_time, exdates) == FALSE)
             prev_time = recur_time;
@@ -1524,7 +1183,7 @@ icalendar_next_time_from_recurrence (struct icalrecurrencetype recurrence,
 
       // Skip further ahead if last recurrence time is in EXDATEs
       while (icaltime_is_null_time (recur_time) == FALSE
-            && icalendar_time_matches_array (recur_time, exdates))
+             && icalendar_time_matches_array (recur_time, exdates))
         {
           recur_time = icalrecur_iterator_next (recur_iter);
         }
@@ -1541,6 +1200,8 @@ icalendar_next_time_from_recurrence (struct icalrecurrencetype recurrence,
   //  and return the appropriate time.
   if (periods_offset == -1)
     {
+      time_t rrule_time;
+
       rrule_time = icaltime_as_timet_with_zone (prev_time, tz);
       if (rdates_time == 0 || rrule_time - rdates_time > 0)
         return rrule_time;
@@ -1549,6 +1210,8 @@ icalendar_next_time_from_recurrence (struct icalrecurrencetype recurrence,
     }
   else
     {
+      time_t rrule_time;
+
       rrule_time = icaltime_as_timet_with_zone (next_time, tz);
       if (rdates_time == 0 || rrule_time - rdates_time < 0)
         return rrule_time;
@@ -1602,9 +1265,13 @@ icalendar_next_time_from_vcalendar (icalcomponent *vcalendar,
   if (icaltime_is_null_time (dtstart))
     return 0;
 
-  tz = (icaltimezone*)(icaltime_get_timezone (dtstart));
+  tz = (icaltimezone*) icaltime_get_timezone (dtstart);
   if (tz == NULL)
-    tz = icalendar_timezone_from_tzid (default_tzid);
+    {
+      tz = icalendar_timezone_from_string (default_tzid);
+      if (tz == NULL)
+        tz = icaltimezone_get_utc_timezone ();
+    }
 
   dtstart_with_tz = dtstart;
   // Set timezone in case the original DTSTART did not have any set.
@@ -1613,6 +1280,7 @@ icalendar_next_time_from_vcalendar (icalcomponent *vcalendar,
   // Get current time
   ical_now = icaltime_current_time_with_zone (tz);
   // Set timezone explicitly because icaltime_current_time_with_zone doesn't.
+  icaltime_set_timezone (&ical_now, tz);
   if (ical_now.zone == NULL)
     {
       ical_now.zone = tz;
@@ -1709,13 +1377,13 @@ icalendar_duration_from_vcalendar (icalcomponent *vcalendar)
  *  work reliably.
  *
  * @param[in]  vcalendar       The VCALENDAR component to get the time from.
- * @param[in]  default_tzid    Timezone id to use if none is set in the iCal.
+ * @param[in]  default_tz      Timezone to use if none is set in the iCal.
  *
  * @return The first time as a time_t.
  */
 time_t
 icalendar_first_time_from_vcalendar (icalcomponent *vcalendar,
-                                     const char *default_tzid)
+                                     icaltimezone *default_tz)
 {
   icalcomponent *vevent;
   icaltimetype dtstart;
@@ -1738,10 +1406,87 @@ icalendar_first_time_from_vcalendar (icalcomponent *vcalendar,
   if (icaltime_is_null_time (dtstart))
     return 0;
 
-  tz = (icaltimezone*)(icaltime_get_timezone (dtstart));
+  tz = (icaltimezone*) icaltime_get_timezone (dtstart);
   if (tz == NULL)
-    tz = icalendar_timezone_from_tzid (default_tzid);
+    tz = default_tz;
 
   // Convert to time_t
   return icaltime_as_timet_with_zone (dtstart, tz);
+}
+
+/**
+ * @brief Cleans up a hosts string, removing extra zeroes from IPv4 addresses.
+ *
+ * @param[in]  hosts  The hosts string to clean.
+ *
+ * @return  The newly allocated, cleaned up hosts string.
+ */
+gchar *
+clean_hosts_string (const char *hosts)
+{
+  gchar **hosts_split, **item;
+  GString *new_hosts;
+  GRegex *ipv4_match_regex, *ipv4_replace_regex;
+
+  if (hosts == NULL)
+    return NULL;
+
+  /*
+   * Regular expression for matching candidates for IPv4 addresses
+   * (four groups of digits separated by a dot "."),
+   * with optional extensions for ranges:
+   * - Another IP address candidate, separated with a hyphen "-"
+   *   (e.g. "192.168.123.001-192.168.123.005)"
+   * - A final group of digits, separated with a hyphen "-"
+   *   (short form address range, e.g. "192.168.123.001-005)
+   * - A final group of digits, separated with a slash "-"
+   *   (CIDR notation, e.g. "192.168.123.001/027)
+   */
+  ipv4_match_regex
+    = g_regex_new ("^[0-9]+(?:\\.[0-9]+){3}"
+                   "(?:\\/[0-9]+|-[0-9]+(?:(?:\\.[0-9]+){3})?)?$",
+                   0, 0, NULL);
+  /*
+   * Regular expression matching leading zeroes in groups of digits
+   * separated by dots or other characters.
+   * First line matches zeroes before non-zero numbers, e.g. "000" in "000120"
+   * Second line matches groups of all zeroes except one, e.g. "00" in "000"
+   */
+  ipv4_replace_regex 
+    = g_regex_new ("(?<=\\D|^)(0+)(?=(?:(?:[1-9]\\d*)(?:\\D|$)))"
+                   "|(?<=\\D|^)(0+)(?=0(?:\\D|$))",
+                   0, 0, NULL);
+  new_hosts = g_string_new ("");
+
+  hosts_split = g_strsplit (hosts, ",", -1);
+  item = hosts_split;
+  while (*item)
+    {
+      g_strstrip (*item);
+      if (g_regex_match (ipv4_match_regex, *item, 0, 0))
+        {
+          // IPv4 address, address range or CIDR notation
+          gchar *new_item;
+          /* Remove leading zeroes in each group of digits by replacing them
+           * with empty strings,
+           * e.g. "000.001.002.003-004" becomes "0.1.2.3-4"
+           */
+          new_item = g_regex_replace (ipv4_replace_regex,
+                                      *item, -1, 0, "", 0, NULL);
+          g_string_append (new_hosts, new_item);
+          g_free (new_item);
+        }
+      else
+        g_string_append (new_hosts, *item);
+
+      if (*(item + 1))
+        g_string_append (new_hosts, ", ");
+      item++;
+    }
+  g_strfreev (hosts_split);
+
+  g_regex_unref (ipv4_match_regex);
+  g_regex_unref (ipv4_replace_regex);
+  
+  return g_string_free (new_hosts, FALSE);
 }

@@ -1,20 +1,19 @@
-/* Copyright (C) 2010-2018 Greenbone Networks GmbH
+/* Copyright (C) 2010-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -25,60 +24,13 @@
 #ifndef _GVMD_MANAGE_SQL_H
 #define _GVMD_MANAGE_SQL_H
 
-#include <gvm/util/xmlutils.h> /* for entity_t */
+#include <gvm/util/xmlutils.h>
 
 #include "manage.h"
 #include "manage_utils.h"
 
 
 /* Internal types and preprocessor definitions. */
-
-/**
- * @brief UUID of 'Base' config.
- */
-#define CONFIG_UUID_BASE "d21f6c81-2b88-4ac1-b7b4-a2a9f2ad4663"
-
-/**
- * @brief UUID of 'Full and fast' config.
- */
-#define CONFIG_UUID_FULL_AND_FAST "daba56c8-73ec-11df-a475-002264764cea"
-
-/**
- * @brief UUID of 'Full and fast ultimate' config.
- */
-#define CONFIG_UUID_FULL_AND_FAST_ULTIMATE \
- "698f691e-7489-11df-9d8c-002264764cea"
-
-/**
- * @brief UUID of 'Full and very deep' config.
- */
-#define CONFIG_UUID_FULL_AND_VERY_DEEP "708f25c4-7489-11df-8094-002264764cea"
-
-/**
- * @brief UUID of 'Full and very deep ultimate' config.
- */
-#define CONFIG_UUID_FULL_AND_VERY_DEEP_ULTIMATE \
- "74db13d6-7489-11df-91b9-002264764cea"
-
-/**
- * @brief UUID of 'Empty' config.
- */
-#define CONFIG_UUID_EMPTY "085569ce-73ed-11df-83c3-002264764cea"
-
-/**
- * @brief UUID of 'Discovery' config.
- */
-#define CONFIG_UUID_DISCOVERY "8715c877-47a0-438d-98a3-27c7a6ab2196"
-
-/**
- * @brief UUID of 'Host Discovery' config.
- */
-#define CONFIG_UUID_HOST_DISCOVERY "2d3f051c-55ba-11e3-bf43-406186ea4fc5"
-
-/**
- * @brief UUID of 'System Discovery' config.
- */
-#define CONFIG_UUID_SYSTEM_DISCOVERY "bbca7412-a950-11e3-9109-406186ea4fc5"
 
 /**
  * @brief Location of a constituent of a trashcan resource.
@@ -96,28 +48,6 @@
 #define MANAGE_NVT_SELECTOR_UUID_ALL "54b45713-d4f4-4435-b20d-304c175ed8c5"
 
 /**
- * @brief UUID of 'Base' NVT selector.
- */
-#define MANAGE_NVT_SELECTOR_UUID_BASE "dd4a4170-0b5e-43fb-9bae-6ce93c19e893"
-
-/**
- * @brief UUID of 'Discovery' NVT selector.
- */
-#define MANAGE_NVT_SELECTOR_UUID_DISCOVERY "0d9a2738-8fe2-4e22-8f26-bb886179e759"
-
-/**
- * @brief UUID of 'Host Discovery' NVT selector.
- */
-#define MANAGE_NVT_SELECTOR_UUID_HOST_DISCOVERY \
- "f5f80744-55c7-11e3-8dc6-406186ea4fc5"
-
-/**
- * @brief UUID of 'System Discovery' NVT selector.
- */
-#define MANAGE_NVT_SELECTOR_UUID_SYSTEM_DISCOVERY \
- "07045d1c-a951-11e3-8da7-406186ea4fc5"
-
-/**
  * @brief Predefined role UUID.
  */
 #define PERMISSION_UUID_ADMIN_EVERYTHING "b3b56a8c-c2fd-11e2-a135-406186ea4fc5"
@@ -126,51 +56,6 @@
  * @brief Predefined role UUID.
  */
 #define PERMISSION_UUID_SUPER_ADMIN_EVERYTHING "a9801074-6fe2-11e4-9d81-406186ea4fc5"
-
-/**
- * @brief UUID of 'OpenVAS Default' port list.
- */
-#define PORT_LIST_UUID_DEFAULT "c7e03b6c-3bbe-11e1-a057-406186ea4fc5"
-
-/**
- * @brief UUID of 'All TCP' port list.
- */
-#define PORT_LIST_UUID_ALL_TCP "fd591a34-56fd-11e1-9f27-406186ea4fc5"
-
-/**
- * @brief UUID of 'All TCP and Nmap 5.51 Top 100 UDP' port list.
- */
-#define PORT_LIST_UUID_ALL_TCP_NMAP_5_51_TOP_100 "730ef368-57e2-11e1-a90f-406186ea4fc5"
-
-/**
- * @brief UUID of 'All TCP and Nmap 5.51 Top 1000 UDP' port list.
- */
-#define PORT_LIST_UUID_ALL_TCP_NMAP_5_51_TOP_1000 "9ddce1ae-57e7-11e1-b13c-406186ea4fc5"
-
-/**
- * @brief UUID of 'All privileged TCP' port list.
- */
-#define PORT_LIST_UUID_ALL_PRIV_TCP "492b72f4-56fe-11e1-98a7-406186ea4fc5"
-
-/**
- * @brief UUID of 'All privileged TCP and UDP' port list.
- */
-#define PORT_LIST_UUID_ALL_PRIV_TCP_UDP "5f2029f6-56fe-11e1-bb94-406186ea4fc5"
-
-/**
- * @brief UUID of 'All privileged TCP and UDP' port list.
- */
-#define PORT_LIST_UUID_ALL_IANA_TCP_2012 "33d0cd82-57c6-11e1-8ed1-406186ea4fc5"
-
-/**
- * @brief UUID of 'All privileged TCP and UDP' port list.
- */
-#define PORT_LIST_UUID_ALL_IANA_TCP_UDP_2012 "4a4717fe-57d2-11e1-9a26-406186ea4fc5"
-
-/**
- * @brief UUID of 'Nmap 5.51 top 2000 TCP top 100 UDP' port list.
- */
-#define PORT_LIST_UUID_NMAP_5_51_TOP_2000_TOP_100 "ab33f6b0-57f8-11e1-96f5-406186ea4fc5"
 
 /**
  * @brief Predefined role UUID.
@@ -243,6 +128,16 @@
 #define SETTING_UUID_LSC_DEB_MAINTAINER "2fcbeac8-4237-438f-b52a-540a23e7af97"
 
 /**
+ * @brief UUID of 'Feed Import Owner' setting.
+ */
+#define SETTING_UUID_FEED_IMPORT_OWNER "78eceaec-3385-11ea-b237-28d24461215b"
+
+/**
+ * @brief UUID of 'Feed Import Roles' setting.
+ */
+#define SETTING_UUID_FEED_IMPORT_ROLES "ff000362-338f-11ea-9051-28d24461215b"
+
+/**
  * @brief Trust constant for error.
  */
 #define TRUST_ERROR 0
@@ -289,6 +184,28 @@ name (iterator_t* iterator)                                       \
   ret = iterator_string (iterator, col);                          \
   return ret;                                                     \
 }
+
+/**
+ * @brief Write to a file or close stream and exit.
+ *
+ * @param[in]   stream    Stream to write to.
+ * @param[in]   format    Format specification.
+ * @param[in]   args      Arguments.
+ */
+#define PRINT(stream, format, args...)                                       \
+  do                                                                         \
+    {                                                                        \
+      gchar *msg;                                                            \
+      msg = g_markup_printf_escaped (format, ## args);                       \
+      if (fprintf (stream, "%s", msg) < 0)                                   \
+        {                                                                    \
+          g_free (msg);                                                      \
+          fclose (stream);                                                   \
+          return -1;                                                         \
+        }                                                                    \
+      g_free (msg);                                                          \
+    }                                                                        \
+  while (0)
 
 
 /* Iterator definitions. */
@@ -363,7 +280,7 @@ typedef struct
 
 /* Variables */
 
-extern gchar *gvmd_db_name;
+extern db_conn_info_t gvmd_db_conn_info;
 
 
 /* Function prototypes */
@@ -377,8 +294,6 @@ host_nthlast_report_host (const char *, report_host_t *, int);
 
 char*
 report_host_ip (const char *);
-
-gchar *tag_value (const gchar *, const gchar *);
 
 void trim_report (report_t);
 
@@ -474,27 +389,18 @@ gchar *resource_uuid (const gchar *, resource_t);
 gboolean find_resource_with_permission (const char *, const char *,
                                         resource_t *, const char *, int);
 
+int
+resource_predefined (const gchar *, resource_t);
+
 void parse_osp_report (task_t, report_t, const char *);
 
 void reschedule_task (const gchar *);
 
 void insert_port_range (port_list_t, port_protocol_t, int, int);
 
-int manage_update_cert_db_init ();
-
-void manage_update_cert_db_cleanup ();
-
-int manage_update_scap_db_init ();
-
-void manage_update_scap_db_cleanup ();
-
 int manage_cert_db_exists ();
 
 int manage_scap_db_exists ();
-
-void manage_db_check_mode (const gchar *);
-
-int manage_db_check (const gchar *);
 
 int
 count (const char *, const get_data_t *, column_t *, column_t *, const char **,
@@ -516,7 +422,7 @@ void
 check_alerts ();
 
 int
-manage_option_setup (GSList *, const gchar *);
+manage_option_setup (GSList *, const db_conn_info_t *);
 
 void
 manage_option_cleanup ();
@@ -550,8 +456,13 @@ gboolean
 resource_with_name_exists (const char *, const char *, resource_t);
 
 int
-create_permission_internal (const char *, const char *, const char *, const char *,
-                            const char *, const char *, permission_t *);
+create_permission_internal (int, const char *, const char *, const char *,
+                            const char *, const char *, const char *,
+                            permission_t *);
+
+int
+create_permission_no_acl (const char *, const char *, const char *, const char *,
+                          const char *, const char *, permission_t *);
 
 int
 copy_resource_lock (const char *, const char *, const char *, const char *,
@@ -559,5 +470,18 @@ copy_resource_lock (const char *, const char *, const char *, const char *,
 
 nvti_t *
 lookup_nvti (const gchar *);
+
+int
+setting_value (const char *, char **);
+
+int
+valid_type (const char *);
+
+void
+add_role_permission_resource (const gchar *, const gchar *, const gchar *,
+                              const gchar *);
+
+void
+create_view_vulns ();
 
 #endif /* not _GVMD_MANAGE_SQL_H */

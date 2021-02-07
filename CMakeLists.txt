@@ -1,20 +1,19 @@
-# Copyright (C) 2009-2019 Greenbone Networks GmbH
+# Copyright (C) 2009-2020 Greenbone Networks GmbH
 #
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# This program is free software; you can redistribute it and/or
-# modify it under the terms of the GNU General Public License
-# as published by the Free Software Foundation; either version 2
-# of the License, or (at your option) any later version.
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# GNU Affero General Public License for more details.
 #
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 cmake_minimum_required (VERSION 3.0)
 
@@ -23,7 +22,7 @@ message ("-- Configuring Greenbone Vulnerability Manager...")
 # VERSION: Set patch version for stable releases, e.g. "9.0.0",
 #          unset patch version for prereleases, e.g. "9.0"
 project (gvm
-         VERSION 9.0.1
+         VERSION 20.8.1
          LANGUAGES C)
 
 if (POLICY CMP0005)
@@ -54,33 +53,22 @@ if (NOT CMAKE_BUILD_TYPE MATCHES "Release")
   endif (EXISTS "${CMAKE_SOURCE_DIR}/.git/")
 endif (NOT CMAKE_BUILD_TYPE MATCHES "Release")
 
-# set if this is in prerelease status, starting at 0 before first beta release,
-# unset if this is a stable release series.
-# set (PROJECT_BETA_RELEASE 0)
+# Add padding zero for minor version
+string(LENGTH ${PROJECT_VERSION_MINOR} PROJECT_VERSION_MINOR_LENGTH)
+if (${PROJECT_VERSION_MINOR_LENGTH} GREATER 1)
+  set (PROJECT_VERSION_MINOR_STRING "${PROJECT_VERSION_MINOR}")
+else (${PROJECT_VERSION_MINOR_LENGTH} GREATER 1)
+  set (PROJECT_VERSION_MINOR_STRING "0${PROJECT_VERSION_MINOR}")
+endif (${PROJECT_VERSION_MINOR_LENGTH} GREATER 1)
 
-if (GIT_REVISION)
-  set (PROJECT_VERSION_GIT "${GIT_REVISION}")
-else (GIT_REVISION)
-  set (PROJECT_VERSION_GIT "")
-endif (GIT_REVISION)
-
-# If PROJECT_BETA_RELEASE is set to "0", the version string will be set to:
-#   "major.minor+alpha"
-# If PROJECT_BETA_RELEASE is set otherwise, the version string will be set to:
-#   "major.minor+beta${PROJECT_BETA_RELEASE}"
-# If PROJECT_BETA_RELEASE is NOT set, the version string will be set to:
-#   "major.minor.patch"
-if (DEFINED PROJECT_BETA_RELEASE AND NOT PROJECT_BETA_RELEASE STREQUAL "")
-  if (PROJECT_BETA_RELEASE STREQUAL "0")
-    set (PROJECT_VERSION_SUFFIX "+alpha")
-  else (PROJECT_BETA_RELEASE STREQUAL "0")
-    set (PROJECT_VERSION_SUFFIX "+beta${PROJECT_BETA_RELEASE}")
-  endif (PROJECT_BETA_RELEASE STREQUAL "0")
-elseif (DEFINED PROJECT_VERSION_PATCH AND NOT PROJECT_VERSION_PATCH STREQUAL "")
+# If a patch version is not defined, assume a pre-release
+if (DEFINED PROJECT_VERSION_PATCH AND NOT PROJECT_VERSION_PATCH STREQUAL "")
   set (PROJECT_VERSION_SUFFIX ".${PROJECT_VERSION_PATCH}")
-endif (DEFINED PROJECT_BETA_RELEASE AND NOT PROJECT_BETA_RELEASE STREQUAL "")
+else (DEFINED PROJECT_VERSION_PATCH AND NOT PROJECT_VERSION_PATCH STREQUAL "")
+  set (PROJECT_VERSION_SUFFIX "+beta1")
+endif (DEFINED PROJECT_VERSION_PATCH AND NOT PROJECT_VERSION_PATCH STREQUAL "")
 
-set (PROJECT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}${PROJECT_VERSION_SUFFIX}${PROJECT_VERSION_GIT}")
+set (PROJECT_VERSION_STRING "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR_STRING}${PROJECT_VERSION_SUFFIX}${GIT_REVISION}")
 
 ## CPack configuration
 
@@ -111,13 +99,13 @@ include (CPack)
 
 ## Variables
 
-set (GVMD_DATABASE_VERSION 221)
+set (GVMD_DATABASE_VERSION 233)
 
 set (GVMD_SCAP_DATABASE_VERSION 16)
 
 set (GVMD_CERT_DATABASE_VERSION 6)
 
-set (GMP_VERSION "9.0")
+set (GMP_VERSION "20.08")
 
 if (SYSCONF_INSTALL_DIR)
   set (SYSCONFDIR "${SYSCONF_INSTALL_DIR}")
@@ -183,9 +171,9 @@ set (GVM_CERT_RES_DIR "${GVM_DATA_DIR}/cert")
 set (GVM_CA_DIR       "${GVMD_STATE_DIR}/trusted_certs")
 
 if (NOT GVM_LIB_INSTALL_DIR)
-	set (GVM_LIB_INSTALL_DIR     "${LIBDIR}")
+  set (GVM_LIB_INSTALL_DIR     "${LIBDIR}")
 else (NOT GVM_LIB_INSTALL_DIR)
-	set (GVM_LIB_INSTALL_DIR "${GVM_LIB_INSTALL_DIR}")
+  set (GVM_LIB_INSTALL_DIR "${GVM_LIB_INSTALL_DIR}")
 endif (NOT GVM_LIB_INSTALL_DIR)
 
 set (GVM_SCANNER_CERTIFICATE "${GVM_STATE_DIR}/CA/servercert.pem")
@@ -198,12 +186,30 @@ if (NOT GVM_RUN_DIR)
   set (GVM_RUN_DIR      "${LOCALSTATEDIR}/run")
 endif (NOT GVM_RUN_DIR)
 
+if (NOT GVM_FEED_LOCK_PATH)
+  set (GVM_FEED_LOCK_PATH "${GVM_RUN_DIR}/feed-update.lock")
+endif (NOT GVM_FEED_LOCK_PATH)
+add_definitions (-DGVM_FEED_LOCK_PATH="${GVM_FEED_LOCK_PATH}")
+
+if (NOT OPENVAS_DEFAULT_SOCKET)
+  set (OPENVAS_DEFAULT_SOCKET "/var/run/ospd/ospd.sock")
+endif (NOT OPENVAS_DEFAULT_SOCKET)
+add_definitions (-DOPENVAS_DEFAULT_SOCKET="${OPENVAS_DEFAULT_SOCKET}")
+
 # TODO: Once we separate the RFP signatures out of "plugins" and
 # into var/lib/gvm/rfpsigs/ (via a sync script) then we do not need
 # to know about the NVT_DIR anymore.
 if (NOT GVM_NVT_DIR)
-	set (GVM_NVT_DIR "${LOCALSTATEDIR}/lib/openvas/plugins/")
+  set (GVM_NVT_DIR "${LOCALSTATEDIR}/lib/openvas/plugins/")
 endif (NOT GVM_NVT_DIR)
+
+if (NOT DATA_OBJECTS_FEED_DIR)
+  set (DATA_OBJECTS_FEED_DIR "${LOCALSTATEDIR}/lib/gvm/data-objects")
+endif (NOT DATA_OBJECTS_FEED_DIR)
+
+if (NOT GVMD_FEED_DIR)
+  set (GVMD_FEED_DIR "${DATA_OBJECTS_FEED_DIR}/gvmd")
+endif (NOT GVMD_FEED_DIR)
 
 if (NOT GVM_ACCESS_KEY_DIR)
   set (GVM_ACCESS_KEY_DIR "${GVM_SYSCONF_DIR}")
@@ -236,10 +242,9 @@ configure_file (doc/example-gvm-manage-certs.conf.in doc/example-gvm-manage-cert
 configure_file (VERSION.in VERSION)
 configure_file (src/gvmd_log_conf.cmake_in src/gvmd_log.conf)
 configure_file (src/schema_formats/XML/GMP.xml.in src/schema_formats/XML/GMP.xml @ONLY)
+configure_file (tools/greenbone-feed-sync.in tools/greenbone-feed-sync @ONLY)
 configure_file (tools/greenbone-scapdata-sync.in tools/greenbone-scapdata-sync @ONLY)
 configure_file (tools/greenbone-certdata-sync.in tools/greenbone-certdata-sync @ONLY)
-configure_file (tools/gvm-portnames-update.in tools/gvm-portnames-update @ONLY)
-configure_file (tools/gvm-migrate-to-postgres.in tools/gvm-migrate-to-postgres @ONLY)
 configure_file (tools/gvm-manage-certs.in tools/gvm-manage-certs @ONLY)
 
 ## Testing
@@ -266,7 +271,7 @@ set (LINKER_HARDENING_FLAGS     "-Wl,-z,relro -Wl,-z,now")
 set (CMAKE_C_FLAGS              "${CMAKE_C_FLAGS} -Wall -D_BSD_SOURCE -D_ISOC99_SOURCE -D_SVID_SOURCE -D_DEFAULT_SOURCE -D_FILE_OFFSET_BITS=64")
 
 set (CMAKE_C_FLAGS_DEBUG        "${CMAKE_C_FLAGS_DEBUG} -Werror -Wshadow ${COVERAGE_FLAGS} ${DEBUG_FUNCTION_NAMES_FLAGS}")
-set (CMAKE_C_FLAGS_RELEASE      "${CMAKE_C_FLAGS_RELEASE} ${HARDENING_FLAGS}")
+set (CMAKE_C_FLAGS_RELEASE      "${CMAKE_C_FLAGS_RELEASE} ${HARDENING_FLAGS} ${COVERAGE_FLAGS}")
 
 # Flags used only for the gvmd binary, and not for the Postgres module.
 set (C_FLAGS_DEBUG_GVMD         "-Wredundant-decls")
@@ -275,13 +280,15 @@ if (NOT SKIP_SRC)
   add_subdirectory (src)
 endif (NOT SKIP_SRC)
 
+## Configs (e.g. systemd service file)
+
+add_subdirectory (config)
+
 ## Documentation
 
 add_subdirectory (doc)
 
 ## Install
-
-install (CODE "file (MAKE_DIRECTORY \$ENV{DESTDIR}${GVMD_DATA_DIR}/report_formats)")
 
 install (DIRECTORY DESTINATION ${GVMD_STATE_DIR})
 
@@ -290,174 +297,6 @@ install (FILES ${CMAKE_BINARY_DIR}/src/gvmd_log.conf
 
 install (FILES ${CMAKE_SOURCE_DIR}/src/pwpolicy.conf
          DESTINATION ${GVM_SYSCONF_DIR})
-
-# Report formats.
-
-install (FILES src/report_formats/Anonymous_XML/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/5057e5cc-b825-11e4-9d0e-28d24461215b
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/Anonymous_XML/Anonymous_XML.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/5057e5cc-b825-11e4-9d0e-28d24461215b
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/Anonymous_XML/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/5057e5cc-b825-11e4-9d0e-28d24461215b
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/ARF/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/910200ca-dc05-11e1-954f-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/ARF/ARF.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/910200ca-dc05-11e1-954f-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/ARF/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/910200ca-dc05-11e1-954f-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/CPE/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/5ceff8ba-1f62-11e1-ab9f-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/CPE/CPE.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/5ceff8ba-1f62-11e1-ab9f-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/CPE/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/5ceff8ba-1f62-11e1-ab9f-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/CSV_Results/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/c1645568-627a-11e3-a660-406186ea4fc5
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/CSV_Results/CSV_Results.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/c1645568-627a-11e3-a660-406186ea4fc5
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/CSV_Results/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/c1645568-627a-11e3-a660-406186ea4fc5
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/CSV_Hosts/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/9087b18c-626c-11e3-8892-406186ea4fc5
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/CSV_Hosts/CSV_Hosts.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/9087b18c-626c-11e3-8892-406186ea4fc5
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/CSV_Hosts/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/9087b18c-626c-11e3-8892-406186ea4fc5
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/ITG/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/77bd6c4a-1f62-11e1-abf0-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/ITG/ITG.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/77bd6c4a-1f62-11e1-abf0-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/ITG/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/77bd6c4a-1f62-11e1-abf0-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/LaTeX/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/a684c02c-b531-11e1-bdc2-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/LaTeX/latex.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/a684c02c-b531-11e1-bdc2-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/LaTeX/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/a684c02c-b531-11e1-bdc2-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/NBE/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/9ca6fe72-1f62-11e1-9e7c-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/NBE/NBE.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/9ca6fe72-1f62-11e1-9e7c-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/NBE/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/9ca6fe72-1f62-11e1-9e7c-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/LaTeX/latex.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/c402cc3e-b531-11e1-9163-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/PDF/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/c402cc3e-b531-11e1-9163-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/PDF/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/c402cc3e-b531-11e1-9163-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/Topology/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/9e5e5deb-879e-4ecc-8be6-a71cd0875cdd/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/Topology/hostvisdot-summary.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/9e5e5deb-879e-4ecc-8be6-a71cd0875cdd/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/Topology/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/9e5e5deb-879e-4ecc-8be6-a71cd0875cdd/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/TXT/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/a3810a62-1f62-11e1-9219-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/TXT/TXT.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/a3810a62-1f62-11e1-9219-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/TXT/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/a3810a62-1f62-11e1-9219-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/XML/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/a994b278-1f62-11e1-96ac-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/XML/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/a994b278-1f62-11e1-96ac-406186ea4fc5/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/Verinice_ISM/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/c15ad349-bd8d-457a-880a-c7056532ee15/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/Verinice_ISM/Verinice_ISM.xsl
-               src/report_formats/Verinice_ISM/classification.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/c15ad349-bd8d-457a-880a-c7056532ee15/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/Verinice_ISM/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/c15ad349-bd8d-457a-880a-c7056532ee15/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-install (FILES src/report_formats/Verinice_ITG/report_format.xml
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/50c9950a-f326-11e4-800c-28d24461215b/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/Verinice_ITG/Verinice_ITG.xsl
-               src/report_formats/Verinice_ITG/classification-helpers.xsl
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/50c9950a-f326-11e4-800c-28d24461215b/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
-install (FILES src/report_formats/Verinice_ITG/generate
-         DESTINATION ${GVMD_DATA_DIR}/report_formats/50c9950a-f326-11e4-800c-28d24461215b/
-         PERMISSIONS OWNER_WRITE OWNER_READ OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 
 # Schema formats.
 
@@ -545,10 +384,6 @@ install (FILES src/wizards/quick_first_scan.xml
          DESTINATION ${GVMD_DATA_DIR}/wizards/
          PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
 
-install (FILES tools/portnames_update.xsl
-         DESTINATION ${GVMD_DATA_DIR}/
-         PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
-
 install (FILES tools/cpe_getbyname.xsl tools/cve_getbyname.xsl
          tools/ovaldef_getbyname.xsl
          DESTINATION ${GVM_SCAP_RES_DIR}
@@ -558,7 +393,7 @@ install (FILES tools/cert_bund_getbyname.xsl tools/dfn_cert_getbyname.xsl
          DESTINATION ${GVM_CERT_RES_DIR}
          PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
 
-install (FILES ${CMAKE_BINARY_DIR}/tools/gvm-portnames-update
+install (FILES ${CMAKE_BINARY_DIR}/tools/greenbone-feed-sync
          DESTINATION ${SBINDIR}
          PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE
                      GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
@@ -579,11 +414,6 @@ install (FILES ${CMAKE_SOURCE_DIR}/tools/gvm-lsc-deb-creator.sh
          PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE
                      GROUP_READ GROUP_EXECUTE
                      WORLD_READ WORLD_EXECUTE)
-
-install (FILES ${CMAKE_BINARY_DIR}/tools/gvm-migrate-to-postgres
-         DESTINATION ${SBINDIR}
-         PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE
-                     GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 
 install (FILES ${CMAKE_BINARY_DIR}/tools/gvm-manage-certs
          DESTINATION ${BINDIR}

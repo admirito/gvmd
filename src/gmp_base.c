@@ -1,26 +1,19 @@
-/* GVM
- * $Id$
- * Description: GVM GMP layer: Base facilities.
+/* Copyright (C) 2018-2021 Greenbone Networks GmbH
  *
- * Authors:
- * Matthew Mundell <matthew.mundell@greenbone.net>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Copyright:
- * Copyright (C) 2018 Greenbone Networks GmbH
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -158,10 +151,10 @@ send_find_error_to_client (const char* command, const char* type,
   gchar *msg;
   gboolean ret;
 
-  msg = g_strdup_printf ("<%s_response status=\""
-                         STATUS_ERROR_MISSING
-                         "\" status_text=\"Failed to find %s '%s'\"/>",
-                         command, type, id);
+  msg = g_markup_printf_escaped ("<%s_response status=\""
+                                 STATUS_ERROR_MISSING
+                                 "\" status_text=\"Failed to find %s '%s'\"/>",
+                                 command, type, id);
   ret = send_to_client (msg, gmp_parser->client_writer,
                         gmp_parser->client_writer_data);
   g_free (msg);

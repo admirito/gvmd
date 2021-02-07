@@ -1,21 +1,20 @@
 <!--
-Copyright (C) 2013-2018 Greenbone Networks GmbH
+Copyright (C) 2013-2020 Greenbone Networks GmbH
 
-SPDX-License-Identifier: GPL-2.0-or-later
+SPDX-License-Identifier: AGPL-3.0-or-later
 
-This program is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License
-as published by the Free Software Foundation; either version 2
-of the License, or (at your option) any later version.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+GNU Affero General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
 -->
 
 <!--
@@ -57,26 +56,24 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
           method="xml"
           encoding="UTF-8"/>
         <xsl:template match="/">
-          <commands>
-            <xsl:if test="/wizard/params/param[name='username']/value != ''">
-              <create_credential>
-                <xsl:choose>
-                  <xsl:when test="/wizard/params/param[name='credential_name']/value">
-                    <name><xsl:value-of select="/wizard/params/param[name='credential_name']/value"/></name>
-                  </xsl:when>
-                  <xsl:when test="/wizard/params/param[name='hosts']/value != ''">
-                    <name>LSC Credential for immediate scan of <xsl:value-of select="/wizard/params/param[name='hosts']/value"/></name>
-                  </xsl:when>
-                  <xsl:otherwise>
-                    <name>LSC Credential for immediate scan of localhost</name>
-                  </xsl:otherwise>
-                </xsl:choose>
-                <comment><xsl:value-of select="/wizard/params/param[name='comment']/value"/></comment>
-                <login><xsl:value-of select="/wizard/params/param[name='username']/value"/></login>
-                <password><xsl:value-of select="/wizard/params/param[name='password']/value"/></password>
-              </create_credential>
-            </xsl:if>
-          </commands>
+          <xsl:if test="/wizard/params/param[name='username']/value != ''">
+            <create_credential>
+              <xsl:choose>
+                <xsl:when test="/wizard/params/param[name='credential_name']/value">
+                  <name><xsl:value-of select="/wizard/params/param[name='credential_name']/value"/></name>
+                </xsl:when>
+                <xsl:when test="/wizard/params/param[name='hosts']/value != ''">
+                  <name>LSC Credential for immediate scan of <xsl:value-of select="/wizard/params/param[name='hosts']/value"/></name>
+                </xsl:when>
+                <xsl:otherwise>
+                  <name>LSC Credential for immediate scan of localhost</name>
+                </xsl:otherwise>
+              </xsl:choose>
+              <comment><xsl:value-of select="/wizard/params/param[name='comment']/value"/></comment>
+              <login><xsl:value-of select="/wizard/params/param[name='username']/value"/></login>
+              <password><xsl:value-of select="/wizard/params/param[name='password']/value"/></password>
+            </create_credential>
+          </xsl:if>
         </xsl:template>
       </xsl:stylesheet>
     </command>
@@ -117,9 +114,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
                 </name>
               </xsl:otherwise>
             </xsl:choose>
-            <xsl:if test="/wizard/previous/response/commands_response/create_credential_response/@id != ''">
-              <ssh_lsc_credential id="{/wizard/previous/response/commands_response/create_credential_response/@id}"><port>22</port></ssh_lsc_credential>
-              <smb_lsc_credential id="{/wizard/previous/response/commands_response/create_credential_response/@id}"></smb_lsc_credential>
+            <xsl:if test="/wizard/previous/response/create_credential_response/@id != ''">
+              <ssh_lsc_credential id="{/wizard/previous/response/create_credential_response/@id}"><port>22</port></ssh_lsc_credential>
+              <smb_lsc_credential id="{/wizard/previous/response/create_credential_response/@id}"></smb_lsc_credential>
             </xsl:if>
             <xsl:choose>
               <xsl:when test="/wizard/params/param[name='hosts']/value != ''">
@@ -130,6 +127,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
               </xsl:otherwise>
             </xsl:choose>
             <comment><xsl:value-of select="/wizard/params/param[name='comment']/value"/></comment>
+            <port_list id="33d0cd82-57c6-11e1-8ed1-406186ea4fc5"/>
           </create_target>
         </xsl:template>
       </xsl:stylesheet>

@@ -1,20 +1,19 @@
-/* Copyright (C) 2009-2018 Greenbone Networks GmbH
+/* Copyright (C) 2009-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -73,12 +72,12 @@ create_ssh_key (const char *comment, const char *passphrase,
 
   if (!comment || comment[0] == '\0')
     {
-      g_warning ("%s: comment must be set", __FUNCTION__);
+      g_warning ("%s: comment must be set", __func__);
       return -1;
     }
   if (!passphrase || strlen (passphrase) < 5)
     {
-      g_warning ("%s: password must be longer than 4 characters", __FUNCTION__);
+      g_warning ("%s: password must be longer than 4 characters", __func__);
       return -1;
     }
 
@@ -87,7 +86,7 @@ create_ssh_key (const char *comment, const char *passphrase,
   dir = g_path_get_dirname (privpath);
   if (g_mkdir_with_parents (dir, 0755 /* "rwxr-xr-x" */ ))
     {
-      g_warning ("%s: failed to access %s", __FUNCTION__, dir);
+      g_warning ("%s: failed to access %s", __func__, dir);
       g_free (dir);
       return -1;
     }
@@ -108,16 +107,16 @@ create_ssh_key (const char *comment, const char *passphrase,
       if (err)
         {
           g_warning ("%s: failed to create private key: %s",
-                     __FUNCTION__, err->message);
+                     __func__, err->message);
           g_error_free (err);
         }
       else
-        g_warning ("%s: failed to create private key", __FUNCTION__);
+        g_warning ("%s: failed to create private key", __func__);
       g_debug ("%s: key-gen failed with %d (WIF %i, WEX %i).\n",
-               __FUNCTION__, exit_status, WIFEXITED (exit_status),
+               __func__, exit_status, WIFEXITED (exit_status),
                WEXITSTATUS (exit_status));
-      g_debug ("%s: stdout: %s", __FUNCTION__, astdout);
-      g_debug ("%s: stderr: %s", __FUNCTION__, astderr);
+      g_debug ("%s: stdout: %s", __func__, astdout);
+      g_debug ("%s: stderr: %s", __func__, astderr);
       g_free (command);
       g_free (astdout);
       g_free (astderr);
@@ -201,21 +200,21 @@ lsc_user_rpm_create (const gchar *username,
 
   /* Create a temporary directory. */
 
-  g_debug ("%s: create temporary directory", __FUNCTION__);
+  g_debug ("%s: create temporary directory", __func__);
   if (mkdtemp (tmpdir) == NULL)
     return FALSE;
-  g_debug ("%s: temporary directory: %s", __FUNCTION__, tmpdir);
+  g_debug ("%s: temporary directory: %s", __func__, tmpdir);
 
   /* Copy the public key into the temporary directory. */
 
-  g_debug ("%s: copy key to temporary directory", __FUNCTION__);
+  g_debug ("%s: copy key to temporary directory", __func__);
   pubkey_basename = g_strdup_printf ("%s.pub", username);
   new_pubkey_filename = g_build_filename (tmpdir, pubkey_basename, NULL);
   if (gvm_file_copy (public_key_path, new_pubkey_filename)
       == FALSE)
     {
       g_warning ("%s: failed to copy key file %s to %s",
-                 __FUNCTION__, public_key_path, new_pubkey_filename);
+                 __func__, public_key_path, new_pubkey_filename);
       g_free (pubkey_basename);
       g_free (new_pubkey_filename);
       return FALSE;
@@ -224,7 +223,7 @@ lsc_user_rpm_create (const gchar *username,
   /* Execute create-rpm script with the temporary directory as the
    * target and the public key in the temporary directory as the key. */
 
-  g_debug ("%s: Attempting RPM build", __FUNCTION__);
+  g_debug ("%s: Attempting RPM build", __func__);
   cmd = (gchar **) g_malloc (6 * sizeof (gchar *));
   cmd[0] = g_build_filename (GVM_DATA_DIR,
                              "gvm-lsc-rpm-creator.sh",
@@ -235,7 +234,7 @@ lsc_user_rpm_create (const gchar *username,
   cmd[4] = g_strdup (to_filename);
   cmd[5] = NULL;
   g_debug ("%s: Spawning in %s: %s %s %s %s %s",
-           __FUNCTION__, tmpdir, cmd[0], cmd[1], cmd[2], cmd[3], cmd[4]);
+           __func__, tmpdir, cmd[0], cmd[1], cmd[2], cmd[3], cmd[4]);
   if ((g_spawn_sync (tmpdir,
                      cmd,
                      NULL,                  /* Environment. */
@@ -251,12 +250,12 @@ lsc_user_rpm_create (const gchar *username,
       || WEXITSTATUS (exit_status))
     {
       g_warning ("%s: failed to create the rpm: %d (WIF %i, WEX %i)",
-                 __FUNCTION__,
+                 __func__,
                  exit_status,
                  WIFEXITED (exit_status),
                  WEXITSTATUS (exit_status));
-      g_debug ("%s: stdout: %s", __FUNCTION__, standard_out);
-      g_debug ("%s: stderr: %s", __FUNCTION__, standard_err);
+      g_debug ("%s: stdout: %s", __func__, standard_out);
+      g_debug ("%s: stderr: %s", __func__, standard_err);
       success = FALSE;
     }
 
@@ -276,7 +275,7 @@ lsc_user_rpm_create (const gchar *username,
   if (gvm_file_remove_recurse (tmpdir) != 0 && success == TRUE)
     {
       g_warning ("%s: failed to remove temporary directory %s",
-                 __FUNCTION__, tmpdir);
+                 __func__, tmpdir);
       success = FALSE;
     }
 
@@ -322,7 +321,7 @@ lsc_user_rpm_recreate (const gchar *name, const char *public_key,
   if (mkdtemp (rpm_dir) == NULL)
     goto free_exit;
   rpm_path = g_build_filename (rpm_dir, "p.rpm", NULL);
-  g_debug ("%s: rpm_path: %s", __FUNCTION__, rpm_path);
+  g_debug ("%s: rpm_path: %s", __func__, rpm_path);
   if (lsc_user_rpm_create (name, public_key_path, rpm_path) == FALSE)
     {
       g_free (rpm_path);
@@ -388,21 +387,21 @@ lsc_user_deb_create (const gchar *username,
 
   /* Create a temporary directory. */
 
-  g_debug ("%s: create temporary directory", __FUNCTION__);
+  g_debug ("%s: create temporary directory", __func__);
   if (mkdtemp (tmpdir) == NULL)
     return FALSE;
-  g_debug ("%s: temporary directory: %s", __FUNCTION__, tmpdir);
+  g_debug ("%s: temporary directory: %s", __func__, tmpdir);
 
   /* Copy the public key into the temporary directory. */
 
-  g_debug ("%s: copy key to temporary directory", __FUNCTION__);
+  g_debug ("%s: copy key to temporary directory", __func__);
   pubkey_basename = g_strdup_printf ("%s.pub", username);
   new_pubkey_filename = g_build_filename (tmpdir, pubkey_basename, NULL);
   if (gvm_file_copy (public_key_path, new_pubkey_filename)
       == FALSE)
     {
       g_warning ("%s: failed to copy key file %s to %s",
-                 __FUNCTION__, public_key_path, new_pubkey_filename);
+                 __func__, public_key_path, new_pubkey_filename);
       g_free (pubkey_basename);
       g_free (new_pubkey_filename);
       return FALSE;
@@ -411,7 +410,7 @@ lsc_user_deb_create (const gchar *username,
   /* Execute create-deb script with the temporary directory as the
    * target and the public key in the temporary directory as the key. */
 
-  g_debug ("%s: Attempting DEB build", __FUNCTION__);
+  g_debug ("%s: Attempting DEB build", __func__);
   cmd = (gchar **) g_malloc (7 * sizeof (gchar *));
   cmd[0] = g_build_filename (GVM_DATA_DIR,
                              "gvm-lsc-deb-creator.sh",
@@ -423,7 +422,7 @@ lsc_user_deb_create (const gchar *username,
   cmd[5] = g_strdup (maintainer);
   cmd[6] = NULL;
   g_debug ("%s: Spawning in %s: %s %s %s %s %s %s",
-           __FUNCTION__, tmpdir,
+           __func__, tmpdir,
            cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5]);
   if ((g_spawn_sync (tmpdir,
                      cmd,
@@ -440,12 +439,12 @@ lsc_user_deb_create (const gchar *username,
       || WEXITSTATUS (exit_status))
     {
       g_warning ("%s: failed to create the deb: %d (WIF %i, WEX %i)",
-                 __FUNCTION__,
+                 __func__,
                  exit_status,
                  WIFEXITED (exit_status),
                  WEXITSTATUS (exit_status));
-      g_debug ("%s: stdout: %s", __FUNCTION__, standard_out);
-      g_debug ("%s: stderr: %s", __FUNCTION__, standard_err);
+      g_debug ("%s: stdout: %s", __func__, standard_out);
+      g_debug ("%s: stderr: %s", __func__, standard_err);
       success = FALSE;
     }
 
@@ -466,7 +465,7 @@ lsc_user_deb_create (const gchar *username,
   if (gvm_file_remove_recurse (tmpdir) != 0 && success == TRUE)
     {
       g_warning ("%s: failed to remove temporary directory %s",
-                 __FUNCTION__, tmpdir);
+                 __func__, tmpdir);
       success = FALSE;
     }
 
@@ -514,7 +513,7 @@ lsc_user_deb_recreate (const gchar *name, const char *public_key,
   if (mkdtemp (deb_dir) == NULL)
     goto free_exit;
   deb_path = g_build_filename (deb_dir, "p.deb", NULL);
-  g_debug ("%s: deb_path: %s", __FUNCTION__, deb_path);
+  g_debug ("%s: deb_path: %s", __func__, deb_path);
   if (lsc_user_deb_create (name, public_key_path, deb_path, maintainer)
         == FALSE)
     {
@@ -594,6 +593,12 @@ create_nsis_script (const gchar *script_name, const gchar *package_name,
   fprintf (fd, "#\n# Default (installer) section.\n#\n");
   fprintf (fd, "section\n\n");
 
+  fprintf (fd, "# Declare variables\n");
+  fprintf (fd, "Var /GLOBAL TEMPVBSFILE\n");
+  fprintf (fd, "Var /GLOBAL TEMPADMINGROUPFILE\n");
+  fprintf (fd, "Var /GLOBAL FH\n");
+  fprintf (fd, "Var /GLOBAL ADMINGROUPNAME\n");
+
   fprintf (fd, "# Define output path\n");
   fprintf (fd, "setOutPath $INSTDIR\n\n");
 
@@ -603,31 +608,41 @@ create_nsis_script (const gchar *script_name, const gchar *package_name,
 
   // Need to find localized Administrators group name, create a
   // GetAdminGroupName - vb script (Thanks to Thomas Rotter)
-  fprintf (fd, "# Create Thomas Rotters GetAdminGroupName.vb script\n");
-  fprintf (fd, "ExecWait \"cmd /C Echo Set objWMIService = GetObject($\\\"winmgmts:\\\\.\\root\\cimv2$\\\") > $\\\"%%temp%%\\GetAdminGroupName.vbs$\\\" \"\n");
-  fprintf (fd, "ExecWait \"cmd /C Echo Set colAccounts = objWMIService.ExecQuery ($\\\"Select * From Win32_Group Where SID = 'S-1-5-32-544'$\\\")  >> $\\\"%%temp%%\\GetAdminGroupName.vbs$\\\"\"\n");
-  fprintf (fd, "ExecWait \"cmd /C Echo For Each objAccount in colAccounts >> $\\\"%%temp%%\\GetAdminGroupName.vbs$\\\"\"\n");
-  fprintf (fd, "ExecWait \"cmd /C Echo Wscript.Echo objAccount.Name >> $\\\"%%temp%%\\GetAdminGroupName.vbs$\\\"\"\n");
-  fprintf (fd, "ExecWait \"cmd /C Echo Next >> $\\\"%%temp%%\\GetAdminGroupName.vbs$\\\"\"\n");
-  fprintf (fd, "ExecWait \"cmd /C cscript //nologo $\\\"%%temp%%\\GetAdminGroupName.vbs$\\\" > $\\\"%%temp%%\\AdminGroupName.txt$\\\"\"\n\n");
+  fprintf (fd, "# Create and run Thomas Rotter's GetAdminGroupName VB script\n");
+  fprintf (fd, "GetTempFileName $TEMPVBSFILE\n");
+  fprintf (fd, "GetTempFileName $TEMPADMINGROUPFILE\n");
+  fprintf (fd, "DetailPrint `Creating GetAdminGroupName script $TEMPVBSFILE`\n");
+  fprintf (fd, "FileOpen $FH $TEMPVBSFILE w\n");
+  fprintf (fd, "FileWrite $FH `Set objWMIService = GetObject(\"winmgmts:\\\\.\\root\\cimv2\")$\\n`\n");
+  fprintf (fd, "FileWrite $FH `Set colAccounts = objWMIService.ExecQuery (\"Select * From Win32_Group Where SID = 'S-1-5-32-544'\")$\\n`\n");
+  fprintf (fd, "FileWrite $FH `For Each objAccount in colAccounts$\\n`\n");
+  fprintf (fd, "FileWrite $FH ` Wscript.Echo objAccount.Name$\\n`\n");
+  fprintf (fd, "FileWrite $FH `Next$\\n`\n");
+  fprintf (fd, "FileClose $FH\n");
+  fprintf (fd, "ExecWait `cmd /C cscript /e:vbscript /nologo $TEMPVBSFILE > $TEMPADMINGROUPFILE`\n");
+  fprintf (fd, "# Read admin group name, remove trailing line break\n");
+  fprintf (fd, "FileOpen $FH $TEMPADMINGROUPFILE r\n");
+  fprintf (fd, "FileRead $FH $ADMINGROUPNAME\n");
+  fprintf (fd, "FileClose $FH\n");
+  fprintf (fd, "StrCpy $ADMINGROUPNAME `$ADMINGROUPNAME` -2\n");
+  fprintf (fd, "\n");
 
   /** @todo provide /comment:"GVM User" /fullname:"GVM Testuser" */
-  fprintf (fd, "# Create batch script that installs the user\n");
-  fprintf (fd, "ExecWait \"cmd /C Echo Set /P AdminGroupName= ^<$\\\"%%temp%%\\AdminGroupName.txt$\\\" > $\\\"%%temp%%\\AddUser.bat$\\\"\" \n");
-  fprintf (fd, "ExecWait \"cmd /C Echo net user %s %s /add /active:yes >> $\\\"%%temp%%\\AddUser.bat$\\\"\"\n",
+  fprintf (fd, "# Create the user and add it to the admin group\n");
+  fprintf (fd, "DetailPrint `Creating user %s`\n",
+           user_name);
+  fprintf (fd, "SetDetailsPrint none\n");
+  fprintf (fd, "ExecWait `cmd /C net user %s \"%s\" /add /active:yes`\n",
            user_name,
            password);
-  fprintf (fd, "ExecWait \"cmd /C Echo net localgroup %%AdminGroupName%% %%COMPUTERNAME%%\\%s /add >> $\\\"%%temp%%\\AddUser.bat$\\\"\"\n\n",
+  fprintf (fd, "SetDetailsPrint both\n");
+  fprintf (fd, "ExecWait `cmd /C net localgroup $ADMINGROUPNAME %%COMPUTERNAME%%\\%s /add`",
            user_name);
-
-  fprintf (fd, "# Execute AddUser script\n");
-  fprintf (fd, "ExecWait \"cmd /C $\\\"%%temp%%\\AddUser.bat$\\\"\"\n\n");
 
   // Remove up temporary files for localized Administrators group names
   fprintf (fd, "# Remove temporary files for localized admin group names\n");
-  fprintf (fd, "ExecWait \"del $\\\"%%temp%%\\AdminGroupName.txt$\\\"\"\n");
-  fprintf (fd, "ExecWait \"del $\\\"%%temp%%\\GetAdminGroupName.vbs$\\\"\"\n\n");
-  fprintf (fd, "ExecWait \"del $\\\"%%temp%%\\AddUser.bat$\\\"\"\n\n");
+  fprintf (fd, "Delete $TEMPVBSFILE\n");
+  fprintf (fd, "Delete $TEMPADMINGROUPFILE\n");
 
   /** @todo Display note about NTLM and SMB signing and encryption, 'Easy Filesharing' in WIN XP */
   fprintf (fd, "# Display message that everything seems to be fine\n");
@@ -685,7 +700,7 @@ execute_makensis (const gchar *nsis_script)
   cmd[2] = NULL;
   g_debug ("--- executing makensis");
   g_debug ("%s: Spawning in %s: %s %s",
-           __FUNCTION__,
+           __func__,
            dirname, cmd[0], cmd[1]);
   if ((g_spawn_sync (dirname,
                      cmd,
@@ -701,12 +716,12 @@ execute_makensis (const gchar *nsis_script)
       || WEXITSTATUS (exit_status))
     {
       g_warning ("%s: failed to create the exe: %d (WIF %i, WEX %i)",
-                 __FUNCTION__,
+                 __func__,
                  exit_status,
                  WIFEXITED (exit_status),
                  WEXITSTATUS (exit_status));
-      g_debug ("%s: stdout: %s", __FUNCTION__, standard_out);
-      g_debug ("%s: stderr: %s", __FUNCTION__, standard_err);
+      g_debug ("%s: stdout: %s", __func__, standard_out);
+      g_debug ("%s: stderr: %s", __func__, standard_err);
       ret = -1;
     }
 
@@ -740,14 +755,14 @@ lsc_user_exe_create (const gchar *user_name, const gchar *password,
 
   if (create_nsis_script (nsis_script, to_filename, user_name, password))
     {
-      g_warning ("%s: Failed to create NSIS script", __FUNCTION__);
+      g_warning ("%s: Failed to create NSIS script", __func__);
       g_free (nsis_script);
       return -1;
     }
 
   if (execute_makensis (nsis_script))
     {
-      g_warning ("%s: Failed to execute makensis", __FUNCTION__);
+      g_warning ("%s: Failed to execute makensis", __func__);
       g_free (nsis_script);
       return -1;
     }

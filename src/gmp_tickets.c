@@ -1,26 +1,19 @@
-/* GVM
- * $Id$
- * Description: GVM GMP layer: Tickets.
+/* Copyright (C) 2018-2020 Greenbone Networks GmbH
  *
- * Authors:
- * Matthew Mundell <matthew.mundell@greenbone.net>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Copyright:
- * Copyright (C) 2018 Greenbone Networks GmbH
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -228,7 +221,7 @@ get_tickets_run (gmp_parser_t *gmp_parser, GError **error)
           if (report_timestamp (ticket_iterator_report_id (&tickets),
                                 &timestamp))
             g_error ("%s: error getting timestamp of report, aborting",
-                     __FUNCTION__);
+                     __func__);
 
           SENDF_TO_CLIENT_OR_FAIL ("<report id=\"%s\">"
                                    "<timestamp>%s</timestamp>"
@@ -271,7 +264,7 @@ get_tickets_run (gmp_parser_t *gmp_parser, GError **error)
                                     &timestamp))
                 g_error ("%s: error getting timestamp of verified report,"
                          " aborting",
-                         __FUNCTION__);
+                         __func__);
 
               SENDF_TO_CLIENT_OR_FAIL ("<fix_verified_report>"
                                        "<report id=\"%s\">"

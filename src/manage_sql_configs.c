@@ -1,26 +1,19 @@
-/* GVM
- * $Id$
- * Description: GVM management layer SQL: Configs.
+/* Copyright (C) 2019-2020 Greenbone Networks GmbH
  *
- * Authors:
- * Matthew Mundell <matthew.mundell@greenbone.net>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Copyright:
- * Copyright (C) 2019 Greenbone Networks GmbH
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -38,6 +31,8 @@
 #include "sql.h"
 
 #include <assert.h>
+#include <errno.h>
+#include <glib/gstdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -50,28 +45,19 @@
 #define G_LOG_DOMAIN "md manage"
 
 
+/* Static headers for internal non-SQL functions. */
+
+int
+sync_configs_with_feed ();
+
+
 /* Static headers. */
 
 static int
 switch_representation (config_t, int);
 
 static void
-nvt_selector_add (const char*, const char*, const char*, int);
-
-static void
-nvt_selector_remove_selector (const char*, const char*, int);
-
-static void
 update_config_caches (config_t);
-
-static int
-nvt_selector_families_growing (const char *);
-
-static int
-nvt_selector_nvts_growing_2 (const char*, int);
-
-static int
-insert_nvt_selectors (const char *, const array_t*);
 
 
 /* Helpers. */
@@ -136,7 +122,7 @@ member (GPtrArray *array, const char *string)
  *
  *      The all selector and an optional exclude for each family,
  *      optional NVT includes in the excluded families, and optional NVT
- *      includes in all other families.
+ *      excludes in all other families.
  *
  *      This allows a growing collection of families, while any family
  *      can still have a static NVT selection.
@@ -610,6 +596,8 @@ nvt_selector_remove (const char* quoted_selector,
                      const char* quoted_family,
                      int type)
 {
+  if (strcmp (quoted_selector, MANAGE_NVT_SELECTOR_UUID_ALL) == 0)
+    return;
   if (type == NVT_SELECTOR_TYPE_ANY)
     sql ("DELETE FROM nvt_selectors"
          " WHERE name = '%s'"
@@ -651,6 +639,8 @@ nvt_selector_remove_selector (const char* quoted_selector,
                               const char* family_or_nvt,
                               int type)
 {
+  if (strcmp (quoted_selector, MANAGE_NVT_SELECTOR_UUID_ALL) == 0)
+    return;
   if (type == NVT_SELECTOR_TYPE_ANY)
     sql ("DELETE FROM nvt_selectors"
          " WHERE name = '%s' AND family_or_nvt = '%s');",
@@ -1167,14 +1157,16 @@ manage_set_config_families (const gchar *config_id,
 /**
  * @brief Insert NVT selectors.
  *
- * @param[in]  quoted_name  Name of NVT selector.
- * @param[in]  selectors    NVT selectors.
+ * @param[in]  quoted_name   Name of NVT selector.
+ * @param[in]  selectors     NVT selectors.
+ * @param[in]  allow_errors  Whether certain errors are allowed.
  *
  * @return 0 success, -1 error, -3 input error.
  */
 static int
 insert_nvt_selectors (const char *quoted_name,
-                      const array_t* selectors /* nvt_selector_t. */)
+                      const array_t* selectors, /* nvt_selector_t. */
+                      int allow_errors)
 {
   int index = 0;
   const nvt_selector_t *selector;
@@ -1192,37 +1184,18 @@ insert_nvt_selectors (const char *quoted_name,
           && (type == NVT_SELECTOR_TYPE_NVT))
         {
           gchar *quoted_family_or_nvt, *quoted_family, *family = NULL;
-          nvti_t *nvti = lookup_nvti (selector->family_or_nvt);
 
           /* An NVT selector. */
 
-          if (nvti)
-            {
-              family = nvti_family (nvti);
-
-              if (family == NULL)
-                {
-                  g_warning ("%s: skipping NVT '%s' from import of config '%s'"
-                             " because the NVT is missing a family in the"
-                             " cache",
-                             __FUNCTION__,
-                             selector->family_or_nvt,
-                             quoted_name);
-                  continue;
-                }
-            }
-          else
-            {
-              g_warning ("%s: skipping NVT '%s' from import of config '%s'"
-                         " because the NVT is missing from the cache",
-                         __FUNCTION__,
-                         selector->family_or_nvt,
-                         quoted_name);
-              continue;
-            }
+          family = nvt_family (selector->family_or_nvt);
+          if (family == NULL)
+            g_debug ("%s: NVT '%s' in config '%s' does not have a family",
+                     __func__,
+                     selector->family_or_nvt,
+                     quoted_name);
 
           quoted_family_or_nvt = sql_quote (selector->family_or_nvt);
-          quoted_family = sql_quote (family);
+          quoted_family = sql_quote (family ? family : "");
           sql ("INSERT into nvt_selectors (name, exclude, type, family_or_nvt,"
                " family)"
                " VALUES ('%s', %i, %i, '%s', '%s');",
@@ -1244,10 +1217,12 @@ insert_nvt_selectors (const char *quoted_name,
             {
               g_warning ("%s: skipping NVT '%s' from import of config '%s'"
                          " because the type is wrong (expected family)",
-                         __FUNCTION__,
+                         __func__,
                          selector->family_or_nvt,
                          quoted_name);
-              continue;
+              if (allow_errors)
+                continue;
+              return -1;
             }
 
           quoted_family_or_nvt = sql_quote (selector->family_or_nvt);
@@ -1270,9 +1245,11 @@ insert_nvt_selectors (const char *quoted_name,
             {
               g_warning ("%s: skipping NVT from import of config '%s'"
                          " because the type is wrong (expected all)",
-                         __FUNCTION__,
+                         __func__,
                          quoted_name);
-              continue;
+              if (allow_errors)
+                continue;
+              return -1;
             }
 
           sql ("INSERT into nvt_selectors (name, exclude, type, family_or_nvt,"
@@ -1307,33 +1284,33 @@ config_update_nvt_family (resource_t config, const char *oid,
   selector = config_nvt_selector (config);
   if (selector == NULL)
     {
-      g_warning ("%s: Failed to get config selector", __FUNCTION__);
+      g_warning ("%s: Failed to get config selector", __func__);
       return -1;
     }
   quoted_selector = sql_quote (selector);
 
   constraining = config_families_growing (config);
 
-  g_debug ("%s: Updating NVT family for selector '%s'", __FUNCTION__, selector);
+  g_debug ("%s: Updating NVT family for selector '%s'", __func__, selector);
 
   if (constraining)
     {
       /* Constraining the universe. */
 
-      g_debug ("%s:   Selector constrains universe", __FUNCTION__);
+      g_debug ("%s:   Selector constrains universe", __func__);
 
       if (nvt_selector_family_growing (selector, old_family, constraining))
         {
           /* Old family is growing. */
 
-          g_debug ("%s:   Old family is growing", __FUNCTION__);
+          g_debug ("%s:   Old family is growing", __func__);
 
           if (nvt_selector_has (quoted_selector, oid, NVT_SELECTOR_TYPE_NVT,
                                 0 /* Included. */))
             {
               /* NVT explicitly included in old family, which is redundant, so
                * drop selector. */
-              g_debug ("%s:   Drop selector", __FUNCTION__);
+              g_debug ("%s:   Drop selector", __func__);
               nvt_selector_remove_selector (quoted_selector,
                                             oid,
                                             NVT_SELECTOR_TYPE_NVT);
@@ -1344,13 +1321,13 @@ config_update_nvt_family (resource_t config, const char *oid,
             {
               /* NVT explicitly excluded from old family. */
 
-              g_debug ("%s:   NVT excluded from old family", __FUNCTION__);
+              g_debug ("%s:   NVT excluded from old family", __func__);
 
               if (nvt_selector_family_growing (selector, new_family,
                                                constraining))
                 {
                   /* New family is growing, change NVT to new family. */
-                  g_debug ("%s:   Change family", __FUNCTION__);
+                  g_debug ("%s:   Change family", __func__);
                   nvt_selector_set_family (quoted_selector,
                                            oid,
                                            NVT_SELECTOR_TYPE_NVT,
@@ -1360,7 +1337,7 @@ config_update_nvt_family (resource_t config, const char *oid,
                 {
                   /* New family static, NVT excluded already, so drop NVT
                    * selector. */
-                  g_debug ("%s:   Remove selector", __FUNCTION__);
+                  g_debug ("%s:   Remove selector", __func__);
                   nvt_selector_remove_selector (quoted_selector,
                                                 oid,
                                                 NVT_SELECTOR_TYPE_NVT);
@@ -1371,21 +1348,21 @@ config_update_nvt_family (resource_t config, const char *oid,
         {
           /* Old family is static. */
 
-          g_debug ("%s:   Old family is static", __FUNCTION__);
+          g_debug ("%s:   Old family is static", __func__);
 
           if (nvt_selector_has (quoted_selector, oid, NVT_SELECTOR_TYPE_NVT,
                                 0 /* Included. */))
             {
               /* NVT explicitly included in old family. */
 
-              g_debug ("%s:   NVT included in old family", __FUNCTION__);
+              g_debug ("%s:   NVT included in old family", __func__);
 
               if (nvt_selector_family_growing (selector, new_family,
                                                constraining))
                 {
                   /* New family is growing so it already includes the NVT.
                    * Remove the NVT selector. */
-                  g_debug ("%s:   Remove selector", __FUNCTION__);
+                  g_debug ("%s:   Remove selector", __func__);
                   nvt_selector_remove_selector (quoted_selector,
                                                 oid,
                                                 NVT_SELECTOR_TYPE_NVT);
@@ -1393,7 +1370,7 @@ config_update_nvt_family (resource_t config, const char *oid,
               else
                 {
                   /* New family static, change NVT to new family. */
-                  g_debug ("%s:   Change family", __FUNCTION__);
+                  g_debug ("%s:   Change family", __func__);
                   nvt_selector_set_family (quoted_selector,
                                            oid,
                                            NVT_SELECTOR_TYPE_NVT,
@@ -1406,7 +1383,7 @@ config_update_nvt_family (resource_t config, const char *oid,
             {
               /* NVT explicitly excluded from old family, which is redundant, so
                * remove NVT selector. */
-              g_debug ("%s:   Remove selector", __FUNCTION__);
+              g_debug ("%s:   Remove selector", __func__);
               nvt_selector_remove_selector (quoted_selector,
                                             oid,
                                             NVT_SELECTOR_TYPE_NVT);
@@ -1417,20 +1394,20 @@ config_update_nvt_family (resource_t config, const char *oid,
     {
       /* Generating from empty. */
 
-      g_debug ("%s:   Selector generates from empty", __FUNCTION__);
+      g_debug ("%s:   Selector generates from empty", __func__);
 
       if (nvt_selector_family_growing (selector, old_family, constraining))
         {
           /* Old family is growing. */
 
-          g_debug ("%s:   Old family is growing", __FUNCTION__);
+          g_debug ("%s:   Old family is growing", __func__);
 
           if (nvt_selector_has (quoted_selector, oid, NVT_SELECTOR_TYPE_NVT,
                                 0 /* Included. */))
             {
               /* NVT explicitly included in old family.  This is redundant, so
                * just remove the NVT selector. */
-              g_debug ("%s:   Remove selector", __FUNCTION__);
+              g_debug ("%s:   Remove selector", __func__);
               nvt_selector_remove_selector (quoted_selector,
                                             oid,
                                             NVT_SELECTOR_TYPE_NVT);
@@ -1441,13 +1418,13 @@ config_update_nvt_family (resource_t config, const char *oid,
             {
               /* NVT explicitly excluded from old family. */
 
-              g_debug ("%s:   NVT excluded from old family", __FUNCTION__);
+              g_debug ("%s:   NVT excluded from old family", __func__);
 
               if (nvt_selector_family_growing (selector, new_family,
                                                constraining))
                 {
                   /* New family is growing, change NVT to new family. */
-                  g_debug ("%s:   Change family", __FUNCTION__);
+                  g_debug ("%s:   Change family", __func__);
                   nvt_selector_set_family (quoted_selector,
                                            oid,
                                            NVT_SELECTOR_TYPE_NVT,
@@ -1457,7 +1434,7 @@ config_update_nvt_family (resource_t config, const char *oid,
                 {
                   /* New family static, so the NVT is already excluded from the
                    * new family.  Remove the NVT selector. */
-                  g_debug ("%s:   Remove selector", __FUNCTION__);
+                  g_debug ("%s:   Remove selector", __func__);
                   nvt_selector_remove_selector (quoted_selector,
                                                 oid,
                                                 NVT_SELECTOR_TYPE_NVT);
@@ -1468,21 +1445,21 @@ config_update_nvt_family (resource_t config, const char *oid,
         {
           /* Old family is static. */
 
-          g_debug ("%s:   Old family is static", __FUNCTION__);
+          g_debug ("%s:   Old family is static", __func__);
 
           if (nvt_selector_has (quoted_selector, oid, NVT_SELECTOR_TYPE_NVT,
                                 0 /* Included. */))
             {
               /* NVT explicitly included in old family. */
 
-              g_debug ("%s:   NVT included in old family", __FUNCTION__);
+              g_debug ("%s:   NVT included in old family", __func__);
 
               if (nvt_selector_family_growing (selector, new_family,
                                                constraining))
                 {
                   /* New family growing, so the NVT is already in there.  Remove
                    * the NVT selector. */
-                  g_debug ("%s:   Remove selector", __FUNCTION__);
+                  g_debug ("%s:   Remove selector", __func__);
                   nvt_selector_remove_selector (quoted_selector,
                                                 oid,
                                                 NVT_SELECTOR_TYPE_NVT);
@@ -1490,7 +1467,7 @@ config_update_nvt_family (resource_t config, const char *oid,
               else
                 {
                   /* New family is static, change NVT to new family. */
-                  g_debug ("%s:   Change family", __FUNCTION__);
+                  g_debug ("%s:   Change family", __func__);
                   nvt_selector_set_family (quoted_selector,
                                            oid,
                                            NVT_SELECTOR_TYPE_NVT,
@@ -1504,7 +1481,7 @@ config_update_nvt_family (resource_t config, const char *oid,
               /* NVT explicitly excluded from old family.  This is redundant,
                * so just remove the NVT selector. */
               g_debug ("%s:   NVT exclude from old family, remove selector",
-                       __FUNCTION__);
+                       __func__);
               nvt_selector_remove_selector (quoted_selector,
                                             oid,
                                             NVT_SELECTOR_TYPE_NVT);
@@ -1606,19 +1583,6 @@ manage_nvt_preference_add (const char* name, const char* value)
 
   g_free (quoted_name);
   g_free (quoted_value);
-}
-
-/**
- * @brief Enable the NVT preferences.
- */
-void
-manage_nvt_preferences_enable ()
-{
-  sql ("DELETE FROM %s.meta WHERE name = 'nvt_preferences_enabled';",
-       sql_schema ());
-  sql ("INSERT INTO %s.meta (name, value)"
-       " VALUES ('nvt_preferences_enabled', 1);",
-       sql_schema ());
 }
 
 /**
@@ -1986,6 +1950,80 @@ find_config_with_permission (const char* uuid, config_t* config,
 }
 
 /**
+ * @brief Find a config given a UUID.
+ *
+ * This does not do any permission checks.
+ *
+ * @param[in]   uuid     UUID of resource.
+ * @param[out]  config   Config return, 0 if no such config.
+ *
+ * @return FALSE on success (including if no such config), TRUE on error.
+ */
+gboolean
+find_config_no_acl (const char *uuid, config_t *config)
+{
+  gchar *quoted_uuid;
+
+  quoted_uuid = sql_quote (uuid);
+  switch (sql_int64 (config,
+                     "SELECT id FROM configs WHERE uuid = '%s';",
+                     quoted_uuid))
+    {
+      case 0:
+        break;
+      case 1:        /* Too few rows in result of query. */
+        *config = 0;
+        break;
+      default:       /* Programming error. */
+        assert (0);
+      case -1:
+        g_free (quoted_uuid);
+        return TRUE;
+        break;
+    }
+
+  g_free (quoted_uuid);
+  return FALSE;
+}
+
+/**
+ * @brief Find a trash config given a UUID.
+ *
+ * This does not do any permission checks.
+ *
+ * @param[in]   uuid     UUID of resource.
+ * @param[out]  config   Config return, 0 if no such config.
+ *
+ * @return FALSE on success (including if no such config), TRUE on error.
+ */
+gboolean
+find_trash_config_no_acl (const char *uuid, config_t *config)
+{
+  gchar *quoted_uuid;
+
+  quoted_uuid = sql_quote (uuid);
+  switch (sql_int64 (config,
+                     "SELECT id FROM configs_trash WHERE uuid = '%s';",
+                     quoted_uuid))
+    {
+      case 0:
+        break;
+      case 1:        /* Too few rows in result of query. */
+        *config = 0;
+        break;
+      default:       /* Programming error. */
+        assert (0);
+      case -1:
+        g_free (quoted_uuid);
+        return TRUE;
+        break;
+    }
+
+  g_free (quoted_uuid);
+  return FALSE;
+}
+
+/**
  * @brief Gets an NVT preference by id or by name.
  *
  * Note: This currently only gets the fields needed by create_config.
@@ -2010,24 +2048,23 @@ get_nvt_preference_by_id (const char *nvt_oid,
   char *full_name, *id, *name, *type, *nvt_name, *default_value, *hr_name;
   array_t *alts;
   gchar *quoted_oid, *quoted_id;
-  char **full_name_split;
 
   full_name = name = type = nvt_name = default_value = hr_name = NULL;
 
   /* Check parameters */
   if (nvt_oid == NULL)
     {
-      g_warning ("%s: Missing nvt_oid", __FUNCTION__);
+      g_warning ("%s: Missing nvt_oid", __func__);
       return NULL;
     }
   if (find_id == NULL || strcmp (find_id, "") == 0)
     {
-      g_warning ("%s: Missing or empty find_id", __FUNCTION__);
+      g_warning ("%s: Missing or empty find_id", __func__);
       return NULL;
     }
   if (value == NULL)
     {
-      g_warning ("%s: Missing value", __FUNCTION__);
+      g_warning ("%s: Missing value", __func__);
       return NULL;
     }
 
@@ -2044,33 +2081,53 @@ get_nvt_preference_by_id (const char *nvt_oid,
   g_free (quoted_id);
 
   if (full_name == NULL)
-    return NULL;
-
-  /* Try to get components of the full name */
-  full_name_split = g_strsplit (full_name, ":", 4);
-
-  if (g_strv_length (full_name_split) != 4)
     {
-      g_warning ("%s: Preference name %s does not have 4 parts",
-                 __FUNCTION__, full_name);
-      g_strfreev (full_name_split);
-      free (full_name);
-      return NULL;
+      if (check_name == NULL || strcmp (check_name, "") == 0)
+        {
+          g_warning ("%s: Preference not found and given name is missing/empty",
+                     __func__);
+          return NULL;
+        }
+      if (check_type == NULL || strcmp (check_type, "") == 0)
+        {
+          g_warning ("%s: Preference not found and given name is missing/empty",
+                     __func__);
+          return NULL;
+        }
+      id = strdup (find_id);
+      type = strdup (check_type);
+      name = strdup (check_name);
     }
-  free (full_name);
+  else
+    {
+      char **full_name_split;
 
-  id = strdup (full_name_split[1]);
-  type = strdup (full_name_split[2]);
-  name = strdup (full_name_split[3]);
-  g_strfreev (full_name_split);
+      /* Try to get components of the full name */
+      full_name_split = g_strsplit (full_name, ":", 4);
 
-  if (check_type && strcmp (check_type, "") && strcmp (check_type, type))
-    g_warning ("%s: type of preference %s:%s (%s) has changed from %s to %s.",
-               __FUNCTION__, nvt_oid, find_id, name, check_type, type);
+      if (g_strv_length (full_name_split) != 4)
+        {
+          g_warning ("%s: Preference name %s does not have 4 parts",
+                     __func__, full_name);
+          g_strfreev (full_name_split);
+          free (full_name);
+          return NULL;
+        }
+      free (full_name);
 
-  if (check_name && strcmp (check_name, "") && strcmp (check_name, name))
-    g_message ("%s: name of preference %s:%s has changed from '%s' to '%s'.",
-               __FUNCTION__, nvt_oid, find_id, check_name, name);
+      id = strdup (full_name_split[1]);
+      type = strdup (full_name_split[2]);
+      name = strdup (full_name_split[3]);
+      g_strfreev (full_name_split);
+
+      if (check_type && strcmp (check_type, "") && strcmp (check_type, type))
+        g_warning ("%s: type of preference %s:%s (%s) has changed from %s to %s.",
+                   __func__, nvt_oid, find_id, name, check_type, type);
+
+      if (check_name && strcmp (check_name, "") && strcmp (check_name, name))
+        g_message ("%s: name of preference %s:%s has changed from '%s' to '%s'.",
+                   __func__, nvt_oid, find_id, check_name, name);
+    }
 
   alts = make_array ();
   array_terminate (alts);
@@ -2178,10 +2235,6 @@ config_insert_preferences (config_t config,
             if (config_type == NULL || strcmp (config_type, "0") == 0)
               {
                 /* NVT preference */
-
-                if (preference->id == NULL || *preference->id == '\0')
-                  return -4;
-
                 /* OID:PrefID:PrefType:PrefName value */
                 sql ("INSERT INTO config_preferences"
                      " (config, type, name, value)"
@@ -2241,25 +2294,35 @@ config_insert_preferences (config_t config,
  * If a config with the same name exists already then add a unique integer
  * suffix onto the name.
  *
+ * @param[in]   check_access   Whether to check for create_config permission.
+ * @param[in]   config_id      ID if one is required, else NULL.
  * @param[in]   proposed_name  Proposed name of config.
+ * @param[in]   make_name_unique  Whether to make name unique.
  * @param[in]   comment        Comment on config.
+ * @param[in]   all_selector   Whether to use "all" selector instead of selectors.
  * @param[in]   selectors      NVT selectors.
  * @param[in]   preferences    Preferences.
  * @param[in]   config_type    Config type.
  * @param[in]   usage_type     The usage type ("scan" or "policy")
+ * @param[in]   allow_errors   Whether certain errors are allowed.
+ * @param[in]   predefined     Whether config is predefined.
  * @param[out]  config         On success the config.
  * @param[out]  name           On success the name of the config.
  *
  * @return 0 success, 1 config exists already, 99 permission denied, -1 error,
  *         -2 name empty, -3 input error in selectors, -4 input error in
- *         preferences.
+ *         preferences, -5 error in config_id.
  */
-int
-create_config (const char* proposed_name, const char* comment,
-               const array_t* selectors /* nvt_selector_t. */,
-               const array_t* preferences /* preference_t. */,
-               const char* config_type, const char *usage_type,
-               config_t *config, char **name)
+static int
+create_config_internal (int check_access, const char *config_id,
+                        const char *proposed_name,
+                        int make_name_unique, const char *comment,
+                        int all_selector,
+                        const array_t *selectors /* nvt_selector_t. */,
+                        const array_t *preferences /* preference_t. */,
+                        const char *config_type, const char *usage_type,
+                        int allow_errors, int predefined, config_t *config,
+                        char **name)
 {
   int ret;
   gchar *quoted_comment, *candidate_name, *quoted_candidate_name;
@@ -2270,15 +2333,26 @@ create_config (const char* proposed_name, const char* comment,
 
   assert (current_credentials.uuid);
 
+  if (config_id
+      && (g_regex_match_simple ("^[-0123456789abcdef]{36}$",
+                                config_id, 0, 0)
+          == FALSE))
+    return -5;
+
   if (proposed_name == NULL || strlen (proposed_name) == 0) return -2;
 
-  selector_uuid = gvm_uuid_make ();
-  if (selector_uuid == NULL)
-    return -1;
+  if (all_selector)
+    selector_uuid = NULL;
+  else
+    {
+      selector_uuid = gvm_uuid_make ();
+      if (selector_uuid == NULL)
+        return -1;
+    }
 
   sql_begin_immediate ();
 
-  if (acl_user_may ("create_config") == 0)
+  if (check_access && (acl_user_may ("create_config") == 0))
     {
       sql_rollback ();
       free (selector_uuid);
@@ -2293,7 +2367,7 @@ create_config (const char* proposed_name, const char* comment,
   else
     actual_usage_type = "scan";
 
-  while (1)
+  while (make_name_unique)
     {
       if (!resource_with_name_exists (quoted_candidate_name, "config", 0))
         break;
@@ -2307,29 +2381,37 @@ create_config (const char* proposed_name, const char* comment,
     {
       quoted_comment = sql_nquote (comment, strlen (comment));
       sql ("INSERT INTO configs (uuid, name, owner, nvt_selector, comment,"
-           " type, creation_time, modification_time, usage_type)"
-           " VALUES (make_uuid (), '%s',"
+           " type, creation_time, modification_time, usage_type, predefined)"
+           " VALUES (%s%s%s, '%s',"
            " (SELECT id FROM users WHERE users.uuid = '%s'),"
-           " '%s', '%s', '%s', m_now (), m_now (), '%s');",
+           " '%s', '%s', '%s', m_now (), m_now (), '%s', %i);",
+           config_id ? "'" : "",
+           config_id ? config_id : "make_uuid ()",
+           config_id ? "'" : "",
            quoted_candidate_name,
            current_credentials.uuid,
-           selector_uuid,
+           selector_uuid ? selector_uuid : MANAGE_NVT_SELECTOR_UUID_ALL,
            quoted_comment,
            quoted_type,
-           actual_usage_type);
+           actual_usage_type,
+           predefined);
       g_free (quoted_comment);
     }
   else
     sql ("INSERT INTO configs (uuid, name, owner, nvt_selector, comment,"
-         " type, creation_time, modification_time, usage_type)"
-         " VALUES (make_uuid (), '%s',"
+         " type, creation_time, modification_time, usage_type, predefined)"
+         " VALUES (%s%s%s, '%s',"
          " (SELECT id FROM users WHERE users.uuid = '%s'),"
-         " '%s', '', '%s', m_now (), m_now (), '%s');",
+         " '%s', '', '%s', m_now (), m_now (), '%s', %i);",
+         config_id ? "'" : "",
+         config_id ? config_id : "make_uuid ()",
+         config_id ? "'" : "",
          quoted_candidate_name,
          current_credentials.uuid,
-         selector_uuid,
+         selector_uuid ? selector_uuid : MANAGE_NVT_SELECTOR_UUID_ALL,
          quoted_type,
-         actual_usage_type);
+         actual_usage_type,
+         predefined);
   g_free (quoted_candidate_name);
   g_free (quoted_type);
 
@@ -2337,9 +2419,9 @@ create_config (const char* proposed_name, const char* comment,
 
   *config = sql_last_insert_id ();
 
-  if (config_type == NULL || strcmp (config_type, "0") == 0)
+  if (selector_uuid && (config_type == NULL || strcmp (config_type, "0") == 0))
     {
-      if ((ret = insert_nvt_selectors (selector_uuid, selectors)))
+      if ((ret = insert_nvt_selectors (selector_uuid, selectors, allow_errors)))
         {
           sql_rollback ();
           free (selector_uuid);
@@ -2363,6 +2445,81 @@ create_config (const char* proposed_name, const char* comment,
   sql_commit ();
   *name = candidate_name;
   return 0;
+}
+
+/**
+ * @brief Create a config.
+ *
+ * If a config with the same name exists already then add a unique integer
+ * suffix onto the name.
+ *
+ * @param[in]   config_id      ID if one is required, else NULL.
+ * @param[in]   proposed_name  Proposed name of config.
+ * @param[in]   make_name_unique  Whether to make name unique.
+ * @param[in]   comment        Comment on config.
+ * @param[in]   all_selector   Whether to use "all" selector instead of selectors.
+ * @param[in]   selectors      NVT selectors.
+ * @param[in]   preferences    Preferences.
+ * @param[in]   config_type    Config type.
+ * @param[in]   usage_type     The usage type ("scan" or "policy")
+ * @param[out]  config         On success the config.
+ * @param[out]  name           On success the name of the config.
+ *
+ * @return 0 success, 1 config exists already, 99 permission denied, -1 error,
+ *         -2 name empty, -3 input error in selectors, -4 input error in
+ *         preferences, -5 error in config_id.
+ */
+int
+create_config (const char *config_id, const char *proposed_name,
+               int make_name_unique, const char *comment, int all_selector,
+               const array_t *selectors /* nvt_selector_t. */,
+               const array_t *preferences /* preference_t. */,
+               const char *config_type, const char *usage_type,
+               config_t *config, char **name)
+{
+  return create_config_internal (1, config_id, proposed_name, make_name_unique,
+                                 comment, all_selector, selectors, preferences,
+                                 config_type, usage_type, 1,
+                                 0, /* Predefined. */
+                                 config, name);
+}
+
+/**
+ * @brief Create a config.
+ *
+ * If a config with the same name exists already then add a unique integer
+ * suffix onto the name.
+ *
+ * @param[in]   config_id      ID if one is required, else NULL.
+ * @param[in]   proposed_name  Proposed name of config.
+ * @param[in]   make_name_unique  Whether to make name unique.
+ * @param[in]   comment        Comment on config.
+ * @param[in]   all_selector   Whether to use "all" selector instead of selectors.
+ * @param[in]   selectors      NVT selectors.
+ * @param[in]   preferences    Preferences.
+ * @param[in]   config_type    Config type.
+ * @param[in]   usage_type     The usage type ("scan" or "policy")
+ * @param[out]  config         On success the config.
+ * @param[out]  name           On success the name of the config.
+ *
+ * @return 0 success, 1 config exists already, 99 permission denied, -1 error,
+ *         -2 name empty, -3 input error in selectors, -4 input error in
+ *         preferences, -5 error in config_id.
+ */
+int
+create_config_no_acl (const char *config_id, const char *proposed_name,
+                      int make_name_unique, const char *comment,
+                      int all_selector,
+                      const array_t *selectors /* nvt_selector_t. */,
+                      const array_t *preferences /* preference_t. */,
+                      const char *config_type, const char *usage_type,
+                      config_t *config, char **name)
+{
+  return create_config_internal (0, config_id, proposed_name, make_name_unique,
+                                 comment, all_selector, selectors, preferences,
+                                 config_type, usage_type, 0,
+                                 1, /* Predefined. */
+                                 config, name);
 }
 
 /**
@@ -2611,6 +2768,36 @@ config_scanner (config_t config)
 }
 
 /**
+ * @brief Return whether a config is predefined.
+ *
+ * @param[in]  config  Config.
+ *
+ * @return 1 if predefined, else 0.
+ */
+int
+config_predefined (config_t config)
+{
+  return sql_int ("SELECT predefined FROM configs"
+                  " WHERE id = %llu;",
+                  config);
+}
+
+/**
+ * @brief Return whether a trash config is predefined.
+ *
+ * @param[in]  config  Config.
+ *
+ * @return 1 if predefined, else 0.
+ */
+int
+trash_config_predefined (config_t config)
+{
+  return sql_int ("SELECT predefined FROM configs_trash"
+                  " WHERE id = %llu;",
+                  config);
+}
+
+/**
  * @brief Get the timeout value for an NVT in a config.
  *
  * @param[in]  config  Config.
@@ -2779,6 +2966,8 @@ copy_config (const char* name, const char* comment, const char *config_id,
       return ret;
     }
 
+  sql ("UPDATE configs SET predefined = 0 WHERE id = %llu;", new);
+
   sql ("INSERT INTO config_preferences (config, type, name, value,"
        "                                default_value, hr_name)"
        " SELECT %llu, type, name, value, default_value, hr_name"
@@ -2843,23 +3032,12 @@ copy_config (const char* name, const char* comment, const char *config_id,
  * @param[in]  ultimate   Whether to remove entirely, or to trashcan.
  *
  * @return 0 success, 1 fail because a task refers to the config, 2 failed to
- *         find config, 3 config is predefined, 99 permission denied, -1 error.
+ *         find config, 99 permission denied, -1 error.
  */
 int
 delete_config (const char *config_id, int ultimate)
 {
   config_t config = 0;
-
-  if ((strcmp (config_id, CONFIG_UUID_FULL_AND_FAST) == 0)
-      || (strcmp (config_id, CONFIG_UUID_FULL_AND_FAST_ULTIMATE) == 0)
-      || (strcmp (config_id, CONFIG_UUID_FULL_AND_VERY_DEEP) == 0)
-      || (strcmp (config_id, CONFIG_UUID_FULL_AND_VERY_DEEP_ULTIMATE) == 0)
-      || (strcmp (config_id, CONFIG_UUID_BASE) == 0)
-      || (strcmp (config_id, CONFIG_UUID_DISCOVERY) == 0)
-      || (strcmp (config_id, CONFIG_UUID_HOST_DISCOVERY) == 0)
-      || (strcmp (config_id, CONFIG_UUID_SYSTEM_DISCOVERY) == 0)
-      || (strcmp (config_id, CONFIG_UUID_EMPTY) == 0))
-    return 3;
 
   sql_begin_immediate ();
 
@@ -2907,8 +3085,10 @@ delete_config (const char *config_id, int ultimate)
       permissions_set_orphans ("config", config, LOCATION_TRASH);
       tags_remove_resource ("config", config, LOCATION_TRASH);
 
-      sql ("DELETE FROM nvt_selectors WHERE name ="
-           " (SELECT nvt_selector FROM configs_trash WHERE id = %llu);",
+      sql ("DELETE FROM nvt_selectors"
+           " WHERE name != '" MANAGE_NVT_SELECTOR_UUID_ALL "'"
+           " AND name = (SELECT nvt_selector FROM configs_trash"
+           "             WHERE id = %llu);",
            config);
       sql ("DELETE FROM config_preferences_trash WHERE config = %llu;",
            config);
@@ -2929,8 +3109,10 @@ delete_config (const char *config_id, int ultimate)
           return 1;
         }
 
-      sql ("DELETE FROM nvt_selectors WHERE name ="
-           " (SELECT nvt_selector FROM configs_trash WHERE id = %llu);",
+      sql ("DELETE FROM nvt_selectors"
+           " WHERE name != '" MANAGE_NVT_SELECTOR_UUID_ALL "'"
+           " AND name = (SELECT nvt_selector FROM configs_trash"
+           "             WHERE id = %llu);",
            config);
 
       permissions_set_orphans ("config", config, LOCATION_TABLE);
@@ -2953,11 +3135,11 @@ delete_config (const char *config_id, int ultimate)
       sql ("INSERT INTO configs_trash"
            " (uuid, owner, name, nvt_selector, comment, family_count,"
            "  nvt_count, families_growing, nvts_growing, type, scanner,"
-           "  creation_time, modification_time,"
+           "  predefined, creation_time, modification_time,"
            "  scanner_location, usage_type)"
            " SELECT uuid, owner, name, nvt_selector, comment, family_count,"
            "        nvt_count, families_growing, nvts_growing, type, scanner,"
-           "        creation_time, modification_time,"
+           "        predefined, creation_time, modification_time,"
            "        " G_STRINGIFY (LOCATION_TABLE) ", usage_type"
            " FROM configs WHERE id = %llu;",
            config);
@@ -3373,9 +3555,23 @@ config_iterator_scanner_trash (iterator_t* iterator)
 DEF_ACCESS (config_iterator_usage_type, GET_ITERATOR_COLUMN_COUNT + 8);
 
 /**
- * @brief Return whether a config is referenced by a task.
+ * @brief Get predefined status from a config iterator.
  *
- * The predefined configs are always in use.
+ * @param[in]  iterator  Iterator.
+ *
+ * @return 1 if predefined, else 0.
+ */
+int
+config_iterator_predefined (iterator_t* iterator)
+{
+  int ret = 0;
+  if (iterator->done) return 0;
+  ret = iterator_int (iterator, GET_ITERATOR_COLUMN_COUNT + 9);
+  return ret;
+}
+
+/**
+ * @brief Return whether a config is referenced by a task.
  *
  * @param[in]  config  Config.
  *
@@ -3396,25 +3592,11 @@ config_in_use (config_t config)
  *
  * @param[in]  config  Config.
  *
- * @return 0 if predefined config, else 1.
+ * @return 1.
  */
 int
 config_writable (config_t config)
 {
-  if (sql_int ("SELECT count(*) FROM configs"
-               " WHERE id = %i"
-               " AND (uuid = '" CONFIG_UUID_FULL_AND_FAST "'"
-               "      OR uuid = '" CONFIG_UUID_FULL_AND_FAST_ULTIMATE "'"
-               "      OR uuid = '" CONFIG_UUID_FULL_AND_VERY_DEEP "'"
-               "      OR uuid = '" CONFIG_UUID_FULL_AND_VERY_DEEP_ULTIMATE "'"
-               "      OR uuid = '" CONFIG_UUID_BASE "'"
-               "      OR uuid = '" CONFIG_UUID_EMPTY "'"
-               "      OR uuid = '" CONFIG_UUID_DISCOVERY "'"
-               "      OR uuid = '" CONFIG_UUID_HOST_DISCOVERY "'"
-               "      OR uuid = '" CONFIG_UUID_SYSTEM_DISCOVERY "');",
-               config))
-    return 0;
-
   return 1;
 }
 
@@ -3627,6 +3809,128 @@ config_nvt_selector (config_t config)
 }
 
 /**
+ * @brief Update a preference of a config.
+ *
+ * @param[in]  config      Config.
+ * @param[in]  nvt         UUID of NVT.  NULL for scanner preference.
+ * @param[in]  name        Preference name, including NVT name and preference
+ *                         type.
+ * @param[in]  value_64    Preference value in base64.  NULL for an NVT
+ *                         preference removes the preference from the config.
+ *
+ * @return 0 success, 1 config in use, 2 empty radio value, 3 failed to find
+ *         config, -1 error.
+ */
+static int
+modify_config_preference (config_t config, const char* nvt,
+                          const char* name, const char* value_64)
+{
+  gchar *quoted_name, *quoted_value, *value, **splits;
+
+  quoted_name = sql_quote (name);
+
+  if (strlen (value_64))
+    {
+      gsize value_len;
+      value = (gchar*) g_base64_decode (value_64, &value_len);
+    }
+  else
+    value = g_strdup ("");
+
+  /* OID:PrefID:PrefType:PrefName value */
+  splits = g_strsplit (name, ":", 4);
+  if (splits && g_strv_length (splits) == 4)
+    {
+      if (strcmp (splits[2], "radio") == 0)
+        {
+          char *old_value;
+          gchar **split, **point;
+          GString *string;
+
+          if (strlen (value) == 0)
+            {
+              g_free (quoted_name);
+              g_free (value);
+              return 2;
+            }
+
+          /* A radio.  Put the new value on the front of the list of options. */
+
+          old_value = sql_string ("SELECT value FROM config_preferences"
+                                  " WHERE config = %llu"
+                                  " AND type %s"
+                                  " AND name = '%s'",
+                                  config,
+                                  nvt ? "= 'PLUGINS_PREFS'" : "is NULL",
+                                  quoted_name);
+          if (old_value == NULL)
+            old_value = sql_string ("SELECT value FROM nvt_preferences"
+                                    " WHERE name = '%s'",
+                                    quoted_name);
+          if (old_value)
+            {
+              string = g_string_new (value);
+              split = g_strsplit (old_value, ";", 0);
+              free (old_value);
+              point = split;
+              while (*point)
+                {
+                  if (strlen (*point) == 0)
+                    {
+                      g_free (quoted_name);
+                      g_strfreev (split);
+                      g_free (value);
+                      g_string_free (string, TRUE);
+                      return -1;
+                    }
+
+                  if (strcmp (*point, value))
+                    {
+                      g_string_append_c (string, ';');
+                      g_string_append (string, *point);
+                    }
+                  point++;
+                }
+              g_strfreev (split);
+              g_free (value);
+              value = g_string_free (string, FALSE);
+            }
+        }
+      else if (strcmp (splits[2], "scanner") == 0)
+        {
+          /* A scanner preference.  Remove type decoration from name. */
+
+          g_free (quoted_name);
+          quoted_name = sql_quote (splits[3]);
+        }
+    }
+  g_strfreev (splits);
+
+  quoted_value = sql_quote ((gchar*) value);
+  g_free (value);
+
+  if (config_type (config) > 0)
+    sql ("UPDATE config_preferences SET value = '%s'"
+         " WHERE config = %llu AND name = '%s';",
+         quoted_value, config, quoted_name);
+  else
+    {
+      /* nvt prefs are not present on first modification. */
+      sql ("DELETE FROM config_preferences"
+           " WHERE config = %llu AND type %s AND name = '%s'",
+           config,
+           nvt ? "= 'PLUGINS_PREFS'" : "= 'SERVER_PREFS'",
+           quoted_name);
+      sql ("INSERT INTO config_preferences"
+           " (config, type, name, value) VALUES (%llu, %s, '%s', '%s');",
+           config, nvt ? "'PLUGINS_PREFS'" : "'SERVER_PREFS'", quoted_name,
+           quoted_value);
+    }
+
+  return 0;
+}
+
+/**
  * @brief Set a preference of a config.
  *
  * @param[in]  config_id  Config.
@@ -3643,11 +3947,13 @@ int
 manage_set_config_preference (const gchar *config_id, const char* nvt,
                               const char* name, const char* value_64)
 {
-  gchar *quoted_name, *quoted_value, *value, **splits;
+  int ret;
   config_t config;
 
   if (value_64 == NULL)
     {
+      gchar *quoted_name, **splits;
+
       sql_begin_immediate ();
 
       if (find_config_with_permission (config_id, &config, "modify_config"))
@@ -3715,112 +4021,14 @@ manage_set_config_preference (const gchar *config_id, const char* nvt,
       return 1;
     }
 
-  quoted_name = sql_quote (name);
-
-  if (strlen (value_64))
+  ret = modify_config_preference (config, nvt, name, value_64);
+  if (ret)
     {
-      gsize value_len;
-      value = (gchar*) g_base64_decode (value_64, &value_len);
-    }
-  else
-    value = g_strdup ("");
-
-  /* OID:PrefID:PrefType:PrefName value */
-  splits = g_strsplit (name, ":", 4);
-  if (splits && g_strv_length (splits) == 4)
-    {
-      if (strcmp (splits[2], "radio") == 0)
-        {
-          char *old_value;
-          gchar **split, **point;
-          GString *string;
-
-          if (strlen (value) == 0)
-            {
-              g_free (quoted_name);
-              g_free (value);
-              sql_rollback ();
-              return 2;
-            }
-
-          /* A radio.  Put the new value on the front of the list of options. */
-
-          old_value = sql_string ("SELECT value FROM config_preferences"
-                                  " WHERE config = %llu"
-                                  " AND type %s"
-                                  " AND name = '%s'",
-                                  config,
-                                  nvt ? "= 'PLUGINS_PREFS'" : "is NULL",
-                                  quoted_name);
-          if (old_value == NULL)
-            old_value = sql_string ("SELECT value FROM nvt_preferences"
-                                    " WHERE name = '%s'",
-                                    quoted_name);
-          if (old_value)
-            {
-              string = g_string_new (value);
-              split = g_strsplit (old_value, ";", 0);
-              free (old_value);
-              point = split;
-              while (*point)
-                {
-                  if (strlen (*point) == 0)
-                    {
-                      g_free (quoted_name);
-                      g_strfreev (split);
-                      g_free (value);
-                      g_string_free (string, TRUE);
-                      sql_rollback ();
-                      return -1;
-                    }
-
-                  if (strcmp (*point, value))
-                    {
-                      g_string_append_c (string, ';');
-                      g_string_append (string, *point);
-                    }
-                  point++;
-                }
-              g_strfreev (split);
-              g_free (value);
-              value = g_string_free (string, FALSE);
-            }
-        }
-      else if (strcmp (splits[2], "scanner") == 0)
-        {
-          /* A scanner preference.  Remove type decoration from name. */
-
-          g_free (quoted_name);
-          quoted_name = sql_quote (splits[3]);
-        }
-    }
-  g_strfreev (splits);
-
-  quoted_value = sql_quote ((gchar*) value);
-  g_free (value);
-
-  if (config_type (config) > 0)
-    sql ("UPDATE config_preferences SET value = '%s'"
-         " WHERE config = %llu AND name = '%s';",
-         quoted_value, config, quoted_name);
-  else
-    {
-      /* nvt prefs are not present on first modification. */
-      sql ("DELETE FROM config_preferences"
-           " WHERE config = %llu AND type %s AND name = '%s'",
-           config,
-           nvt ? "= 'PLUGINS_PREFS'" : "= 'SERVER_PREFS'",
-           quoted_name);
-      sql ("INSERT INTO config_preferences"
-           " (config, type, name, value) VALUES (%llu, %s, '%s', '%s');",
-           config, nvt ? "'PLUGINS_PREFS'" : "'SERVER_PREFS'", quoted_name,
-           quoted_value);
+      sql_rollback ();
+      return ret;
     }
 
   sql_commit ();
-
-  g_free (quoted_name);
-  g_free (quoted_value);
   return 0;
 }
 
@@ -3966,12 +4174,13 @@ manage_set_config_nvts (const gchar *config_id, const char* family,
 
       /* Clear any NVT selectors for this family from the config. */
 
-      sql ("DELETE FROM nvt_selectors"
-           " WHERE name = '%s'"
-           " AND type = " G_STRINGIFY (NVT_SELECTOR_TYPE_NVT)
-           " AND family = '%s';",
-           quoted_selector,
-           quoted_family);
+      if (strcmp (quoted_selector, MANAGE_NVT_SELECTOR_UUID_ALL))
+        sql ("DELETE FROM nvt_selectors"
+             " WHERE name = '%s'"
+             " AND type = " G_STRINGIFY (NVT_SELECTOR_TYPE_NVT)
+             " AND family = '%s';",
+             quoted_selector,
+             quoted_family);
 
       /* Exclude all no's. */
 
@@ -4008,12 +4217,13 @@ manage_set_config_nvts (const gchar *config_id, const char* family,
 
       /* Clear any NVT selectors for this family from the config. */
 
-      sql ("DELETE FROM nvt_selectors"
-           " WHERE name = '%s'"
-           " AND type = " G_STRINGIFY (NVT_SELECTOR_TYPE_NVT)
-           " AND family = '%s';",
-           quoted_selector,
-           quoted_family);
+      if (strcmp (quoted_selector, MANAGE_NVT_SELECTOR_UUID_ALL))
+        sql ("DELETE FROM nvt_selectors"
+             " WHERE name = '%s'"
+             " AND type = " G_STRINGIFY (NVT_SELECTOR_TYPE_NVT)
+             " AND family = '%s';",
+             quoted_selector,
+             quoted_family);
 
       /* Include all yes's. */
 
@@ -4455,4 +4665,171 @@ update_config_cache_init (const char *uuid)
   while (next (&configs))
     update_config_cache (&configs);
   cleanup_iterator (&configs);
+}
+
+/**
+ * @brief Migrate old ownerless configs to the Feed Owner.
+ */
+void
+migrate_predefined_configs ()
+{
+  sql ("UPDATE configs"
+       " SET owner = (SELECT id FROM users"
+       "              WHERE uuid = (SELECT value FROM settings"
+       "                            WHERE uuid = '%s'))"
+       " WHERE owner is NULL;",
+       SETTING_UUID_FEED_IMPORT_OWNER);
+}
+
+
+/* Startup. */
+
+/**
+ * @brief Check if a config has been updated in the feed.
+ *
+ * @param[in]  path    Full path to config XML in feed.
+ * @param[in]  config  Config.
+ *
+ * @return 1 if updated in feed, else 0.
+ */
+int
+config_updated_in_feed (config_t config, const gchar *path)
+{
+  GStatBuf state;
+  int last_config_update;
+
+  last_config_update = sql_int ("SELECT modification_time FROM configs"
+                                " WHERE id = %llu;",
+                                config);
+
+  if (g_stat (path, &state))
+    {
+      g_warning ("%s: Failed to stat feed config file: %s",
+                 __func__,
+                 strerror (errno));
+      return 0;
+    }
+
+  if (state.st_mtime <= last_config_update)
+    return 0;
+
+  return 1;
+}
+
+/**
+ * @brief Update a config from an XML file.
+ *
+ * @param[in]  config       Existing config.
+ * @param[in]  type         New config type.
+ * @param[in]  name         New name.
+ * @param[in]  comment      New comment.
+ * @param[in]  usage_type   New usage type.
+ * @param[in]  all_selector  Whether to use "all" selector instead of selectors.
+ * @param[in]  selectors     New NVT selectors.
+ * @param[in]  preferences   New preferences.
+ */
+void
+update_config (config_t config, const gchar *type, const gchar *name,
+               const gchar *comment, const gchar *usage_type,
+               int all_selector,
+               const array_t* selectors /* nvt_selector_t. */,
+               const array_t* preferences /* preference_t. */)
+{
+  gchar *quoted_name, *quoted_comment, *quoted_type, *actual_usage_type;
+
+  sql_begin_immediate ();
+
+  if (usage_type && strcasecmp (usage_type, "policy") == 0)
+    actual_usage_type = "policy";
+  else
+    actual_usage_type = "scan";
+
+  quoted_name = sql_quote (name);
+  quoted_comment = sql_quote (comment ? comment : "");
+  quoted_type = sql_quote (type);
+  sql ("UPDATE configs"
+       " SET name = '%s', comment = '%s', type = '%s', usage_type = '%s',"
+       " predefined = 1, modification_time = m_now ()"
+       " WHERE id = %llu;",
+       quoted_name,
+       quoted_comment,
+       quoted_type,
+       actual_usage_type,
+       config);
+  g_free (quoted_name);
+  g_free (quoted_comment);
+  g_free (quoted_type);
+
+  /* Replace the NVT selectors. */
+
+  if (type == NULL || strcmp (type, "0") == 0)
+    {
+      char *selector_uuid;
+
+      if (all_selector)
+        selector_uuid = NULL;
+      else
+        {
+          selector_uuid = gvm_uuid_make ();
+          if (selector_uuid == NULL)
+            {
+              g_warning ("%s: failed to allocate UUID", __func__);
+              sql_rollback ();
+              return;
+            }
+        }
+
+      sql ("DELETE FROM nvt_selectors"
+           " WHERE name != '" MANAGE_NVT_SELECTOR_UUID_ALL "'"
+           " AND name = (SELECT nvt_selector FROM configs"
+           "             WHERE id = %llu);",
+           config);
+
+      sql ("UPDATE configs SET nvt_selector = '%s' WHERE id = %llu;",
+           selector_uuid ? selector_uuid : MANAGE_NVT_SELECTOR_UUID_ALL,
+           config);
+
+      if (selector_uuid && insert_nvt_selectors (selector_uuid, selectors, 0))
+        {
+          g_warning ("%s: Error in feed config NVT selector", __func__);
+          free (selector_uuid);
+          sql_rollback ();
+          return;
+        }
+
+      free (selector_uuid);
+    }
+
+  /* Replace the preferences. */
+
+  sql ("DELETE FROM config_preferences WHERE config = %llu;", config);
+  if (config_insert_preferences (config, preferences, type))
+    {
+      g_warning ("%s: Error in feed config preference", __func__);
+      sql_rollback ();
+      return;
+    }
+
+  sql_commit ();
+}
+
+/**
+ * @brief Check configs, for startup.
+ */
+void
+check_db_configs ()
+{
+  migrate_predefined_configs ();
+
+  if (sync_configs_with_feed ())
+    g_warning ("%s: Failed to sync configs with feed", __func__);
+
+  /* Warn about feed resources in the trash. */
+  if (sql_int ("SELECT EXISTS (SELECT * FROM configs_trash"
+               "               WHERE predefined = 1);"))
+    {
+      g_warning ("%s: There are feed configs/policies in the trash."
+                 " These will be excluded from the sync.",
+                 __func__);
+    }
 }

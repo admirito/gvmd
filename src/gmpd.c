@@ -1,20 +1,19 @@
-/* Copyright (C) 2009-2019 Greenbone Networks GmbH
+/* Copyright (C) 2009-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -95,7 +94,7 @@ buffer_size_t from_client_end = 0;
  *         -4 max_ips_per_target out of range.
  */
 int
-init_gmpd (GSList *log_config, const gchar *database,
+init_gmpd (GSList *log_config, const db_conn_info_t *database,
            int max_ips_per_target, int max_email_attachment_size,
            int max_email_include_size, int max_email_message_size,
            manage_connection_forker_t fork_connection, int skip_db_check)
@@ -113,7 +112,7 @@ init_gmpd (GSList *log_config, const gchar *database,
  * @param[in]  disable   Commands to disable.
  */
 void
-init_gmpd_process (const gchar *database, gchar **disable)
+init_gmpd_process (const db_conn_info_t *database, gchar **disable)
 {
   from_client_start = 0;
   from_client_end = 0;
@@ -146,7 +145,7 @@ read_from_client_unix (int client_socket)
             /* Interrupted, try read again. */
             continue;
           g_warning ("%s: failed to read from client: %s",
-                     __FUNCTION__, strerror (errno));
+                     __func__, strerror (errno));
           return -1;
         }
       if (count == 0)
@@ -208,10 +207,10 @@ read_from_client_tls (gnutls_session_t* client_session)
               int alert = gnutls_alert_get (*client_session);
               const char* alert_name = gnutls_alert_get_name (alert);
               g_warning ("%s: TLS Alert %d: %s",
-                         __FUNCTION__, alert, alert_name);
+                         __func__, alert, alert_name);
             }
           g_warning ("%s: failed to read from client: %s",
-                     __FUNCTION__, gnutls_strerror ((int) count));
+                     __func__, gnutls_strerror ((int) count));
           return -1;
         }
       if (count == 0)
@@ -280,7 +279,7 @@ write_to_client_tls (gnutls_session_t* client_session)
             /** @todo Rehandshake. */
             continue;
           g_warning ("%s: failed to write to client: %s",
-                     __FUNCTION__,
+                     __func__,
                      gnutls_strerror ((int) count));
           return -1;
         }
@@ -319,7 +318,7 @@ write_to_client_unix (int client_socket)
             /* Interrupted, try write again. */
             continue;
           g_warning ("%s: failed to write to client: %s",
-                     __FUNCTION__,
+                     __func__,
                      strerror (errno));
           return -1;
         }
@@ -377,7 +376,7 @@ gmpd_send_to_client (const char* msg, void* write_to_client_data)
             break;
           case -1:      /* Error. */
             g_debug ("   %s full (%i < %zu); client write failed",
-                    __FUNCTION__,
+                    __func__,
                     ((buffer_size_t) TO_CLIENT_BUFFER_SIZE) - to_client_end,
                     strlen (msg));
             return TRUE;
@@ -392,10 +391,15 @@ gmpd_send_to_client (const char* msg, void* write_to_client_data)
       if (length > strlen (msg))
         break;
 
-      memmove (to_client + to_client_end, msg, length);
-      g_debug ("-> client: %.*s", (int) length, msg);
-      to_client_end += length;
-      msg += length;
+      /* length can be 0 if write_to_client returns -2. */
+
+      if (length > 0)
+        {
+          memmove (to_client + to_client_end, msg, length);
+          g_debug ("-> client: %.*s", (int) length, msg);
+          to_client_end += length;
+          msg += length;
+        }
     }
 
   if (strlen (msg))
@@ -448,7 +452,7 @@ get_nfds (int socket)
  * @return 0 success, -1 error.
  */
 int
-serve_gmp (gvm_connection_t *client_connection, const gchar *database,
+serve_gmp (gvm_connection_t *client_connection, const db_conn_info_t *database,
            gchar **disable)
 {
   int nfds, rc = 0;
@@ -490,16 +494,6 @@ serve_gmp (gvm_connection_t *client_connection, const gchar *database,
     {
       int ret;
       fd_set readfds, writefds;
-      int termination_signal = get_termination_signal ();
-
-      if (termination_signal)
-        {
-          g_debug ("%s: Received %s signal.",
-                   __FUNCTION__,
-                   sys_siglist[get_termination_signal()]);
-
-          goto client_free;
-        }
 
       /* Setup for select. */
 
@@ -541,7 +535,7 @@ serve_gmp (gvm_connection_t *client_connection, const gchar *database,
         continue;
       if (ret < 0)
         {
-          g_warning ("%s: child select failed: %s", __FUNCTION__,
+          g_warning ("%s: child select failed: %s", __func__,
                      strerror (errno));
           rc = -1;
           goto client_free;

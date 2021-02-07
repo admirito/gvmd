@@ -1,20 +1,19 @@
-/* Copyright (C) 2013-2018 Greenbone Networks GmbH
+/* Copyright (C) 2013-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -41,27 +40,21 @@
 #define G_LOG_DOMAIN "md manage"
 
 /**
- * @brief Test whether a user may perform an operation.
+ * @brief Test whether the current user may perform an operation.
+ *
+ * Does not check if the user is special.
  *
  * @param[in]  operation  Name of operation.
  *
  * @return 1 if user has permission, else 0.
  */
-int
-acl_user_may (const char *operation)
+static int
+user_may_internal (const char *operation)
 {
   int ret;
   gchar *quoted_operation;
 
   assert (operation);
-
-  if (strlen (current_credentials.uuid) == 0)
-    /* Allow the dummy user in init_manage to do anything. */
-    return 1;
-
-  if (sql_int ("SELECT user_can_everything ('%s');",
-               current_credentials.uuid))
-    return 1;
 
   quoted_operation = sql_quote (operation);
 
@@ -77,6 +70,103 @@ acl_user_may (const char *operation)
   g_free (quoted_operation);
 
   return ret;
+}
+
+/**
+ * @brief Check if a string array contains a string, ignoring case.
+ *
+ * @param[in]  strv    String array.
+ * @param[in]  string  String.
+ *
+ * @return 1 if strv contains string, else 0.
+ */
+static int
+strv_case_eq (gchar **strv, const gchar *string)
+{
+  if (string == NULL)
+    return 0;
+
+  while (*strv)
+    if (strcasecmp (*strv, string) == 0)
+      return 1;
+    else
+      strv++;
+
+  return 0;
+}
+
+/**
+ * @brief Get commands that the current user may run.
+ *
+ * @param[in]  disabled_commands  All disabled commands.
+ *
+ * @return Freshly allocated list of commands.  Free with g_free.
+ */
+command_t *
+acl_commands (gchar **disabled_commands)
+{
+  command_t *all, *commands;
+  int index, length, special_user;
+
+  /* Count maximum number of commands. */
+
+  length = 1;
+  all = gmp_commands;
+  while ((*all).name)
+    {
+      length++;
+      all++;
+    }
+
+  /* Fill return array with allowed commands. */
+
+  special_user = ((current_credentials.uuid == NULL)
+                  || (strlen (current_credentials.uuid) == 0));
+
+  if (special_user == 0)
+    special_user = sql_int ("SELECT user_can_everything ('%s');",
+                            current_credentials.uuid);
+
+  commands = g_malloc0 (length * sizeof (*commands));
+  all = gmp_commands;
+  index = 0;
+  while ((*all).name)
+    {
+      if ((disabled_commands == NULL
+           || strv_case_eq (disabled_commands, (*all).name)
+              == 0)
+          && (special_user
+              || user_may_internal ((*all).name)))
+        {
+          commands[index].name = (*all).name;
+          commands[index].summary = (*all).summary;
+          index++;
+        }
+      all++;
+    }
+
+  return commands;
+}
+
+/**
+ * @brief Test whether a user may perform an operation.
+ *
+ * @param[in]  operation  Name of operation.
+ *
+ * @return 1 if user has permission, else 0.
+ */
+int
+acl_user_may (const char *operation)
+{
+  if (strlen (current_credentials.uuid) == 0)
+    /* Allow the dummy user in init_manage to do anything. */
+    return 1;
+
+  if (sql_int ("SELECT user_can_everything ('%s');",
+               current_credentials.uuid))
+    return 1;
+
+  return user_may_internal (operation);
 }
 
 /**

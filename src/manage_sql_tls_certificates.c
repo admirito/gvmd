@@ -1,20 +1,19 @@
-/* Copyright (C) 2019 Greenbone Networks GmbH
+/* Copyright (C) 2019-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -554,7 +553,7 @@ make_tls_certificate (const char *name,
 
   if (sha256_fingerprint == NULL || strcmp (sha256_fingerprint, "") == 0)
     {
-      g_warning ("%s: Missing/empty sha256_fingerprint", __FUNCTION__);
+      g_warning ("%s: Missing/empty sha256_fingerprint", __func__);
       return -1;
     }
 
@@ -735,13 +734,13 @@ make_tls_certificate_from_base64 (const char *name,
                               &serial,
                               &certificate_format);
 
-  if (ret && (allow_failed_info == 0 || fallback_fpr == NULL))
+  if (ret)
     {
-      g_free (certificate_decoded);
-      return 1;
-    }
-  else
-    {
+      if (allow_failed_info == 0 || fallback_fpr == NULL)
+        {
+          g_free (certificate_decoded);
+          return 1;
+        }
       sha256_fingerprint = g_strdup (fallback_fpr);
     }
 
@@ -863,8 +862,7 @@ copy_tls_certificate (const char *name,
  * @param[in]  ultimate   Dummy for consistency with other delete commands.
  *
  * @return 0 success, 1 fail because tls_certificate is in use,
- *         2 failed to find tls_certificate,
- *         3 predefined tls_certificate, 99 permission denied, -1 error.
+ *         2 failed to find tls_certificate, 99 permission denied, -1 error.
  */
 int
 delete_tls_certificate (const char *tls_certificate_id, int ultimate)
@@ -941,6 +939,21 @@ void
 delete_tls_certificates_user (user_t user)
 {
   /* Regular tls_certificate. */
+
+  sql ("DELETE FROM tls_certificate_sources"
+       " WHERE tls_certificate IN"
+       " (SELECT id FROM tls_certificates WHERE owner = %llu)",
+       user);
+
+  sql ("DELETE FROM tls_certificate_locations"
+       " WHERE NOT EXISTS"
+       "   (SELECT * FROM tls_certificate_sources"
+       "     WHERE location = tls_certificate_locations.id);");
+
+  sql ("DELETE FROM tls_certificate_origins"
+       " WHERE NOT EXISTS"
+       "   (SELECT * FROM tls_certificate_sources"
+       "     WHERE origin = tls_certificate_origins.id);");
 
   sql ("DELETE FROM tls_certificates WHERE owner = %llu;", user);
 }
@@ -1333,7 +1346,7 @@ get_or_make_tls_certificate_source (tls_certificate_t tls_certificate,
 
   if (tls_certificate == 0)
     {
-      g_warning ("%s: No TLS certificate given", __FUNCTION__);
+      g_warning ("%s: No TLS certificate given", __func__);
       return 0;
     }
 
@@ -1531,7 +1544,7 @@ add_tls_certificates_from_report_host (report_host_t report_host,
       source_name = iterator_string (&tls_certs, 2);
 
       g_debug ("%s: Handling certificate %s on %s in report %s",
-               __FUNCTION__, scanner_fpr, host_ip, report_id);
+               __func__, scanner_fpr, host_ip, report_id);
 
       tls_certificate = 0;
       activation_time = -1;
@@ -1574,7 +1587,7 @@ add_tls_certificates_from_report_host (report_host_t report_host,
                           &serial);
       else
         g_warning ("%s: No SSLDetails found for fingerprint %s",
-                   __FUNCTION__,
+                   __func__,
                    scanner_fpr);
 
       free (ssldetails);
@@ -1597,7 +1610,7 @@ add_tls_certificates_from_report_host (report_host_t report_host,
         {
           g_warning ("%s: Could not create TLS certificate"
                      " or get existing one for fingerprint '%s'.",
-                     __FUNCTION__, scanner_fpr);
+                     __func__, scanner_fpr);
 
           g_free (certificate);
           g_free (md5_fingerprint);

@@ -1,20 +1,19 @@
-/* Copyright (C) 2019 Greenbone Networks GmbH
+/* Copyright (C) 2019-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "manage.c"
@@ -65,6 +64,78 @@ Ensure (manage, truncate_certificate_given_truncated)
   g_free (truncated);
 }
 
+/* truncate_text */
+
+Ensure (manage, truncate_text_truncates)
+{
+  gchar *given;
+
+  given = g_strdup ("1234567890");
+
+  truncate_text (given, 4, 0 /* Not XML. */, NULL /* No suffix. */);
+  assert_that (given, is_equal_to_string ("1234"));
+  g_free (given);
+}
+
+Ensure (manage, truncate_text_does_not_truncate)
+{
+  const gchar *original;
+  gchar *given;
+
+  original = "1234567890";
+  given = g_strdup (original);
+  truncate_text (given, 40, 0 /* Not XML. */, NULL /* No suffix. */);
+  assert_that (given, is_equal_to_string (original));
+  g_free (given);
+}
+
+Ensure (manage, truncate_text_handles_null)
+{
+  truncate_text (NULL, 40, 0 /* Not XML. */, NULL /* No suffix. */);
+}
+
+Ensure (manage, truncate_text_appends_suffix)
+{
+  const gchar *suffix;
+  gchar *given;
+
+  suffix = "abc";
+  given = g_strdup ("1234567890");
+
+  truncate_text (given, strlen (suffix) + 1, 0 /* Not XML. */, suffix);
+  assert_that (given, is_equal_to_string ("1abc"));
+  g_free (given);
+}
+
+Ensure (manage, truncate_text_skips_suffix)
+{
+  const gchar *suffix;
+  gchar *given;
+
+  suffix = "abc";
+  given = g_strdup ("1234567890");
+
+  truncate_text (given,
+                 /* Too little space for suffix. */
+                 strlen (suffix) - 1,
+                 /* Not XML. */
+                 0,
+                 suffix);
+  assert_that (given, is_equal_to_string ("12"));
+  g_free (given);
+}
+
+Ensure (manage, truncate_text_preserves_xml)
+{
+  gchar *given;
+
+  given = g_strdup ("12&nbsp;90");
+
+  truncate_text (given, 5, 1 /* Preserve entities. */, NULL /* No suffix. */);
+  assert_that (given, is_equal_to_string ("12"));
+  g_free (given);
+}
+
 /* delete_reports */
 
 // TODO
@@ -88,6 +159,13 @@ main (int argc, char **argv)
   suite = create_test_suite ();
 
   add_test_with_context (suite, manage, truncate_certificate_given_truncated);
+
+  add_test_with_context (suite, manage, truncate_text_truncates);
+  add_test_with_context (suite, manage, truncate_text_does_not_truncate);
+  add_test_with_context (suite, manage, truncate_text_handles_null);
+  add_test_with_context (suite, manage, truncate_text_appends_suffix);
+  add_test_with_context (suite, manage, truncate_text_skips_suffix);
+  add_test_with_context (suite, manage, truncate_text_preserves_xml);
 
   if (argc > 1)
     return run_single_test (suite, argv[1], create_text_reporter ());

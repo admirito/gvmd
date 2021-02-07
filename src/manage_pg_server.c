@@ -1,20 +1,19 @@
-/* Copyright (C) 2014-2018 Greenbone Networks GmbH
+/* Copyright (C) 2014-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -132,46 +131,61 @@ sql_hosts_contains (PG_FUNCTION_ARGS)
 /**
  * @brief Define function for Postgres.
  */
+PG_FUNCTION_INFO_V1 (sql_level_max_severity);
+
+/**
+ * @brief Dummy function to allow restoring gvmd-9.0 dumps.
+ *
+ * @deprecated This function will be removed once direct migration
+ *             compatibility with gvmd 9.0 is no longer required
+ *
+ * @return Postgres NULL Datum.
+ */
+ __attribute__((deprecated))
+Datum
+sql_level_max_severity (PG_FUNCTION_ARGS)
+{
+  PG_RETURN_NULL ();
+}
+
+/**
+ * @brief Define function for Postgres.
+ */
+PG_FUNCTION_INFO_V1 (sql_level_min_severity);
+
+/**
+ * @brief Dummy function to allow restoring gvmd-9.0 dumps.
+ *
+ * @deprecated This function will be removed once direct migration
+ *             compatibility with gvmd 9.0 is no longer required
+ *
+ * @return Postgres NULL Datum.
+ */
+ __attribute__((deprecated))
+Datum
+sql_level_min_severity (PG_FUNCTION_ARGS)
+{
+  PG_RETURN_NULL ();
+}
+
+/**
+ * @brief Define function for Postgres.
+ */
 PG_FUNCTION_INFO_V1 (sql_next_time);
 
 /**
- * @brief Get the next time given schedule times.
+ * @brief Dummy function to allow restoring gvmd-9.0 dumps.
  *
- * This is a callback for a SQL function of four to six arguments.
+ * @deprecated This function will be removed once direct migration
+ *             compatibility with gvmd 9.0 is no longer required
  *
- * @return Postgres Datum.
+ * @return Postgres NULL Datum.
  */
+ __attribute__((deprecated))
 Datum
 sql_next_time (PG_FUNCTION_ARGS)
 {
-  int32 first, period, period_months, byday, periods_offset;
-  char *zone;
-  int32 ret;
-
-  first = PG_GETARG_INT32 (0);
-  period = PG_GETARG_INT32 (1);
-  period_months = PG_GETARG_INT32 (2);
-  byday = PG_GETARG_INT32 (3);
-
-  if (PG_NARGS() < 5 || PG_ARGISNULL (4))
-    zone = NULL;
-  else
-    {
-      text* timezone_arg;
-      timezone_arg = PG_GETARG_TEXT_P (4);
-      zone = textndup (timezone_arg, VARSIZE (timezone_arg) - VARHDRSZ);
-    }
-
-  if (PG_NARGS() < 6 || PG_ARGISNULL (5))
-    periods_offset = 0;
-  else
-    periods_offset = PG_GETARG_INT32 (5);
-
-  ret = next_time (first, period, period_months, byday, zone,
-                   periods_offset);
-  if (zone)
-    pfree (zone);
-  PG_RETURN_INT32 (ret);
+  PG_RETURN_NULL ();
 }
 
 /**
@@ -182,7 +196,7 @@ PG_FUNCTION_INFO_V1 (sql_next_time_ical);
 /**
  * @brief Get the next time given schedule times.
  *
- * This is a callback for a SQL function of four to six arguments.
+ * This is a callback for a SQL function of one to three arguments.
  *
  * @return Postgres Datum.
  */
@@ -214,7 +228,10 @@ sql_next_time_ical (PG_FUNCTION_ARGS)
       zone = textndup (timezone_arg, VARSIZE (timezone_arg) - VARHDRSZ);
     }
 
-  periods_offset = PG_GETARG_INT32 (2);
+  if (PG_NARGS() < 3)
+    periods_offset = 0;
+  else
+    periods_offset = PG_GETARG_INT32 (2);
 
   ret = icalendar_next_time_from_string (ical_string, zone,
                                          periods_offset);
@@ -245,102 +262,34 @@ sql_max_hosts (PG_FUNCTION_ARGS)
   else
     {
       text *hosts_arg;
-      char *hosts, *exclude;
+      char *hosts, *exclude, *clean_hosts, *clean_exclude;
       int ret, max_hosts;
 
       hosts_arg = PG_GETARG_TEXT_P (0);
       hosts = textndup (hosts_arg, VARSIZE (hosts_arg) - VARHDRSZ);
+      clean_hosts = clean_hosts_string (hosts);
+
       if (PG_ARGISNULL (1))
         {
           exclude = palloc (1);
           exclude[0] = 0;
+          clean_exclude = NULL;
         }
       else
         {
           text *exclude_arg;
           exclude_arg = PG_GETARG_TEXT_P (1);
           exclude = textndup (exclude_arg, VARSIZE (exclude_arg) - VARHDRSZ);
+          clean_exclude = clean_hosts_string (exclude);
         }
 
       max_hosts = get_max_hosts ();
-      ret = manage_count_hosts_max (hosts, exclude, max_hosts);
+      ret = manage_count_hosts_max (clean_hosts, clean_exclude, max_hosts);
       pfree (hosts);
       pfree (exclude);
+      g_free (clean_hosts);
+      g_free (clean_exclude);
       PG_RETURN_INT32 (ret);
-    }
-}
-
-/**
- * @brief Define function for Postgres.
- */
-PG_FUNCTION_INFO_V1 (sql_level_min_severity);
-
-/**
- * @brief Return min severity of level.
- *
- * This is a callback for a SQL function of two arguments.
- *
- * @return Postgres Datum.
- */
-Datum
-sql_level_min_severity (PG_FUNCTION_ARGS)
-{
-  if (PG_ARGISNULL (0))
-    PG_RETURN_FLOAT8 (0.0);
-  else
-    {
-      text *level_arg, *class_arg;
-      char *level, *class;
-      float8 severity;
-
-      class_arg = PG_GETARG_TEXT_P (1);
-      class = textndup (class_arg, VARSIZE (class_arg) - VARHDRSZ);
-
-      level_arg = PG_GETARG_TEXT_P (0);
-      level = textndup (level_arg, VARSIZE (level_arg) - VARHDRSZ);
-
-      severity = level_min_severity (level, class);
-
-      pfree (level);
-      pfree (class);
-      PG_RETURN_FLOAT8 (severity);
-    }
-}
-
-/**
- * @brief Define function for Postgres.
- */
-PG_FUNCTION_INFO_V1 (sql_level_max_severity);
-
-/**
- * @brief Return max severity of level.
- *
- * This is a callback for a SQL function of two arguments.
- *
- * @return Postgres Datum.
- */
-Datum
-sql_level_max_severity (PG_FUNCTION_ARGS)
-{
-  if (PG_ARGISNULL (0))
-    PG_RETURN_FLOAT8 (0.0);
-  else
-    {
-      text *level_arg, *class_arg;
-      char *level, *class;
-      float8 severity;
-
-      class_arg = PG_GETARG_TEXT_P (1);
-      class = textndup (class_arg, VARSIZE (class_arg) - VARHDRSZ);
-
-      level_arg = PG_GETARG_TEXT_P (0);
-      level = textndup (level_arg, VARSIZE (level_arg) - VARHDRSZ);
-
-      severity = level_max_severity (level, class);
-
-      pfree (level);
-      pfree (class);
-      PG_RETURN_FLOAT8 (severity);
     }
 }
 
@@ -373,39 +322,6 @@ sql_severity_matches_ov (PG_FUNCTION_ARGS)
         PG_RETURN_BOOL (arg_one == arg_two);
       else
         PG_RETURN_BOOL (arg_one >= arg_two);
-    }
-}
-
-/**
- * @brief Define function for Postgres.
- */
-PG_FUNCTION_INFO_V1 (sql_valid_db_resource_type);
-
-/**
- * @brief Return max severity of level.
- *
- * This is a callback for a SQL function of one argument.
- *
- * @return Postgres Datum.
- */
-Datum
-sql_valid_db_resource_type (PG_FUNCTION_ARGS)
-{
-  if (PG_ARGISNULL (0))
-    PG_RETURN_BOOL (0);
-  else
-    {
-      text *type_arg;
-      char *type;
-      int ret;
-
-      type_arg = PG_GETARG_TEXT_P (0);
-      type = textndup (type_arg, VARSIZE (type_arg) - VARHDRSZ);
-
-      ret = valid_db_resource_type (type);
-
-      pfree (type);
-      PG_RETURN_BOOL (ret);
     }
 }
 
@@ -447,4 +363,24 @@ sql_regexp (PG_FUNCTION_ARGS)
       pfree (regexp);
       PG_RETURN_BOOL (ret);
     }
+}
+
+/**
+ * @brief Define function for Postgres.
+ */
+PG_FUNCTION_INFO_V1 (sql_valid_db_resource_type);
+
+/**
+ * @brief Dummy function to allow restoring gvmd-9.0 dumps.
+ *
+ * @deprecated This function will be removed once direct migration
+ *             compatibility with gvmd 9.0 is no longer required
+ *
+ * @return Postgres NULL Datum.
+ */
+ __attribute__((deprecated))
+Datum
+sql_valid_db_resource_type (PG_FUNCTION_ARGS)
+{
+  PG_RETURN_NULL ();
 }

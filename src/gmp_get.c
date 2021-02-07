@@ -1,26 +1,19 @@
-/* GVM
- * $Id$
- * Description: GVM GMP layer: GET command shared code.
+/* Copyright (C) 2018-2020 Greenbone Networks GmbH
  *
- * Authors:
- * Matthew Mundell <matthew.mundell@greenbone.net>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Copyright:
- * Copyright (C) 2018 Greenbone Networks GmbH
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -606,7 +599,8 @@ send_get_end_internal (const char *type, get_data_t *get, int get_counts,
       g_free (filter);
       if ((strcmp (type, "task") == 0)
           || (strcmp (type, "report") == 0)
-          || (strcmp (type, "result") == 0))
+          || (strcmp (type, "result") == 0)
+          || (strcmp (type, "vuln") == 0))
         {
           gchar *value;
 
@@ -621,16 +615,21 @@ send_get_end_internal (const char *type, get_data_t *get, int get_counts,
             }
           g_free (value);
 
-          value = filter_term_value (new_filter, "apply_overrides");
-          if (value == NULL)
+          if ((strcmp (type, "task") == 0)
+              || (strcmp (type, "report") == 0)
+              || (strcmp (type, "result") == 0))
             {
-              filter = new_filter;
-              new_filter = g_strdup_printf ("apply_overrides=%i %s",
-                                            APPLY_OVERRIDES_DEFAULT,
-                                            filter);
-              g_free (filter);
+              value = filter_term_value (new_filter, "apply_overrides");
+              if (value == NULL)
+                {
+                  filter = new_filter;
+                  new_filter = g_strdup_printf ("apply_overrides=%i %s",
+                                                APPLY_OVERRIDES_DEFAULT,
+                                                filter);
+                  g_free (filter);
+                }
+              g_free (value);
             }
-          g_free (value);
         }
       filter = new_filter;
     }
@@ -642,6 +641,9 @@ send_get_end_internal (const char *type, get_data_t *get, int get_counts,
         filter = manage_clean_filter("apply_overrides="
                                      G_STRINGIFY (APPLY_OVERRIDES_DEFAULT)
                                      " min_qod="
+                                     G_STRINGIFY (MIN_QOD_DEFAULT));
+      else if (strcmp (type, "vuln") == 0)
+        filter = manage_clean_filter(" min_qod="
                                      G_STRINGIFY (MIN_QOD_DEFAULT));
       else
         filter = manage_clean_filter ("");

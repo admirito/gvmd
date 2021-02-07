@@ -3,18 +3,17 @@
 # Greenbone Vulnerability Manager
 
 [![GitHub releases](https://img.shields.io/github/release/greenbone/gvmd.svg)](https://github.com/greenbone/gvmd/releases)
-[![Code Documentation Coverage](https://img.shields.io/codecov/c/github/greenbone/gvmd/gvmd-9.0.svg?label=Doc%20Coverage&logo=codecov)](https://codecov.io/gh/greenbone/gvmd)
-[![CircleCI](https://circleci.com/gh/greenbone/gvmd/tree/gvmd-9.0.svg?style=svg)](https://circleci.com/gh/greenbone/gvmd/tree/master)
+[![Code Documentation Coverage](https://img.shields.io/codecov/c/github/greenbone/gvmd.svg?label=Doc%20Coverage&logo=codecov)](https://codecov.io/gh/greenbone/gvmd)
+[![CircleCI](https://circleci.com/gh/greenbone/gvmd/tree/master.svg?style=svg)](https://circleci.com/gh/greenbone/gvmd/tree/master)
 
 The Greenbone Vulnerability Manager is the central management service between
 security scanners and the user clients.
 
 It manages the storage of any vulnerability management configurations and of the
 scan results. Access to data, control commands and workflows is offered via the
-XML-based Greenbone Management Protocol (GMP). The primary scanner
-*[OpenVAS Scanner](https://github.com/greenbone/openvas-scanner)*
-is controlled directly via protocol OTP while any other remote scanner is coupled
-with the Open Scanner Protocol (OSP).
+XML-based Greenbone Management Protocol (GMP). Controlling scanners like
+*[OpenVAS](https://github.com/greenbone/openvas)* is done via the Open Scanner
+Protocol (OSP).
 
 ## Releases
 ￼
@@ -34,8 +33,8 @@ make install
 
 For detailed installation requirements and instructions, please see the file
 [INSTALL.md](INSTALL.md). The file also contains instructions for setting up
-`gvmd` and for connecting `gvmd` to vulnerability scanners and to the *GSA* web
-interface.
+`gvmd` and for connecting `gvmd` to vulnerability scanners and to the
+*[GSA](https://github.com/greenbone/gsa)* web interface.
 
 In case everything was installed using the defaults, then starting the manager
 daemon can be done with this simple command:
@@ -51,9 +50,9 @@ gvmd --help
 ```
 
 If you are not familiar or comfortable building from source code, we recommend
-that you use the Greenbone Community Edition, a prepared virtual machine with a
-readily available setup. Information regarding the virtual machine is available
-at <https://www.greenbone.net/en/community-edition/>.
+that you use the Greenbone Security Manager TRIAL (GSM TRIAL), a prepared virtual
+machine with a readily available setup. Information regarding the virtual machine
+is available at <https://www.greenbone.net/en/testnow>.
 
 ## Support
 
@@ -76,6 +75,6 @@ GitHub](https://github.com/greenbone/gvmd/issues) first.
 
 ## License
 
-Copyright (C) 2009-2019 [Greenbone Networks GmbH](https://www.greenbone.net/)
+Copyright (C) 2009-2021 [Greenbone Networks GmbH](https://www.greenbone.net/)
 
-Licensed under the [GNU General Public License v2.0 or later](COPYING).
+Licensed under the [GNU Affero General Public License v3.0 or later](COPYING).

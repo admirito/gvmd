@@ -1,20 +1,19 @@
-/* Copyright (C) 2009-2019 Greenbone Networks GmbH
+/* Copyright (C) 2009-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -37,8 +36,9 @@
 
 #include <gvm/base/cvss.h>
 
-#include "manage_sql.h"
 #include "manage_sql_nvts.h"
+#include "manage_preferences.h"
+#include "manage_sql.h"
 #include "sql.h"
 #include "utils.h"
 
@@ -102,7 +102,7 @@ check_osp_vt_update_socket ()
 
       g_debug ("%s: Using OSP VT update socket from default OpenVAS"
                " scanner: %s",
-               __FUNCTION__,
+               __func__,
                default_socket);
       set_osp_vt_update_socket (default_socket);
       free (default_socket);
@@ -267,7 +267,7 @@ insert_nvt (const nvti_t *nvti)
   gchar *quoted_name, *quoted_summary, *quoted_insight, *quoted_affected;
   gchar *quoted_impact, *quoted_detection, *quoted_cve, *quoted_tag;
   gchar *quoted_cvss_base, *quoted_qod_type, *quoted_family;
-  gchar *quoted_solution, *quoted_solution_type;
+  gchar *quoted_solution, *quoted_solution_type, *quoted_solution_method;
   int qod, i;
 
   cve = nvti_refs (nvti, "cve", "", 0);
@@ -286,6 +286,8 @@ insert_nvt (const nvti_t *nvti)
                                nvti_solution (nvti) : "");
   quoted_solution_type = sql_quote (nvti_solution_type (nvti) ?
                                     nvti_solution_type (nvti) : "");
+  quoted_solution_method = sql_quote (nvti_solution_method (nvti) ?
+                                      nvti_solution_method (nvti) : "");
   quoted_detection = sql_quote (nvti_detection (nvti) ?
                                 nvti_detection (nvti) : "");
 
@@ -293,15 +295,13 @@ insert_nvt (const nvti_t *nvti)
 
   quoted_cvss_base = sql_quote (nvti_cvss_base (nvti) ? nvti_cvss_base (nvti) : "");
 
-  qod_str = tag_value (nvti_tag (nvti), "qod");
+  qod_str = nvti_qod (nvti);
   qod_type = nvti_qod_type (nvti);
 
   if (qod_str == NULL || sscanf (qod_str, "%d", &qod) != 1)
     qod = qod_from_type (qod_type);
 
   quoted_qod_type = sql_quote (qod_type ? qod_type : "");
-
-  g_free (qod_str);
 
   quoted_family = sql_quote (nvti_family (nvti) ? nvti_family (nvti) : "");
 
@@ -312,14 +312,14 @@ insert_nvt (const nvti_t *nvti)
   sql ("INSERT into nvts (oid, name, summary, insight, affected,"
        " impact, cve, tag, category, family, cvss_base,"
        " creation_time, modification_time, uuid, solution_type,"
-       " solution, detection, qod, qod_type)"
+       " solution_method, solution, detection, qod, qod_type)"
        " VALUES ('%s', '%s', '%s', '%s', '%s', '%s', '%s',"
-       " '%s', %i, '%s', '%s', %i, %i, '%s', '%s', '%s', '%s', %d, '%s');",
+       " '%s', %i, '%s', '%s', %i, %i, '%s', '%s', '%s', '%s', '%s', %d, '%s');",
        nvti_oid (nvti), quoted_name, quoted_summary, quoted_insight,
        quoted_affected, quoted_impact, quoted_cve, quoted_tag,
        nvti_category (nvti), quoted_family, quoted_cvss_base,
        nvti_creation_time (nvti), nvti_modification_time (nvti),
-       nvti_oid (nvti), quoted_solution_type,
+       nvti_oid (nvti), quoted_solution_type, quoted_solution_method,
        quoted_solution, quoted_detection, qod, quoted_qod_type);
 
   sql ("DELETE FROM vt_refs where vt_oid = '%s';", nvti_oid (nvti));
@@ -352,6 +352,7 @@ insert_nvt (const nvti_t *nvti)
   g_free (quoted_family);
   g_free (quoted_solution);
   g_free (quoted_solution_type);
+  g_free (quoted_solution_method);
   g_free (quoted_detection);
   g_free (quoted_qod_type);
 }
@@ -452,6 +453,40 @@ nvt_info_count (const get_data_t *get)
   static column_t columns[] = NVT_ITERATOR_COLUMNS;
   return count ("nvt", get, columns, NULL, extra_columns, 0, 0, 0,
                 FALSE);
+}
+
+/**
+ * @brief Count number of nvts created or modified after a given time.
+ *
+ * @param[in]  get            GET params.
+ * @param[in]  count_time     Time NVTs must be created or modified after.
+ * @param[in]  get_modified   Whether to get the modification time.
+ *
+ * @return Total number of nvts in filtered set.
+ */
+int
+nvt_info_count_after (const get_data_t *get, time_t count_time,
+                      gboolean get_modified)
+{
+  static const char *filter_columns[] = NVT_INFO_ITERATOR_FILTER_COLUMNS;
+  static column_t columns[] = NVT_ITERATOR_COLUMNS;
+  gchar *extra_where;
+  int ret;
+
+  if (get_modified)
+    extra_where = g_strdup_printf (" AND modification_time > %ld"
+                                   " AND creation_time <= %ld",
+                                   count_time,
+                                   count_time);
+  else
+    extra_where = g_strdup_printf (" AND creation_time > %ld",
+                                   count_time);
+
+  ret = count ("nvt", get, columns, NULL, filter_columns, 0, 0, extra_where,
+               FALSE);
+
+  g_free (extra_where);
+  return ret;
 }
 
 /**
@@ -758,9 +793,12 @@ init_cve_nvt_iterator (iterator_t* iterator, const char *cve, int ascending,
   init_iterator (iterator,
                  "SELECT %s"
                  " FROM nvts"
-                 " WHERE cve %s '%%%s%%'"
+                 " WHERE cve %s '%%%s, %%'"
+                 "    OR cve %s '%%%s'"
                  " ORDER BY %s %s;",
                  nvt_iterator_columns (),
+                 sql_ilike_op (),
+                 cve ? cve : "",
                  sql_ilike_op (),
                  cve ? cve : "",
                  sort_field ? sort_field : "name",
@@ -924,6 +962,16 @@ DEF_ACCESS (nvt_iterator_impact, GET_ITERATOR_COLUMN_COUNT + 18);
 DEF_ACCESS (nvt_iterator_detection, GET_ITERATOR_COLUMN_COUNT + 19);
 
 /**
+ * @brief Get the solution method from an NVT iterator.
+ *
+ * @param[in]  iterator  Iterator.
+ *
+ * @return Solution method, or NULL if iteration is complete.  Freed by
+ *         cleanup_iterator.
+ */
+DEF_ACCESS (nvt_iterator_solution_method, GET_ITERATOR_COLUMN_COUNT + 20);
+
+/**
  * @brief Get the default timeout of an NVT.
  *
  * @param[in]  oid  The OID of the NVT to get the timeout of.
@@ -936,6 +984,26 @@ nvt_default_timeout (const char* oid)
   return sql_string ("SELECT value FROM nvt_preferences"
                      " WHERE name = '%s:0:entry:Timeout'",
                      oid);
+}
+
+/**
+ * @brief Get the family of an NVT.
+ *
+ * @param[in]  oid  The OID of the NVT.
+ *
+ * @return Newly allocated string of the family, or NULL.
+ */
+char *
+nvt_family (const char *oid)
+{
+  gchar *quoted_oid;
+  char *ret;
+
+  quoted_oid = sql_quote (oid);
+  ret = sql_string ("SELECT family FROM nvts WHERE oid = '%s' LIMIT 1;",
+                    quoted_oid);
+  g_free (quoted_oid);
+  return ret;
 }
 
 /**
@@ -1075,25 +1143,25 @@ update_preferences_from_vt (entity_t vt, const gchar *oid, GList **preferences)
           if (type == NULL)
             {
               GString *debug = g_string_new ("");
-              g_warning ("%s: PARAM missing type attribute", __FUNCTION__);
+              g_warning ("%s: PARAM missing type attribute", __func__);
               print_entity_to_string (param, debug);
-              g_warning ("%s: PARAM: %s", __FUNCTION__, debug->str);
+              g_warning ("%s: PARAM: %s", __func__, debug->str);
               g_string_free (debug, TRUE);
             }
           else if (id == NULL)
             {
               GString *debug = g_string_new ("");
-              g_warning ("%s: PARAM missing id attribute", __FUNCTION__);
+              g_warning ("%s: PARAM missing id attribute", __func__);
               print_entity_to_string (param, debug);
-              g_warning ("%s: PARAM: %s", __FUNCTION__, debug->str);
+              g_warning ("%s: PARAM: %s", __func__, debug->str);
               g_string_free (debug, TRUE);
             }
           else if (name == NULL)
             {
               GString *debug = g_string_new ("");
-              g_warning ("%s: PARAM missing NAME", __FUNCTION__);
+              g_warning ("%s: PARAM missing NAME", __func__);
               print_entity_to_string (param, debug);
-              g_warning ("%s: PARAM: %s", __FUNCTION__, debug->str);
+              g_warning ("%s: PARAM: %s", __func__, debug->str);
               g_string_free (debug, TRUE);
             }
           else
@@ -1146,7 +1214,7 @@ nvti_from_vt (entity_t vt)
   id = entity_attribute (vt, "id");
   if (id == NULL)
     {
-      g_warning ("%s: VT missing id attribute", __FUNCTION__);
+      g_warning ("%s: VT missing id attribute", __func__);
       nvti_free (nvti);
       return NULL;
     }
@@ -1155,7 +1223,7 @@ nvti_from_vt (entity_t vt)
   name = entity_child (vt, "name");
   if (name == NULL)
     {
-      g_warning ("%s: VT %s missing NAME", __FUNCTION__, nvti_oid (nvti));
+      g_warning ("%s: VT missing NAME", __func__);
       nvti_free (nvti);
       return NULL;
     }
@@ -1190,66 +1258,73 @@ nvti_from_vt (entity_t vt)
   detection = entity_child (vt, "detection");
   if (detection)
     {
+      const gchar *qod;
+
       nvti_set_detection (nvti, entity_text (detection));
-      nvti_set_qod_type (nvti, entity_attribute (detection, "qod_type"));
+
+      qod = entity_attribute (detection, "qod");
+      if (qod == NULL)
+        nvti_set_qod_type (nvti, entity_attribute (detection, "qod_type"));
+      else
+        nvti_set_qod (nvti, qod);
     }
 
   solution = entity_child (vt, "solution");
   if (solution)
     {
-      const gchar *type;
+      const gchar *type, *method;
 
       nvti_set_solution (nvti, entity_text (solution));
 
       type = entity_attribute (solution, "type");
       if (type == NULL)
-        g_debug ("%s: SOLUTION missing type", __FUNCTION__);
+        g_debug ("%s: SOLUTION missing type", __func__);
       else
         nvti_set_solution_type (nvti, type);
+
+      method = entity_attribute (solution, "method");
+      if (method)
+        nvti_set_solution_method (nvti, method);
     }
 
   refs = entity_child (vt, "refs");
-  if (refs == NULL)
+  if (refs)
     {
-      g_warning ("%s: VT %s missing REFS", __FUNCTION__, nvti_oid (nvti));
-      nvti_free (nvti);
-      return NULL;
-    }
-
-  children = refs->entities;
-  while ((ref = first_entity (children)))
-    {
-      const gchar *ref_type;
-
-      ref_type = entity_attribute (ref, "type");
-      if (ref_type == NULL)
+      children = refs->entities;
+      while ((ref = first_entity (children)))
         {
-          GString *debug = g_string_new ("");
-          g_warning ("%s: REF missing type attribute", __FUNCTION__);
-          print_entity_to_string (ref, debug);
-          g_warning ("%s: ref: %s", __FUNCTION__, debug->str);
-          g_string_free (debug, TRUE);
-        }
-      else
-        {
-          const gchar *ref_id;
+          const gchar *ref_type;
 
-          ref_id = entity_attribute (ref, "id");
-          if (ref_id == NULL)
+          ref_type = entity_attribute (ref, "type");
+          if (ref_type == NULL)
             {
               GString *debug = g_string_new ("");
-              g_warning ("%s: REF missing id attribute", __FUNCTION__);
+              g_warning ("%s: REF missing type attribute", __func__);
               print_entity_to_string (ref, debug);
-              g_warning ("%s: ref: %s", __FUNCTION__, debug->str);
+              g_warning ("%s: ref: %s", __func__, debug->str);
               g_string_free (debug, TRUE);
             }
           else
             {
-              nvti_add_vtref (nvti, vtref_new (ref_type, ref_id, NULL));
-            }
-        }
+              const gchar *ref_id;
 
-      children = next_entities (children);
+              ref_id = entity_attribute (ref, "id");
+              if (ref_id == NULL)
+                {
+                  GString *debug = g_string_new ("");
+                  g_warning ("%s: REF missing id attribute", __func__);
+                  print_entity_to_string (ref, debug);
+                  g_warning ("%s: ref: %s", __func__, debug->str);
+                  g_string_free (debug, TRUE);
+                }
+              else
+                {
+                  nvti_add_vtref (nvti, vtref_new (ref_type, ref_id, NULL));
+                }
+            }
+
+          children = next_entities (children);
+        }
     }
 
   severities = entity_child (vt, "severities");
@@ -1274,15 +1349,15 @@ nvti_from_vt (entity_t vt)
           g_free (cvss_base);
         }
       else
-        g_warning ("%s: no severity", __FUNCTION__);
+        g_warning ("%s: no severity", __func__);
     }
   else
-    g_warning ("%s: no severities", __FUNCTION__);
+    g_warning ("%s: no severities", __func__);
 
   custom = entity_child (vt, "custom");
   if (custom == NULL)
     {
-      g_warning ("%s: VT %s missing CUSTOM", __FUNCTION__, nvti_oid (nvti));
+      g_warning ("%s: VT missing CUSTOM", __func__);
       nvti_free (nvti);
       return NULL;
     }
@@ -1290,8 +1365,7 @@ nvti_from_vt (entity_t vt)
   family = entity_child (custom, "family");
   if (family == NULL)
     {
-      g_warning ("%s: VT %s missing CUSTOM/FAMILY", __FUNCTION__,
-                 nvti_oid (nvti));
+      g_warning ("%s: VT/CUSTOM missing FAMILY", __func__);
       nvti_free (nvti);
       return NULL;
     }
@@ -1300,8 +1374,7 @@ nvti_from_vt (entity_t vt)
   category = entity_child (custom, "category");
   if (category == NULL)
     {
-      g_warning ("%s: VT %s missing CUSTOM/CATEGORY", __FUNCTION__,
-                 nvti_oid (nvti));
+      g_warning ("%s: VT/CUSTOM missing CATEGORY", __func__);
       nvti_free (nvti);
       return NULL;
     }
@@ -1315,8 +1388,10 @@ nvti_from_vt (entity_t vt)
  *
  * @param[in]  get_vts_response      OSP GET_VTS response.
  * @param[in]  scanner_feed_version  Version of feed from scanner.
+ *
+ * @return 0 success, 1 VT integrity check failed, -1 error
  */
-static void
+static int
 update_nvts_from_vts (entity_t *get_vts_response,
                       const gchar *scanner_feed_version)
 {
@@ -1325,6 +1400,7 @@ update_nvts_from_vts (entity_t *get_vts_response,
   GList *preferences;
   int count_modified_vts, count_new_vts;
   time_t feed_version_epoch;
+  const char *osp_vt_hash;
 
   count_modified_vts = 0;
   count_new_vts = 0;
@@ -1334,9 +1410,11 @@ update_nvts_from_vts (entity_t *get_vts_response,
   vts = entity_child (*get_vts_response, "vts");
   if (vts == NULL)
     {
-      g_warning ("%s: VTS missing", __FUNCTION__);
-      return;
+      g_warning ("%s: VTS missing", __func__);
+      return -1;
     }
+
+  osp_vt_hash = entity_attribute (vts, "sha256_hash");
 
   sql_begin_immediate ();
 
@@ -1359,11 +1437,13 @@ update_nvts_from_vts (entity_t *get_vts_response,
      * To solve both cases, we remove all nvt_preferences. */
     sql ("TRUNCATE nvt_preferences;");
 
-  preferences = NULL;
   children = vts->entities;
   while ((vt = first_entity (children)))
     {
       nvti_t *nvti = nvti_from_vt (vt);
+
+      if (nvti == NULL)
+        continue;
 
       if (nvti_creation_time (nvti) > feed_version_epoch)
         count_new_vts += 1;
@@ -1372,18 +1452,20 @@ update_nvts_from_vts (entity_t *get_vts_response,
 
       insert_nvt (nvti);
 
+      preferences = NULL;
       if (update_preferences_from_vt (vt, nvti_oid (nvti), &preferences))
         {
           sql_rollback ();
-          return;
+          return -1;
         }
+      sql ("DELETE FROM nvt_preferences WHERE name LIKE '%s:%%';",
+           nvti_oid (nvti));
+      insert_nvt_preferences_list (preferences);
+      g_list_free_full (preferences, g_free);
 
       nvti_free (nvti);
       children = next_entities (children);
     }
-
-  insert_nvt_preferences_list (preferences);
-  g_list_free_full (preferences, g_free);
 
   set_nvts_check_time (count_new_vts, count_modified_vts);
 
@@ -1392,13 +1474,79 @@ update_nvts_from_vts (entity_t *get_vts_response,
   if (check_config_families ())
     g_warning ("%s: Error updating config families."
                "  One or more configs refer to an outdated family of an NVT.",
-               __FUNCTION__);
+               __func__);
   update_all_config_caches ();
 
   g_info ("Updating VTs in database ... %i new VTs, %i changed VTs",
           count_new_vts, count_modified_vts);
 
   sql_commit ();
+
+  if (osp_vt_hash && strcmp (osp_vt_hash, ""))
+    {
+      char *db_vts_hash;
+
+      /*
+       * The hashed string used for verifying the NVTs generated as follows:
+       *
+       * For each NVT, sorted by OID, concatenate:
+       *   - the OID
+       *   - the modification time as seconds since epoch
+       *   - the preferences sorted as strings(!) and concatenated including:
+       *     - the id
+       *     - the name
+       *     - the default value (including choices for the "radio" type)
+       *
+       * All values are concatenated without a separator.
+       */
+      db_vts_hash
+        = sql_string ("WITH pref_str AS ("
+                      "  SELECT name,"
+                      "         substring(name, '^(.*?):') AS oid,"
+                      "         substring (name, '^.*?:([^:]+):') AS pref_id,"
+                      "         (substring (name, '^.*?:([^:]+):')"
+                      "          || substring (name,"
+                      "                        '^[^:]*:[^:]*:[^:]*:(.*)')"
+                      "          || value) AS pref"
+                      "  FROM nvt_preferences"
+                      " ),"
+                      " nvt_str AS ("
+                      "  SELECT (SELECT nvts.oid"
+                      "            || max(modification_time)"
+                      "            || coalesce (string_agg(pref_str.pref, ''"
+                      "                                    ORDER BY pref_id),"
+                      "                         ''))"
+                      "         AS vt_string"
+                      "  FROM nvts"
+                      "  LEFT JOIN pref_str ON nvts.oid = pref_str.oid"
+                      "  GROUP BY nvts.oid"
+                      "  ORDER BY nvts.oid ASC"
+                      " )"
+                      " SELECT encode"
+                      "         (digest"
+                      "           (coalesce (string_agg (nvt_str.vt_string, ''),"
+                      "                      ''),"
+                      "            'sha256'),"
+                      "          'hex')"
+                      " FROM nvt_str;");
+
+      if (strcmp (osp_vt_hash, db_vts_hash ? db_vts_hash : ""))
+        {
+          g_warning ("%s: SHA-256 hash of the VTs in the database (%s)"
+                     " does not match the one from the scanner (%s).",
+                     __func__, db_vts_hash, osp_vt_hash);
+
+          g_free (db_vts_hash);
+          return 1;
+        }
+
+      g_free (db_vts_hash);
+    }
+  else
+    g_warning ("%s: No SHA-256 hash received from scanner, skipping check.",
+               __func__);
+
+  return 0;
 }
 
 /**
@@ -1502,7 +1650,7 @@ check_preference_names (int trash, time_t modification_time)
  * @param[in]  db_feed_version       Feed version from meta table.
  * @param[in]  scanner_feed_version  Feed version from scanner.
  *
- * @return 0 success, -1 error.
+ * @return 0 success, 1 VT integrity check failed, -1 error.
  */
 static int
 update_nvt_cache_osp (const gchar *update_socket, gchar *db_feed_version,
@@ -1513,6 +1661,7 @@ update_nvt_cache_osp (const gchar *update_socket, gchar *db_feed_version,
   entity_t vts;
   osp_get_vts_opts_t get_vts_opts;
   time_t old_nvts_last_modified;
+  int ret;
 
   if (db_feed_version == NULL
       || strcmp (db_feed_version, "") == 0
@@ -1525,18 +1674,19 @@ update_nvt_cache_osp (const gchar *update_socket, gchar *db_feed_version,
   connection = osp_connection_new (update_socket, 0, NULL, NULL, NULL);
   if (!connection)
     {
-      g_warning ("%s: failed to connect to %s (2)", __FUNCTION__,
+      g_warning ("%s: failed to connect to %s (2)", __func__,
                  update_socket);
       return -1;
     }
 
+  get_vts_opts = osp_get_vts_opts_default;
   if (db_feed_version)
     get_vts_opts.filter = g_strdup_printf ("modification_time>%s", db_feed_version);
   else
     get_vts_opts.filter = NULL;
   if (osp_get_vts_ext (connection, get_vts_opts, &vts))
     {
-      g_warning ("%s: failed to get VTs", __FUNCTION__);
+      g_warning ("%s: failed to get VTs", __func__);
       g_free (get_vts_opts.filter);
       return -1;
     }
@@ -1544,22 +1694,24 @@ update_nvt_cache_osp (const gchar *update_socket, gchar *db_feed_version,
 
   osp_connection_close (connection);
 
-  update_nvts_from_vts (&vts, scanner_feed_version);
+  ret = update_nvts_from_vts (&vts, scanner_feed_version);
   free_entity (vts);
+  if (ret)
+    return ret;
 
   /* Update scanner preferences */
   connection = osp_connection_new (update_socket, 0, NULL, NULL, NULL);
   if (!connection)
     {
       g_warning ("%s: failed to connect to %s (3)",
-                __FUNCTION__, update_socket);
+                __func__, update_socket);
       return -1;
     }
 
   scanner_prefs = NULL;
   if (osp_get_scanner_details (connection, NULL, &scanner_prefs))
     {
-      g_warning ("%s: failed to get scanner preferences", __FUNCTION__);
+      g_warning ("%s: failed to get scanner preferences", __func__);
       osp_connection_close (connection);
       return -1;
     }
@@ -1638,20 +1790,114 @@ update_nvt_cache_osp (const gchar *update_socket, gchar *db_feed_version,
 }
 
 /**
+ * @brief Get the VTs feed version from an OSP scanner.
+ *
+ * @param[in]  update_socket  Socket to use to contact ospd-openvas scanner.
+ *
+ * @return The feed version or NULL on error.
+ */
+static char *
+osp_scanner_feed_version (const gchar *update_socket)
+{
+  osp_connection_t *connection;
+  gchar *error;
+  gchar *scanner_feed_version;
+
+  scanner_feed_version = NULL;
+
+  connection = osp_connection_new (update_socket, 0, NULL, NULL, NULL);
+  if (!connection)
+    {
+      g_debug ("%s: failed to connect to %s", __func__, update_socket);
+      return NULL;
+    }
+
+  error = NULL;
+  if (osp_get_vts_version (connection, &scanner_feed_version, &error))
+    {
+      g_debug ("%s: failed to get scanner_feed_version. %s",
+               __func__, error ? : "");
+      g_free (error);
+      osp_connection_close (connection);
+      return NULL;
+    }
+
+  osp_connection_close (connection);
+
+  return scanner_feed_version;
+}
+
+/**
+ * @brief Check VTs feed version status via OSP, optionally get versions.
+ *
+ * @param[in]  update_socket  Socket to use to contact ospd-openvas scanner.
+ * @param[out] db_feed_version_out       Output of database feed version.
+ * @param[out] scanner_feed_version_out  Output of scanner feed version.
+ *
+ * @return 0 VTs feed current, -1 error, 1 VT update needed.
+ */
+static int
+nvts_feed_version_status_internal (const gchar *update_socket,
+                                   gchar **db_feed_version_out,
+                                   gchar **scanner_feed_version_out)
+{
+  gchar *db_feed_version, *scanner_feed_version;
+
+  if (db_feed_version_out)
+    *db_feed_version_out = NULL;
+  if (scanner_feed_version_out)
+    *scanner_feed_version_out = NULL;
+
+  db_feed_version = nvts_feed_version ();
+  g_debug ("%s: db_feed_version: %s", __func__, db_feed_version);
+  if (db_feed_version_out && db_feed_version)
+    *db_feed_version_out = g_strdup (db_feed_version);
+
+  scanner_feed_version = osp_scanner_feed_version (update_socket);
+  g_debug ("%s: scanner_feed_version: %s", __func__, scanner_feed_version);
+  if (scanner_feed_version == NULL)
+    return -1;
+  if (scanner_feed_version_out && scanner_feed_version)
+    *scanner_feed_version_out = g_strdup (scanner_feed_version);
+
+  if ((db_feed_version == NULL)
+      || strcmp (scanner_feed_version, db_feed_version))
+    {
+      g_free (db_feed_version);
+      g_free (scanner_feed_version);
+      return 1;
+    }
+
+  return 0;
+}
+
+/**
+ * @brief Check VTs feed version status
+ *
+ * @return 0 VTs feed current, 1 VT update needed, -1 error.
+ */
+int
+nvts_feed_version_status ()
+{
+  return nvts_feed_version_status_internal (get_osp_vt_update_socket (),
+                                            NULL,
+                                            NULL);
+}
+
+/**
  * @brief Update VTs via OSP.
  *
  * Expect to be called in the child after a fork.
  *
  * @param[in]  update_socket  Socket to use to contact ospd-openvas scanner.
  *
- * @return 0 success, -1 error, 2 scanner still loading.
+ * @return 0 success, -1 error, 1 VT integrity check failed.
  */
 int
 manage_update_nvt_cache_osp (const gchar *update_socket)
 {
-  osp_connection_t *connection;
   gchar *db_feed_version, *scanner_feed_version;
-  static lockfile_t lockfile;
+  int ret;
 
   /* Re-open DB after fork. */
 
@@ -1660,47 +1906,25 @@ manage_update_nvt_cache_osp (const gchar *update_socket)
 
   /* Try update VTs. */
 
-  db_feed_version = nvts_feed_version ();
-  g_debug ("%s: db_feed_version: %s", __FUNCTION__, db_feed_version);
-
-  connection = osp_connection_new (update_socket, 0, NULL, NULL, NULL);
-  if (!connection)
+  ret = nvts_feed_version_status_internal (update_socket,
+                                           &db_feed_version,
+                                           &scanner_feed_version);
+  if (ret == 1)
     {
-      g_warning ("%s: failed to connect to %s", __FUNCTION__, update_socket);
-      return -1;
+      g_info ("OSP service has different VT status (version %s)"
+              " from database (version %s, %i VTs). Starting update ...",
+              scanner_feed_version, db_feed_version,
+              sql_int ("SELECT count (*) FROM nvts;"));
+
+      ret = update_nvt_cache_osp (update_socket, db_feed_version,
+                                  scanner_feed_version);
+
+      g_free (db_feed_version);
+      g_free (scanner_feed_version);
+      return ret;
     }
 
-  if (osp_get_vts_version (connection, &scanner_feed_version))
-    {
-      g_warning ("%s: failed to get scanner_version", __FUNCTION__);
-      return -1;
-    }
-  g_debug ("%s: scanner_feed_version: %s", __FUNCTION__, scanner_feed_version);
-
-  osp_connection_close (connection);
-
-  if ((db_feed_version == NULL)
-      || strcmp (scanner_feed_version, db_feed_version))
-    {
-      switch (lockfile_lock_nb (&lockfile, "gvm-syncing-nvts"))
-        {
-          case 1:
-            g_warning ("%s: an NVT sync is already running", __func__);
-            return -1;
-          case -1:
-            g_warning ("%s: error getting sync lock", __func__);
-            return -1;
-        }
-
-      g_info ("OSP service has newer VT status (version %s) than in database (version %s, %i VTs). Starting update ...",
-              scanner_feed_version, db_feed_version, sql_int ("SELECT count (*) FROM nvts;"));
-
-      if (update_nvt_cache_osp (update_socket, db_feed_version,
-                                scanner_feed_version))
-        return -1;
-    }
-
-  return 0;
+  return ret;
 }
 
 /**
@@ -1723,12 +1947,14 @@ manage_sync_nvts (int (*fork_update_nvt_cache) ())
  *
  * @return 0 success, -1 error, -4 no osp update socket.
  */
-static int
-update_or_rebuild (int update)
+int
+update_or_rebuild_nvts (int update)
 {
   const char *osp_update_socket;
   gchar *db_feed_version, *scanner_feed_version;
   osp_connection_t *connection;
+  int ret;
+  gchar *error;
 
   if (check_osp_vt_update_socket ())
     {
@@ -1755,9 +1981,11 @@ update_or_rebuild (int update)
       return -1;
     }
 
-  if (osp_get_vts_version (connection, &scanner_feed_version))
+  error = NULL;
+  if (osp_get_vts_version (connection, &scanner_feed_version, &error))
     {
-      printf ("Failed to get scanner_version.\n");
+      printf ("Failed to get scanner_version. %s\n", error ? : "");
+      g_free (error);
       return -1;
     }
   g_debug ("%s: scanner_feed_version: %s", __func__, scanner_feed_version);
@@ -1767,12 +1995,13 @@ update_or_rebuild (int update)
   if (update == 0)
     {
       sql ("TRUNCATE nvts;");
+      sql ("TRUNCATE nvt_preferences;");
       set_nvts_feed_version ("0");
     }
 
-  if (update_nvt_cache_osp (osp_update_socket, NULL, scanner_feed_version))
+  ret = update_nvt_cache_osp (osp_update_socket, NULL, scanner_feed_version);
+  if (ret)
     {
-      printf ("Failed to %s NVT cache.\n", update ? "update" : "rebuild");
       return -1;
     }
 
@@ -1785,21 +2014,22 @@ update_or_rebuild (int update)
  * @param[in]  log_config  Log configuration.
  * @param[in]  database    Location of manage database.
  *
- * @return 0 success, -1 error, -2 database is wrong version,
+ * @return 0 success, 1 VT integrity check failed, -1 error,
+ *         -2 database is wrong version,
  *         -3 database needs to be initialised from server, -5 sync active.
  */
 int
-manage_rebuild (GSList *log_config, const gchar *database)
+manage_rebuild (GSList *log_config, const db_conn_info_t *database)
 {
   int ret;
   static lockfile_t lockfile;
 
   g_info ("   Rebuilding NVTs.");
 
-  switch (lockfile_lock_nb (&lockfile, "gvm-syncing-nvts"))
+  switch (feed_lockfile_lock (&lockfile))
     {
       case 1:
-        printf ("An NVT sync is already running.\n");
+        printf ("A feed sync is already running.\n");
         return -5;
       case -1:
         printf ("Error getting sync lock.\n");
@@ -1808,15 +2038,19 @@ manage_rebuild (GSList *log_config, const gchar *database)
 
   ret = manage_option_setup (log_config, database);
   if (ret)
-    return ret;
+    {
+      feed_lockfile_unlock (&lockfile);
+      return ret;
+    }
 
   sql_begin_immediate ();
-  ret = update_or_rebuild (0);
+  ret = update_or_rebuild_nvts (0);
   if (ret)
     sql_rollback ();
   else
     sql_commit ();
 
+  feed_lockfile_unlock (&lockfile);
   manage_option_cleanup ();
 
   return ret;

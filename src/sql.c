@@ -1,20 +1,19 @@
-/* Copyright (C) 2009-2018 Greenbone Networks GmbH
+/* Copyright (C) 2009-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -50,8 +49,23 @@ sql_prepare_internal (int, int, const char*, va_list, sql_stmt_t **);
 int
 sql_exec_internal (int, sql_stmt_t *);
 
+void
+sql_finalize (sql_stmt_t *);
+
+double
+sql_column_double (sql_stmt_t *, int);
+
+const char *
+sql_column_text (sql_stmt_t *, int);
+
 int
-sql_explain_internal (const char*, va_list);
+sql_column_int (sql_stmt_t *, int);
+
+long long int
+sql_column_int64 (sql_stmt_t *, int);
+
+gchar **
+sql_column_array (sql_stmt_t *, int);
 
 
 /* Variables. */
@@ -174,7 +188,7 @@ sqlv (int retry, char* sql, va_list args)
       ret = sql_prepare_internal (retry, 1, sql, args_copy, &stmt);
       va_end (args_copy);
       if (ret == -1)
-        g_warning ("%s: sql_prepare_internal failed", __FUNCTION__);
+        g_warning ("%s: sql_prepare_internal failed", __func__);
       if (ret)
         return ret;
 
@@ -182,7 +196,7 @@ sqlv (int retry, char* sql, va_list args)
 
       while ((ret = sql_exec_internal (retry, stmt)) == 1);
       if ((ret == -1) && log_errors)
-        g_warning ("%s: sql_exec_internal failed", __FUNCTION__);
+        g_warning ("%s: sql_exec_internal failed", __func__);
       sql_finalize (stmt);
       if (ret == 2)
         continue;
@@ -281,15 +295,14 @@ sql_giveup (char* sql, ...)
 /**
  * @brief Get a particular cell from a SQL query.
  *
- * @param[in]   log          Whether to do g_debug logging.
  * @param[in]   sql          Format string for SQL query.
  * @param[in]   args         Arguments for format string.
  * @param[out]  stmt_return  Return from statement.
  *
  * @return 0 success, 1 too few rows, -1 error.
  */
-static int
-sql_x_internal (int log, char* sql, va_list args, sql_stmt_t** stmt_return)
+int
+sql_x (char* sql, va_list args, sql_stmt_t** stmt_return)
 {
   int ret;
 
@@ -302,12 +315,12 @@ sql_x_internal (int log, char* sql, va_list args, sql_stmt_t** stmt_return)
        */
       va_list args_copy;
       va_copy (args_copy, args);
-      ret = sql_prepare_internal (1, log, sql, args_copy, stmt_return);
+      ret = sql_prepare_internal (1, 1, sql, args_copy, stmt_return);
       va_end (args_copy);
 
       if (ret)
         {
-          g_warning ("%s: sql_prepare failed", __FUNCTION__);
+          g_warning ("%s: sql_prepare failed", __func__);
           return -1;
         }
 
@@ -317,7 +330,7 @@ sql_x_internal (int log, char* sql, va_list args, sql_stmt_t** stmt_return)
       if (ret == -1 || ret == -4)
         {
           if (log_errors)
-            g_warning ("%s: sql_exec_internal failed", __FUNCTION__);
+            g_warning ("%s: sql_exec_internal failed", __func__);
           return -1;
         }
       if (ret == 0)
@@ -332,26 +345,8 @@ sql_x_internal (int log, char* sql, va_list args, sql_stmt_t** stmt_return)
       break;
     }
   assert (ret == 1);
-  if (log)
-    g_debug ("   sql_x end (%s)", sql);
+  g_debug ("   sql_x end (%s)", sql);
   return 0;
-}
-
-/**
- * @brief Get a particular cell from a SQL query.
- *
- * Do logging as usual.
- *
- * @param[in]   sql          Format string for SQL query.
- * @param[in]   args         Arguments for format string.
- * @param[out]  stmt_return  Return from statement.
- *
- * @return 0 success, 1 too few rows, -1 error.
- */
-int
-sql_x (char* sql, va_list args, sql_stmt_t** stmt_return)
-{
-  return sql_x_internal (1, sql, args, stmt_return);
 }
 
 /**
@@ -526,44 +521,8 @@ sql_int64_0 (char* sql, ...)
   return ret;
 }
 
-/**
- * @brief Write debug messages with the query plan for an SQL query to the log.
- *
- * @param[in] sql   Format string for the SQL query.
- * @param[in] ...   Format string arguments.
- *
- * @return 0 success, -1 error.
- */
-int
-sql_explain (const char *sql, ...)
-{
-  int ret;
-  va_list args;
-  va_start (args, sql);
-  ret = sql_explain_internal (sql, args);
-  va_end (args);
-
-  return ret;
-}
-
 
 /* Iterators. */
-
-/**
- * @brief Initialise an iterator.
- *
- * @param[in]  iterator  Iterator.
- * @param[in]  stmt      Statement.
- */
-void
-init_prepared_iterator (iterator_t* iterator, sql_stmt_t* stmt)
-{
-  iterator->done = FALSE;
-  iterator->stmt = stmt;
-  iterator->prepared = 1;
-  iterator->crypt_ctx = NULL;
-  g_debug ("   sql: init prepared %p", stmt);
-}
 
 /**
  * @brief Initialise an iterator.
@@ -579,7 +538,6 @@ init_iterator (iterator_t* iterator, const char* sql, ...)
   va_list args;
 
   iterator->done = FALSE;
-  iterator->prepared = 0;
   iterator->crypt_ctx = NULL;
 
   va_start (args, sql);
@@ -587,7 +545,7 @@ init_iterator (iterator_t* iterator, const char* sql, ...)
   va_end (args);
   if (ret)
     {
-      g_warning ("%s: sql_prepare failed", __FUNCTION__);
+      g_warning ("%s: sql_prepare failed", __func__);
       abort ();
     }
   iterator->stmt = stmt;
@@ -654,6 +612,25 @@ iterator_string (iterator_t* iterator, int col)
 }
 
 /**
+ * @brief Get a string column from an iterator.
+ *
+ * Note that sql_column_array gets the array as text and parses that text
+ * into an array, but it does not consider escaping so it probably will
+ * not work with strings that can contain commas, '{'s or '}'s.
+ *
+ * @param[in]  iterator  Iterator.
+ * @param[in]  col       Column offset.
+ *
+ * @return Value of given column.
+ */
+gchar **
+iterator_array (iterator_t* iterator, int col)
+{
+  if (iterator->done) abort ();
+  return sql_column_array (iterator->stmt, col);
+}
+
+/**
  * @brief Cleanup an iterator.
  *
  * @param[in]  iterator  Iterator.
@@ -663,12 +640,11 @@ cleanup_iterator (iterator_t* iterator)
 {
   if (iterator == NULL)
     {
-      g_warning ("%s: null iterator pointer", __FUNCTION__);
+      g_warning ("%s: null iterator pointer", __func__);
       return;
     }
 
-  if (iterator->prepared == 0)
-    sql_finalize (iterator->stmt);
+  sql_finalize (iterator->stmt);
   if (iterator->crypt_ctx)
     {
       lsc_crypt_release (iterator->crypt_ctx);
@@ -703,57 +679,18 @@ next (iterator_t* iterator)
       if (ret == -1 || ret == -4)
         {
           if (log_errors)
-            g_warning ("%s: sql_exec_internal failed", __FUNCTION__);
+            g_warning ("%s: sql_exec_internal failed", __func__);
           abort ();
         }
       if (ret == -3 || ret == -2)
         {
           /* Busy or locked, with statement reset.  Just try step again like
            * we used to do in sql_exec_internal. */
-          g_warning ("%s: stepping after reset", __FUNCTION__);
+          g_warning ("%s: stepping after reset", __func__);
           continue;
         }
       break;
     }
   assert (ret == 1);
   return TRUE;
-}
-
-
-/* Prepared statements. */
-
-/**
- * @brief Prepare a statement.
- *
- * @param[in]  sql  Format string for SQL.
- *
- * @return Statement on success, NULL on error.
- */
-sql_stmt_t *
-sql_prepare (const char* sql, ...)
-{
-  int ret;
-  sql_stmt_t* stmt;
-  va_list args;
-
-  va_start (args, sql);
-  ret = sql_prepare_internal (1, 1, sql, args, &stmt);
-  va_end (args);
-  if (ret)
-    return NULL;
-  return stmt;
-}
-
-/**
- * @brief Execute a prepared statement.
- *
- * @param[in]  stmt  Statement.
- *
- * @return 0 complete, 1 row available in results, 2 rerun prepare, -1 error,
- *         -2 gave up with statement reset.
- */
-int
-sql_exec (sql_stmt_t *stmt)
-{
-  return sql_exec_internal (1, stmt);
 }

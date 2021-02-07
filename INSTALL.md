@@ -1,34 +1,34 @@
 # INSTALLATION INSTRUCTIONS FOR GREENBONE VULNERABILITY MANAGER
 
 Please note: The reference system used by most of the developers is Debian
-GNU/Linux 'Stretch' 9. The build might fail on any other system. Also, it is
+GNU/Linux 'Buster' 10. The build might fail on any other system. Also, it is
 necessary to install dependent development packages.
-
-IMPORTANT NOTICE: This version changes quite a number of locations
-and names compared to the previous version. It is highly recommended to
-consider the section "Migrating to Version 8.0", unless you do not have
-an old setup on your system.
-
 
 ## Prerequisites for Greenbone Vulnerability Manager
 
 Prerequisites:
-* cmake >= 3.0
-* glib-2.0 >= 2.42
-* gnutls >= 3.2.15
-* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 11.0.0
-* PostgreSQL database >= 9.6
-* pkg-config
-* libical >= 1.0.0
-* xml_split (recommended, lowers sync RAM usage, Debian package: xml-twig-tools)
 
-Prerequisites for certificate generation:
-* GnuTLS certtool
+* GCC (Debian package: gcc)
+* cmake >= 3.0 (Debian package: cmake)
+* glib-2.0 >= 2.42 (Debian package: libglib2.0-dev)
+* gnutls >= 3.2.15 (Debian package: libgnutls28-dev)
+* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 20.08.1 ([gvm-libs](https://github.com/greenbone/gvm-libs/tree/gvm-libs-20.08) component)
+* PostgreSQL database >= 9.6 (Debian packages: libpq-dev postgresql-server-dev-11)
+* pkg-config (Debian package: pkg-config)
+* libical >= 1.0.0 (Debian package: libical-dev)
+* xsltproc (Debian package: xsltproc)
+
+Install these prerequisites on Debian GNU/Linux 'Buster' 10:
+
+    apt-get install gcc cmake libglib2.0-dev libgnutls28-dev libpq-dev postgresql-server-dev-11 pkg-config libical-dev xsltproc
 
 Prerequisites for building documentation:
 * Doxygen
 * xsltproc (for building the GMP HTML documentation)
 * xmltoman (optional, for building man page)
+
+Prerequisites for building tests:
+* Cgreen (optional, for building tests)
 
 Please see the section "Prerequisites for Optional Features" below additional
 optional prerequisites.
@@ -62,6 +62,7 @@ Thereafter, the following commands are useful:
     make                # build the scanner
     make doc            # build the documentation
     make doc-full       # build more developer-oriented documentation
+    make tests          # build tests
     make install        # install the build
     make rebuild_cache  # rebuild the cmake cache
 
@@ -121,8 +122,6 @@ Certificates`.
 
 1.  Install Postgres.
 
-	  (Debian: postgresql, postgresql-contrib, postgresql-server-dev-9.6).
-
     ```sh
     apt install postgresql postgresql-contrib postgresql-server-dev-all
     ```
@@ -140,59 +139,32 @@ Certificates`.
 4.  Setup permissions.
 
     ```sh
-    sudo -u postgres bash  # if you logged out after step 4
+    sudo -u postgres bash  # if you logged out after step 3
     psql gvmd
     create role dba with superuser noinherit;
-    grant dba to mattm;    # mattm is the user created in step 4
+    grant dba to mattm;    # mattm is the user created in step 3
     ```
 
-5.  Create DB extension (also necessary when the database got dropped).
+5.  Create DB extensions (also necessary when the database got dropped).
 
     ```sh
-    sudo -u postgres bash  # if you logged out after step 5
+    sudo -u postgres bash  # if you logged out after step 4
     psql gvmd
     create extension "uuid-ossp";
+    create extension "pgcrypto";
     ```
 
 6.  Make Postgres aware of the gvm libraries if not installed
     in a ld-aware directory. For example create file `/etc/ld.so.conf.d/gvm.conf`
     with appropriate path and then run `ldconfig`.
 
-7.  If you wish to migrate from SQLite, follow the next section before running
-    Manager.
+7.  Run Manager as usual.
 
-8.  Run Manager as usual.
-
-9. To run SQL on the database.
+8. To run SQL on the database.
 
     ```sh
     psql gvmd
     ```
-
-### Migrating from SQLite to PostgreSQL
-
-GVM-10 was last release where gvmd supports SQLite. GVM-11
-supports exclusively PostgreSQL. If you worked with SQLite before
-and want to keep your data, you need to migrate the data to
-PostgreSQL. 
-
-1.  Run `gvm-migrate-to-postgres` into a clean newly created PostgreSQL database
-    like described above.
-
-    If you accidentally already rebuilt the database or for other reasons
-    want to start from scratch, drop the database and repeat the process
-    described above.  It is essentially important that you do not start
-    Manager before the migration as it would create a fresh one and therefore
-    prevent migration.
-
-    Note that the migrate script will modify the SQLite database to clean
-    up errors. So it's a good idea to make a backup in case anything goes
-    wrong.
-
-2.  Run `greenbone-scapdata-sync`.
-
-3.  Run `greenbone-certdata-sync`.
-
 
 ### Switching between releases
 
@@ -216,10 +188,6 @@ releases:
     sudo -u postgres psql -q --command='ALTER DATABASE gvmd RENAME TO gvmd_10;'
     sudo -u postgres psql -q --command='ALTER DATABASE gvmd_master RENAME TO gvmd;'
     ```
-
-    Note that for OpenVAS-9 the database name is "tasks", so this step is not
-    necessary.
-
 
 ### Analyzing the size of the tables
 
@@ -256,59 +224,16 @@ SELECT nspname || '.' || relname AS "relation",
 These queries were taken from https://wiki.postgresql.org/wiki/Disk_Usage
 
 
-## Migrating to Version 8.0
+## Migrating the Database (e.g. during an upgrade of GVM)
 
-Before starting gvmd 8.0 for the first time you need to move some files to the
-new locations where they are expected now.  If you do not do this, the files are
-freshly initialized and it gets more complicated to transfer the old data
-properly.
+If you have used Manager before (e.g. an older version which got upgraded to
+a newer major release), you might get the following error in your `gvmd.log`
+during startup:
 
- - move `$prefix/etc/openvas/pwpolicy.conf` to
-   `$prefix/etc/gvm/`
+    gvmd: database is wrong version
 
- - move `$prefix/etc/openvas/openvasmd_log.conf` to
-   `$prefix/etc/gvm/gvmd_log.conf`
-
- - copy `$prefix/etc/openvas/gsf-access-key` to
-   `$prefix/etc/gvm/`
-   If the `gsf-access-key` file was already migrated for the `openvas-scanner`
-   module it can be removed from the `$prefix/etc/openvas/` directory.
-
- - move `$prefix/var/lib/openvas/scap-data/scap.db` to
-   `$prefix/var/lib/gvm/gvmd/scap/`
-
- - move `$prefix/var/lib/openvas/cert-data/cert.db` to
-   `$prefix/var/lib/gvm/gvmd/cert/`
-
- - move `$prefix/var/lib/openvas/scap-data` to
-   `$prefix/var/lib/gvm/scap-data`
-
- - move `$prefix/var/lib/openvas/cert-data` to
-   `$prefix/var/lib/gvm/cert-data`
-
- - move `$prefix/var/lib/openvas/openvasmd` to
-   `$prefix/var/lib/gvm/gvmd`
-
- - move `$prefix/var/lib/openvas/CA` to
-   `$prefix/var/lib/gvm/CA`
-
- - move `$prefix/var/lib/openvas/private` to
-   `$prefix/var/lib/gvm/private`
-
- - (SQLite backend only) move `$prefix/var/lib/openvas/mgr/tasks.db` to
-   `$prefix/var/lib/gvm/gvmd/gvmd.db`
-
- - (Postgres backend only) rename database to `gvmd`:
-    ```
-    sudo -u postgres sh
-    psql --command='ALTER DATABASE tasks RENAME TO gvmd;'
-    ```
-
-
-## Migrating the Database
-
-If you have used Manager before, you might need to migrate the database to the
-current data model. Use this command to run the migration:
+If this is happening you need to migrate the database to the current data model.
+Use this command to run the migration:
 
     gvmd --migrate
 
@@ -325,6 +250,50 @@ An administrator user can later create further users or administrators via
 clients like the Greenbone Security Assistant (GSA).
 
 Also, the new user can change their password via GSA.
+
+
+## Set the Feed Import Owner
+
+Certain resources that were previously part of the gvmd source code are now
+shipped via the feed.  An example is the config "Full and Fast".
+
+gvmd will only create these resources if a "Feed Import Owner" is configured:
+
+    gvmd --modify-setting 78eceaec-3385-11ea-b237-28d24461215b --value <uuid_of_user>
+
+The UUIDs of all created users can be found using
+
+    gvmd --get-users --verbose
+
+
+## Keeping the feeds up-to-date
+
+The `gvmd Data`, `SCAP` and `CERT` Feeds should be kept up-to-date by calling the
+`greenbone-feed-sync` script regularely (e.g. via a cron entry):
+
+    greenbone-feed-sync --type GVMD_DATA
+    greenbone-feed-sync --type SCAP
+    greenbone-feed-sync --type CERT
+
+Please note: The `CERT` feed sync depends on data provided by the `SCAP` feed
+and should be called after syncing the latter.
+
+
+## Configure the default OSPD scanner socket path
+
+By default, Manager tries to connect to the default OSPD scanner via the following path:
+
+    /var/run/ospd/ospd.sock
+
+If this path doesn't match your setup you need to change the socket path accordingly.
+
+Get the UUID of the `OpenVAS Default` scanner:
+
+    gvmd --get-scanners
+
+Update the path (example, path needs to be adapted accordingly):
+
+    gvmd --modify-scanner=<uuid of OpenVAS Default scanner> --scanner-host=<install-prefix>/var/run/ospd/ospd-openvas.sock
 
 
 ## Logging Configuration
@@ -443,30 +412,6 @@ supported values for `<name>` are:
   that are not cached yet.
 
 
-## Import/Update IANA Services Names
-
-If you want the Manager to resolve port names when outputting reports for
-instance, you need to import the information from a Services Names list.
-
-In order to update the database, download the port names list:
-
-    wget https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xml
-
-Then provide it as an argument to gvm-portnames-update script:
-
-    gvm-portnames-update service-names-port-numbers.xml
-
-You can safely delete the list after that as it is not needed and all relevant
-information has been imported into the database.
-
-    rm service-names-port-numbers.xml
-
-Note that IANA updates this list frequently. The same steps could be followed to
-update the information in the database from a newer list.
-
-Currently, the helper tool supports only the official IANA Services Names list.
-
-
 ## Encrypted Credentials
 
 By default, the Manager stores private key and password parts of target
@@ -551,14 +496,6 @@ Create a new key:
     gvmd --create-credentials-encryption-key
 
 Finally, reset all credentials, by hand.
-
-
-## Migrating Encrypted Credentials from Manager prior version 6.0
-
-Please consult the INSTALL file of version 6.0 for detailed
-information about the migration of encrypted credentials.
-
-From version 6.0 on the migration is seamless.
 
 
 ## Updating Scanner Certificates
@@ -711,6 +648,14 @@ Prerequisites for Tipping Point alert:
 Prerequisites for key generation on systems with low entropy:
 * haveged (or a similar tool)
 
+Prerequisites for S/MIME support (e.g. email encryption):
+* GNU privacy guard - S/MIME version (Debian package: gpgsm)
+
+Prerequisites for certificate generation:
+* GnuTLS certtool (Debian package: gnutls-bin)
+
+Prerequisites (recommended) to lower sync RAM usage
+* xml_split (Debian package: xml-twig-tools)
 
 ## Static code analysis with the Clang Static Analyzer
 

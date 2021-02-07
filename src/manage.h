@@ -1,20 +1,19 @@
-/* Copyright (C) 2009-2019 Greenbone Networks GmbH
+/* Copyright (C) 2009-2020 Greenbone Networks GmbH
  *
- * SPDX-License-Identifier: GPL-2.0-or-later
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Affero General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -26,20 +25,30 @@
 #define _GVMD_MANAGE_H
 
 #include "iterator.h"
+#include "manage_configs.h"
+#include "manage_get.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <glib.h>
 #include <gnutls/gnutls.h>
 
-#include <gvm/base/array.h>       /* for array_t */
-#include <gvm/base/credentials.h> /* for credentials_t */
-#include <gvm/base/nvti.h>        /* for nvti_t */
-#include <gvm/base/networking.h>  /* for port_protocol_t */
-#include <gvm/util/serverutils.h> /* for gvm_connection_t */
-#include <gvm/util/authutils.h>   /* for auth_method_t */
-#include <gvm/osp/osp.h>          /* for osp_connection_t */
+#include <gvm/base/array.h>
+#include <gvm/base/credentials.h>
+#include <gvm/base/nvti.h>
+#include <gvm/base/networking.h>
+#include <gvm/util/serverutils.h>
+#include <gvm/util/authutils.h>
+#include <gvm/osp/osp.h>
 
-
+/**
+ * @brief Data structure for info used to connect to the database
+ */
+typedef struct {
+  gchar *name; ///< The database name
+  gchar *host; ///< The database host or socket directory
+  gchar *port; ///< The database port or socket file extension
+} db_conn_info_t;
 
 /**
  * @brief OID of ping_host.nasl
@@ -113,14 +122,14 @@ typedef int (*manage_connection_forker_t) (gvm_connection_t * conn,
                                            const gchar* uuid);
 
 int
-init_manage (GSList*, const gchar *, int, int, int, int,
+init_manage (GSList*, const db_conn_info_t *, int, int, int, int,
              manage_connection_forker_t, int);
 
 int
-init_manage_helper (GSList *, const gchar *, int);
+init_manage_helper (GSList *, const db_conn_info_t *, int);
 
 void
-init_manage_process (const gchar*);
+init_manage_process (const db_conn_info_t*);
 
 void
 cleanup_manage_process (gboolean);
@@ -210,23 +219,17 @@ manage_cert_db_supported_version ();
 int
 manage_cert_db_version ();
 
-char *
-port_name_formatted (const char *);
-
 void
 set_db_version (int version);
 
-char *
-manage_port_name (int, const char *);
+int
+manage_migrate (GSList*, const db_conn_info_t*);
 
 int
-manage_migrate (GSList*, const gchar*);
+manage_encrypt_all_credentials (GSList *, const db_conn_info_t *);
 
 int
-manage_encrypt_all_credentials (GSList *, const gchar *);
-
-int
-manage_decrypt_all_credentials (GSList *, const gchar *);
+manage_decrypt_all_credentials (GSList *, const db_conn_info_t *);
 
 void
 manage_session_set_timezone (const char *);
@@ -260,7 +263,8 @@ typedef enum
   TASK_STATUS_DELETE_ULTIMATE_REQUESTED = 14,
   TASK_STATUS_STOP_REQUESTED_GIVEUP = 15,
   TASK_STATUS_DELETE_WAITING = 16,
-  TASK_STATUS_DELETE_ULTIMATE_WAITING = 17
+  TASK_STATUS_DELETE_ULTIMATE_WAITING = 17,
+  TASK_STATUS_QUEUED = 18
 } task_status_t;
 
 /**
@@ -306,97 +310,40 @@ typedef enum scanner_type
   SCANNER_TYPE_MAX,
 } scanner_type_t;
 
-typedef long long int agent_t;
-typedef long long int config_t;
-typedef long long int credential_t;
-typedef long long int alert_t;
-typedef long long int filter_t;
-typedef long long int group_t;
-typedef long long int host_t;
-typedef long long int tag_t;
-typedef long long int target_t;
-typedef long long int task_t;
-typedef long long int ticket_t;
-typedef long long int tls_certificate_t;
-typedef long long int result_t;
-typedef long long int report_t;
-typedef long long int report_host_t;
-typedef long long int report_format_t;
-typedef long long int report_format_param_t;
-typedef long long int role_t;
-typedef long long int note_t;
-typedef long long int nvt_t;
-typedef long long int override_t;
-typedef long long int permission_t;
-typedef long long int port_list_t;
-typedef long long int port_range_t;
-typedef long long int schedule_t;
-typedef long long int scanner_t;
-typedef long long int setting_t;
-typedef long long int user_t;
+typedef resource_t credential_t;
+typedef resource_t alert_t;
+typedef resource_t filter_t;
+typedef resource_t group_t;
+typedef resource_t host_t;
+typedef resource_t tag_t;
+typedef resource_t target_t;
+typedef resource_t task_t;
+typedef resource_t ticket_t;
+typedef resource_t tls_certificate_t;
+typedef resource_t result_t;
+typedef resource_t report_t;
+typedef resource_t report_host_t;
+typedef resource_t report_format_t;
+typedef resource_t report_format_param_t;
+typedef resource_t role_t;
+typedef resource_t note_t;
+typedef resource_t nvt_t;
+typedef resource_t override_t;
+typedef resource_t permission_t;
+typedef resource_t port_list_t;
+typedef resource_t port_range_t;
+typedef resource_t schedule_t;
+typedef resource_t scanner_t;
+typedef resource_t setting_t;
+typedef resource_t user_t;
 
 
-/* GMP GET. */
-
-/**
- * @brief filt_id value to use term or built-in default filter.
- */
-#define FILT_ID_NONE "0"
-
-/**
- * @brief filt_id value to use the filter in the user setting if possible.
- */
-#define FILT_ID_USER_SETTING "-2"
-
-/**
- * @brief Command data for a get command.
- */
-typedef struct
-{
-  int details;         ///< Boolean.  Whether to include full details.
-  char *filt_id;       ///< Filter ID.  Overrides "filter".
-  char *filter;        ///< Filter term.
-  char *filter_replace; ///< Column to replace in filter.
-  char *filter_replacement; ///< Filter term to replace the one in filt_id.
-  char *id;            ///< ID of single item to get.
-  int trash;           ///< Boolean.  Whether to return from trashcan.
-  gchar *type;         ///< Type of resource.
-  gchar *subtype;      ///< Subtype, or NULL.
-  int ignore_max_rows_per_page; ///< Whether to ignore the Max Rows Per Page setting.
-  int ignore_pagination; ///< Whether to ignore the pagination (first and max).
-  int minimal;         ///< Whether to respond with minimal information.
-  GHashTable *extra_params; ///< Hashtable of type-specific extra parameters.
-} get_data_t;
-
-void
-get_data_reset (get_data_t*);
-
-const char *
-get_data_get_extra (const get_data_t *, const char *);
-
-void
-get_data_set_extra (get_data_t *, const char *, const char *);
+/* GMP GET support.
+ *
+ * The standalone parts of the GET support are in manage_get.h. */
 
 resource_t
 get_iterator_resource (iterator_t*);
-
-const char*
-get_iterator_uuid (iterator_t*);
-
-const char*
-get_iterator_name (iterator_t*);
-
-const char*
-get_iterator_comment (iterator_t*);
-
-const char*
-get_iterator_creation_time (iterator_t*);
-
-const char*
-get_iterator_modification_time (iterator_t*);
-
-const char*
-get_iterator_owner_name (iterator_t*);
 
 user_t
 get_iterator_owner (iterator_t*);
@@ -603,7 +550,7 @@ typedef enum
 } alert_condition_t;
 
 int
-manage_check_alerts (GSList *, const gchar *);
+manage_check_alerts (GSList *, const db_conn_info_t *);
 
 int
 create_alert (const char*, const char*, const char*, const char*, event_t,
@@ -1120,22 +1067,32 @@ user_has_super (const char *, user_t);
 /**
  * @brief SQL list of LSC families.
  */
-#define LSC_FAMILY_LIST                  \
-  "'AIX Local Security Checks',"         \
-  " 'CentOS Local Security Checks',"     \
-  " 'Debian Local Security Checks',"     \
-  " 'Fedora Local Security Checks',"     \
-  " 'FreeBSD Local Security Checks',"    \
-  " 'Gentoo Local Security Checks',"     \
-  " 'HP-UX Local Security Checks',"      \
-  " 'Mac OS X Local Security Checks',"   \
-  " 'Mandrake Local Security Checks',"   \
-  " 'Red Hat Local Security Checks',"    \
-  " 'Solaris Local Security Checks',"    \
-  " 'SuSE Local Security Checks',"       \
-  " 'Ubuntu Local Security Checks',"     \
-  " 'Windows : Microsoft Bulletins',"    \
-  " 'Privilege escalation'"
+#define LSC_FAMILY_LIST                            \
+  "'AIX Local Security Checks',"                   \
+  " 'Amazon Linux Local Security Checks',"         \
+  " 'CentOS Local Security Checks',"               \
+  " 'Citrix Xenserver Local Security Checks',"     \
+  " 'Debian Local Security Checks',"               \
+  " 'F5 Local Security Checks',"                   \
+  " 'Fedora Local Security Checks',"               \
+  " 'FortiOS Local Security Checks',"              \
+  " 'FreeBSD Local Security Checks',"              \
+  " 'Gentoo Local Security Checks',"               \
+  " 'HP-UX Local Security Checks',"                \
+  " 'Huawei EulerOS Local Security Checks',"       \
+  " 'JunOS Local Security Checks',"                \
+  " 'Mac OS X Local Security Checks',"             \
+  " 'Mageia Linux Local Security Checks',"         \
+  " 'Mandrake Local Security Checks',"             \
+  " 'Oracle Linux Local Security Checks',"         \
+  " 'Palo Alto PAN-OS Local Security Checks',"     \
+  " 'Red Hat Local Security Checks',"              \
+  " 'Slackware Local Security Checks',"            \
+  " 'Solaris Local Security Checks',"              \
+  " 'SuSE Local Security Checks',"                 \
+  " 'VMware Local Security Checks',"               \
+  " 'Ubuntu Local Security Checks',"               \
+  " 'Windows : Microsoft Bulletins'"
 
 gboolean
 find_result_with_permission (const char*, result_t*, const char *);
@@ -1145,7 +1102,8 @@ result_uuid (result_t, char **);
 
 int
 result_detection_reference (result_t, report_t, const char *, const char *,
-                            char **, char **, char **, char **);
+                            const char *, char **, char **, char **, char **,
+                            char **);
 
 /* Reports. */
 
@@ -1200,11 +1158,11 @@ qod_from_type (const char *);
 
 result_t
 make_result (task_t, const char*, const char*, const char*, const char*,
-             const char*, const char*);
+             const char*, const char*, const char*);
 
 result_t
 make_osp_result (task_t, const char*, const char*, const char*, const char*,
-                 const char *, const char *, const char *, int);
+                 const char *, const char *, const char *, int, const char*);
 
 result_t
 make_cve_result (task_t, const char*, const char*, double, const char*);
@@ -1372,9 +1330,6 @@ int
 report_timestamp (const char*, gchar**);
 
 int
-modify_report (const char*, const char*);
-
-int
 delete_report (const char *, int);
 
 int
@@ -1436,6 +1391,9 @@ const char*
 result_iterator_nvt_solution_type (iterator_t *);
 
 const char*
+result_iterator_nvt_solution_method (iterator_t *);
+
+const char*
 result_iterator_nvt_detection (iterator_t *);
 
 const char*
@@ -1443,9 +1401,6 @@ result_iterator_nvt_family (iterator_t *);
 
 const char*
 result_iterator_nvt_cvss_base (iterator_t *);
-
-void
-result_iterator_nvt_refs_append (GString *, iterator_t *, int *);
 
 const char*
 result_iterator_nvt_tag (iterator_t *);
@@ -1493,7 +1448,7 @@ const char*
 result_iterator_date (iterator_t*);
 
 const char*
-result_iterator_detected_by_oid (iterator_t*);
+result_iterator_path (iterator_t*);
 
 const char*
 result_iterator_asset_host_id (iterator_t*);
@@ -1507,11 +1462,11 @@ result_iterator_may_have_overrides (iterator_t*);
 int
 result_iterator_may_have_tickets (iterator_t*);
 
-int
-result_iterator_has_cert_bunds (iterator_t*);
+gchar **
+result_iterator_cert_bunds (iterator_t*);
 
-int
-result_iterator_has_dfn_certs (iterator_t*);
+gchar **
+result_iterator_dfn_certs (iterator_t*);
 
 int
 cleanup_result_nvts ();
@@ -1541,7 +1496,7 @@ void
 trim_partial_report (report_t);
 
 int
-report_progress (report_t, task_t, gchar **);
+report_progress (report_t);
 
 gchar *
 manage_report (report_t, report_t, const get_data_t *, report_format_t,
@@ -1561,8 +1516,11 @@ manage_send_report (report_t, report_t, report_format_t, const get_data_t *,
 
 /* Reports. */
 
-gchar *
-app_location (report_host_t, const gchar *);
+void
+init_app_locations_iterator (iterator_t*, report_host_t, const gchar *);
+
+const char *
+app_locations_iterator_location (iterator_t *);
 
 void
 init_host_prognosis_iterator (iterator_t*, report_host_t);
@@ -1772,178 +1730,18 @@ int
 target_login_port (target_t, const char*);
 
 
-/* Configs. */
-
-/**
- * @brief An NVT preference.
- */
-typedef struct
-{
-  char *name;      ///< Name of preference.
-  char *id;        ///< ID of preference.
-  char *type;      ///< Type of preference (radio, password, ...).
-  char *value;     ///< Value of preference.
-  char *nvt_name;  ///< Name of NVT preference affects.
-  char *nvt_oid;   ///< OID of NVT preference affects.
-  array_t *alts;   ///< Array of gchar's.  Alternate values for radio type.
-  char *default_value; ///< Default value of preference.
-  char *hr_name;   ///< Extended, more human-readable name used by OSP.
-  int free_strings;///< Whether string fields are freed by preference_free.
-} preference_t;
-
-/**
- * @brief An NVT selector.
- */
-typedef struct
-{
-  char *name;           ///< Name of NVT selector.
-  char *type;           ///< Name of NVT selector.
-  int include;          ///< Whether family/NVT is included or excluded.
-  char *family_or_nvt;  ///< Family or NVT that this selector selects.
-} nvt_selector_t;
-
-int
-create_config (const char*, const char*, const array_t*, const array_t*,
-               const char*, const char*, config_t*, char**);
-
-int
-create_config_from_scanner (const char*, const char *, const char *,
-                            const char *, char **);
-
-int
-copy_config (const char*, const char*, const char *, const char *, config_t*);
-
-int
-delete_config (const char*, int);
-
-int
-sync_config (const char *);
-
-gboolean
-find_config_with_permission (const char*, config_t*, const char *);
-
-char *
-config_uuid (config_t);
-
-int
-config_type (config_t);
-
-char *
-config_nvt_timeout (config_t, const char *);
-
-void
-init_user_config_iterator (iterator_t*, config_t, int, int, const char*);
-
-int
-init_config_iterator (iterator_t*, const get_data_t*);
-
-const char*
-config_iterator_nvt_selector (iterator_t*);
-
-int
-config_iterator_nvt_count (iterator_t*);
-
-int
-config_iterator_family_count (iterator_t*);
-
-int
-config_iterator_nvts_growing (iterator_t*);
-
-int
-config_iterator_type (iterator_t*);
-
-int
-config_iterator_families_growing (iterator_t*);
+/* Configs.
+ *
+ * These are here because they need definitions that are still in manage.h. */
 
 scanner_t
 config_iterator_scanner (iterator_t*);
-
-int
-config_iterator_scanner_trash (iterator_t*);
-
-const char*
-config_iterator_usage_type (iterator_t*);
-
-char*
-config_nvt_selector (config_t);
-
-int
-config_in_use (config_t);
-
-int
-config_writable (config_t);
-
-int
-config_count (const get_data_t *);
-
-int
-trash_config_in_use (config_t);
-
-int
-trash_config_writable (config_t);
-
-int
-trash_config_readable_uuid (const gchar *);
-
-int
-config_families_growing (config_t);
-
-int
-config_nvts_growing (config_t);
 
 int
 create_task_check_config_scanner (config_t, scanner_t);
 
 int
 modify_task_check_config_scanner (task_t, const char *, const char *);
-
-int
-manage_set_config_preference (const gchar *, const char*, const char*,
-                              const char*);
-
-void
-init_config_preference_iterator (iterator_t *, config_t);
-
-const char*
-config_preference_iterator_name (iterator_t *);
-
-const char*
-config_preference_iterator_value (iterator_t *);
-
-const char*
-config_preference_iterator_type (iterator_t *);
-
-const char*
-config_preference_iterator_default (iterator_t *);
-
-const char*
-config_preference_iterator_hr_name (iterator_t *);
-
-int
-manage_set_config (const gchar *, const char*, const char *, const char *);
-
-int
-manage_set_config_nvts (const gchar *, const char*, GPtrArray*);
-
-int
-manage_set_config_families (const gchar *, GPtrArray*, GPtrArray*, GPtrArray*,
-                            int);
-
-void
-init_config_timeout_iterator (iterator_t*, config_t);
-
-const char*
-config_timeout_iterator_oid (iterator_t *);
-
-const char*
-config_timeout_iterator_nvt_name (iterator_t *);
-
-const char*
-config_timeout_iterator_value (iterator_t *);
-
-void
-update_config_preference (const char *, const char *, const char *,
-                          const char *, gboolean);
 
 
 /* NVT's. */
@@ -1971,6 +1769,9 @@ init_nvt_info_iterator (iterator_t*, get_data_t*, const char*);
 
 int
 nvt_info_count (const get_data_t *);
+
+int
+nvt_info_count_after (const get_data_t *, time_t, gboolean);
 
 void
 init_nvt_iterator (iterator_t*, nvt_t, config_t, const char*, const char*, int,
@@ -2029,6 +1830,9 @@ nvt_iterator_solution (iterator_t*);
 
 const char*
 nvt_iterator_solution_type (iterator_t*);
+
+const char*
+nvt_iterator_solution_method (iterator_t*);
 
 char*
 nvt_default_timeout (const char *);
@@ -2126,10 +1930,10 @@ int
 nvt_preference_count (const char *);
 
 void
-nvti_refs_append_xml (GString *, const char *, int *);
+xml_append_nvt_refs (GString *, const char *, int *);
 
 gchar*
-get_nvti_xml (iterator_t*, int, int, int, const char*, config_t, int);
+get_nvt_xml (iterator_t*, int, int, int, const char*, config_t, int);
 
 char*
 task_preference_value (task_t, const char *);
@@ -2171,6 +1975,9 @@ typedef enum
   CREDENTIAL_FORMAT_PEM = 5,    /// Certificate PEM
   CREDENTIAL_FORMAT_ERROR = -1  /// Error / Invalid format
 } credential_format_t;
+
+int
+check_private_key (const char *, const char *);
 
 gboolean
 find_credential_with_permission (const char*, credential_t*, const char*);
@@ -2320,64 +2127,6 @@ credential_value (credential_t, const char*);
 gchar*
 credential_encrypted_value (credential_t, const char*);
 
-
-
-/* Agents. */
-
-int
-create_agent (const char*, const char*, const char*, const char*, const char*,
-              const char*, const char*, agent_t*);
-
-int
-copy_agent (const char*, const char*, const char *, agent_t *);
-
-int
-modify_agent (const char*, const char*, const char*);
-
-int
-delete_agent (const char *, int);
-
-int
-agent_in_use (agent_t);
-
-int
-trash_agent_in_use (agent_t);
-
-int
-trash_agent_writable (agent_t);
-
-int
-agent_writable (agent_t);
-
-int
-verify_agent (const char *);
-
-char *
-agent_uuid (agent_t);
-
-int
-agent_count (const get_data_t *);
-
-int
-init_agent_iterator (iterator_t*, const get_data_t *);
-
-const char*
-agent_iterator_installer_64 (iterator_t*);
-
-const char*
-agent_iterator_installer_filename (iterator_t*);
-
-const char*
-agent_iterator_trust (iterator_t*);
-
-time_t
-agent_iterator_trust_time (iterator_t*);
-
-const char*
-agent_iterator_howto_install (iterator_t*);
-
-const char*
-agent_iterator_howto_use (iterator_t*);
 
 
 /* Assets. */
@@ -2684,23 +2433,23 @@ manage_system_report (const char *, const char *, const char *, const char *,
 #define SLAVE_COMMIT_SIZE_DEFAULT 0
 
 int
-manage_create_scanner (GSList *, const char *, const char *, const char *,
-                       const char *, const char *, const char *, const char *,
-                       const char *, const char *);
-
-int
-manage_modify_scanner (GSList *, const gchar *, const char *, const char *,
+manage_create_scanner (GSList *, const db_conn_info_t *, const char *,
                        const char *, const char *, const char *, const char *,
                        const char *, const char *, const char *);
 
 int
-manage_delete_scanner (GSList *, const gchar *, const gchar *);
+manage_modify_scanner (GSList *, const db_conn_info_t *, const char *,
+                       const char *, const char *, const char *, const char *,
+                       const char *, const char *, const char *, const char *);
 
 int
-manage_verify_scanner (GSList *, const gchar *, const gchar *);
+manage_delete_scanner (GSList *, const db_conn_info_t *, const gchar *);
 
 int
-manage_get_scanners (GSList *, const gchar *);
+manage_verify_scanner (GSList *, const db_conn_info_t *, const gchar *);
+
+int
+manage_get_scanners (GSList *, const db_conn_info_t *);
 
 int
 create_scanner (const char*, const char *, const char *, const char *,
@@ -2906,8 +2655,7 @@ find_schedule_with_permission (const char*, schedule_t*, const char*);
 
 int
 create_schedule (const char *, const char*, const char *,
-                 time_t, time_t, time_t, const char *, time_t, const char*,
-                 schedule_t *, gchar**);
+                 const char*, schedule_t *, gchar**);
 
 int
 copy_schedule (const char*, const char*, const char *, schedule_t *);
@@ -2925,7 +2673,7 @@ void
 set_scheduled_user_uuid (const gchar* uuid);
 
 void
-manage_sync (sigset_t *, int (*fork_update_nvt_cache) ());
+manage_sync (sigset_t *, int (*fork_update_nvt_cache) (), gboolean);
 
 int
 manage_schedule (manage_connection_forker_t,
@@ -2951,38 +2699,13 @@ int
 schedule_period (schedule_t);
 
 int
-schedule_info (schedule_t, int, time_t *, time_t *, int *, int *, int *,
-               gchar **, gchar **);
+schedule_info (schedule_t, int, gchar **, gchar **);
 
 int
 init_schedule_iterator (iterator_t*, const get_data_t *);
 
-time_t
-schedule_iterator_first_time (iterator_t *);
-
-time_t
-schedule_iterator_next_time (iterator_t *);
-
-time_t
-schedule_iterator_period (iterator_t *);
-
-time_t
-schedule_iterator_period_months (iterator_t *);
-
-time_t
-schedule_iterator_duration (iterator_t *);
-
-int
-schedule_iterator_byday (iterator_t *);
-
-gchar *
-schedule_iterator_byday_string (iterator_t *);
-
 const char*
 schedule_iterator_timezone (iterator_t *);
-
-time_t
-schedule_iterator_initial_offset (iterator_t *);
 
 const char*
 schedule_iterator_icalendar (iterator_t *);
@@ -3018,220 +2741,14 @@ int
 schedule_task_iterator_readable (iterator_t*);
 
 int
-modify_schedule (const char *, const char*, const char *, const char*,
-                 time_t, time_t, time_t,
-                 const char *, time_t, const char *, gchar **);
+modify_schedule (const char *, const char *, const char *, const char*,
+                 const char *, gchar **);
 
 int
 get_schedule_timeout ();
 
 void
 set_schedule_timeout (int);
-
-
-/* Report Formats. */
-
-gboolean
-find_report_format_with_permission (const char*, report_format_t*,
-                                    const char *);
-
-/**
- * @brief Struct for defining a report format param.
- */
-typedef struct
-{
-  gchar *fallback;  ///< Fallback value.
-  gchar *name;      ///< Name.
-  gchar *type;      ///< Type (boolean, string, integer, ...).
-  gchar *type_max;  ///< Maximum value for integer type.
-  gchar *type_min;  ///< Minimum value for integer type.
-  gchar *value;     ///< Value of param.
-} create_report_format_param_t;
-
-int
-create_report_format (const char *, const char *, const char *, const char *,
-                      const char *, const char *, int, array_t *, array_t *,
-                      array_t *, const char *, report_format_t *);
-
-int
-copy_report_format (const char *, const char *, report_format_t*);
-
-int
-modify_report_format (const char *, const char *, const char *, const char *,
-                      const char *, const char *, const char *);
-
-int
-delete_report_format (const char *, int);
-
-int
-verify_report_format (const char *);
-
-char *
-report_format_uuid (report_format_t);
-
-char *
-report_format_owner_uuid (report_format_t);
-
-char *
-report_format_name (report_format_t);
-
-char *
-report_format_content_type (report_format_t);
-
-char *
-report_format_extension (report_format_t);
-
-int
-report_format_global (report_format_t);
-
-int
-trash_report_format_global (report_format_t);
-
-int
-report_format_predefined (report_format_t);
-
-int
-report_format_active (report_format_t);
-
-int
-report_format_trust (report_format_t);
-
-int
-report_format_in_use (report_format_t);
-
-int
-trash_report_format_in_use (report_format_t);
-
-int
-trash_report_format_writable (report_format_t);
-
-int
-report_format_writable (report_format_t);
-
-int
-report_format_count (const get_data_t *);
-
-int
-init_report_format_iterator (iterator_t*, const get_data_t *);
-
-const char*
-report_format_iterator_extension (iterator_t *);
-
-const char*
-report_format_iterator_content_type (iterator_t *);
-
-const char*
-report_format_iterator_description (iterator_t *);
-
-int
-report_format_iterator_active (iterator_t *);
-
-const char*
-report_format_iterator_signature (iterator_t *);
-
-const char*
-report_format_iterator_trust (iterator_t *);
-
-const char*
-report_format_iterator_summary (iterator_t *);
-
-time_t
-report_format_iterator_trust_time (iterator_t *);
-
-void
-init_report_format_alert_iterator (iterator_t*, report_format_t);
-
-const char*
-report_format_alert_iterator_name (iterator_t*);
-
-const char*
-report_format_alert_iterator_uuid (iterator_t*);
-
-int
-report_format_alert_iterator_readable (iterator_t*);
-
-/**
- * @brief A report format file iterator.
- */
-typedef struct
-{
-  GPtrArray *start;    ///< Array of files.
-  gpointer *current;   ///< Current file.
-  gchar *dir_name;     ///< Dir holding files.
-} file_iterator_t;
-
-int
-init_report_format_file_iterator (file_iterator_t*, report_format_t);
-
-void
-cleanup_file_iterator (file_iterator_t*);
-
-gboolean
-next_file (file_iterator_t*);
-
-const char*
-file_iterator_name (file_iterator_t*);
-
-gchar*
-file_iterator_content_64 (file_iterator_t*);
-
-/**
- * @brief Report format param types.
- *
- * These numbers are used in the database, so if the number associated with
- * any symbol changes then a migrator must be added to update existing data.
- */
-typedef enum
-{
-  REPORT_FORMAT_PARAM_TYPE_BOOLEAN = 0,
-  REPORT_FORMAT_PARAM_TYPE_INTEGER = 1,
-  REPORT_FORMAT_PARAM_TYPE_SELECTION = 2,
-  REPORT_FORMAT_PARAM_TYPE_STRING = 3,
-  REPORT_FORMAT_PARAM_TYPE_TEXT = 4,
-  REPORT_FORMAT_PARAM_TYPE_REPORT_FORMAT_LIST = 5,
-  REPORT_FORMAT_PARAM_TYPE_ERROR = 100
-} report_format_param_type_t;
-
-const char *
-report_format_param_type_name (report_format_param_type_t);
-
-report_format_param_type_t
-report_format_param_type_from_name (const char *);
-
-void
-init_report_format_param_iterator (iterator_t*, report_format_t, int,
-                                   int, const char*);
-
-report_format_param_t
-report_format_param_iterator_param (iterator_t*);
-
-const char*
-report_format_param_iterator_name (iterator_t *);
-
-const char*
-report_format_param_iterator_value (iterator_t *);
-
-const char*
-report_format_param_iterator_type_name (iterator_t *);
-
-report_format_param_type_t
-report_format_param_iterator_type (iterator_t *);
-
-long long int
-report_format_param_iterator_type_min (iterator_t *);
-
-long long int
-report_format_param_iterator_type_max (iterator_t *);
-
-const char*
-report_format_param_iterator_fallback (iterator_t *);
-
-void
-init_param_option_iterator (iterator_t*, report_format_param_t, int,
-                            const char *);
-
-const char*
-param_option_iterator_value (iterator_t *);
 
 
 /* Groups. */
@@ -3355,110 +2872,10 @@ void
 delete_permissions_cache_for_user (user_t);
 
 
-/* Port lists. */
-
-gboolean
-find_port_list (const char*, port_list_t*);
-
-gboolean
-find_port_list_with_permission (const char *, port_list_t *, const char *);
-
-gboolean
-find_port_range (const char*, port_list_t*);
-
-int
-create_port_list (const char*, const char*, const char*, const char*,
-                  array_t *, port_list_t*);
-
-int
-copy_port_list (const char*, const char*, const char*, port_list_t*);
-
-int
-modify_port_list (const char*, const char*, const char*);
-
-int
-create_port_range (const char *, const char *, const char *, const char *,
-                   const char *, port_range_t *);
-
-int
-delete_port_list (const char*, int);
-
-int
-delete_port_range (const char *, int);
-
-int
-port_list_count (const get_data_t *);
-
-int
-init_port_list_iterator (iterator_t*, const get_data_t *);
-
-int
-port_list_iterator_count_all (iterator_t*);
-
-int
-port_list_iterator_count_tcp (iterator_t*);
-
-int
-port_list_iterator_count_udp (iterator_t*);
-
-char*
-port_list_uuid (port_list_t);
-
-char*
-port_range_uuid (port_range_t);
-
-int
-port_list_in_use (port_list_t);
-
-int
-trash_port_list_in_use (port_list_t);
-
-int
-trash_port_list_writable (port_list_t);
-
-int
-port_list_writable (port_list_t);
-
-#if 0
-int
-trash_port_list_in_use (port_list_t);
-#endif
-
-int
-trash_port_list_readable_uuid (const gchar *);
-
-void
-init_port_range_iterator (iterator_t*, port_range_t, int, int, const char*);
-
-const char*
-port_range_iterator_uuid (iterator_t*);
-
-const char*
-port_range_iterator_comment (iterator_t*);
-
-const char*
-port_range_iterator_start (iterator_t*);
-
-const char*
-port_range_iterator_end (iterator_t*);
-
-const char*
-port_range_iterator_type (iterator_t*);
-
-void
-init_port_list_target_iterator (iterator_t*, port_list_t, int);
-
-const char*
-port_list_target_iterator_uuid (iterator_t*);
-
-const char*
-port_list_target_iterator_name (iterator_t*);
-
-int
-port_list_target_iterator_readable (iterator_t*);
-
-
 /* Roles. */
+
+int
+manage_get_roles (GSList *, const db_conn_info_t *, int);
 
 int
 init_role_iterator (iterator_t *, const get_data_t *);
@@ -3558,6 +2975,16 @@ split_filter (const gchar*);
 
 
 /* Filters. */
+
+/**
+ * @brief filt_id value to use term or built-in default filter.
+ */
+#define FILT_ID_NONE "0"
+
+/**
+ * @brief filt_id value to use the filter in the user setting if possible.
+ */
+#define FILT_ID_USER_SETTING "-2"
 
 gboolean
 find_filter (const char*, filter_t*);
@@ -3813,7 +3240,10 @@ void
 init_cve_cert_bund_adv_iterator (iterator_t*, const char*, int, const char*);
 
 void
-init_nvt_cert_bund_adv_iterator (iterator_t*, const char*, int, const char*);
+init_nvt_cert_bund_adv_iterator (iterator_t*, const char*);
+
+const char*
+nvt_cert_bund_adv_iterator_name (iterator_t*);
 
 /* DFN-CERT */
 
@@ -3839,27 +3269,15 @@ void
 init_cve_dfn_cert_adv_iterator (iterator_t*, const char*, int, const char*);
 
 void
-init_nvt_dfn_cert_adv_iterator (iterator_t*, const char*, int, const char*);
+init_nvt_dfn_cert_adv_iterator (iterator_t*, const char*);
+
+const char*
+nvt_dfn_cert_adv_iterator_name (iterator_t*);
 
 /* All SecInfo Data */
 
 int
-all_info_count (const get_data_t *);
-
-int
-total_info_count (const get_data_t *, int);
-
-int
-init_all_info_iterator (iterator_t*, get_data_t*, const char*);
-
-const char*
-all_info_iterator_type (iterator_t*);
-
-const char*
-all_info_iterator_extra (iterator_t*);
-
-const char*
-all_info_iterator_severity (iterator_t*);
+secinfo_count_after (const get_data_t *, const char *, time_t, gboolean);
 
 void
 init_ovaldi_file_iterator (iterator_t*);
@@ -3905,7 +3323,8 @@ int
 modify_setting (const gchar *, const gchar *, const gchar *, gchar **);
 
 int
-manage_modify_setting (GSList *, const gchar *, const gchar *, const gchar *, const char *);
+manage_modify_setting (GSList *, const db_conn_info_t *, const gchar *,
+                       const gchar *, const char *);
 
 char *
 manage_default_ca_cert ();
@@ -3920,14 +3339,15 @@ gboolean
 find_user_by_name_with_permission (const char *, user_t *, const char *);
 
 int
-manage_create_user (GSList *, const gchar *, const gchar *, const gchar *,
+manage_create_user (GSList *, const db_conn_info_t *, const gchar *,
+                    const gchar *, const gchar *);
+
+int
+manage_delete_user (GSList *, const db_conn_info_t *, const gchar *,
                     const gchar *);
 
 int
-manage_delete_user (GSList *, const gchar *, const gchar *, const gchar *);
-
-int
-manage_get_users (GSList *, const gchar *, const gchar *);
+manage_get_users (GSList *, const db_conn_info_t *, const gchar *, int);
 
 report_host_t
 manage_report_host_add (report_t, const char *, time_t, time_t);
@@ -3942,7 +3362,8 @@ gchar*
 host_routes_xml (host_t);
 
 int
-manage_set_password (GSList *, const gchar *, const gchar *, const gchar *);
+manage_set_password (GSList *, const db_conn_info_t *, const gchar *,
+                     const gchar *);
 
 gchar *
 manage_user_hash (const gchar *);
@@ -4234,6 +3655,28 @@ aggregate_iterator_subgroup_value (iterator_t*);
 #define NVT_FEED 1
 #define SCAP_FEED 2
 #define CERT_FEED 3
+#define GVMD_DATA_FEED 4
+
+gboolean
+manage_gvmd_data_feed_dir_exists (const char *);
+
+gboolean
+manage_gvmd_data_feed_dirs_exist ();
+
+const gchar *
+get_feed_lock_path ();
+
+void
+set_feed_lock_path (const char *);
+
+void
+write_sync_start (int);
+
+int
+feed_lockfile_lock (lockfile_t *);
+
+int
+feed_lockfile_unlock (lockfile_t *);
 
 int
 gvm_migrate_secinfo (int);
@@ -4254,7 +3697,7 @@ int
 manage_update_nvts_osp (const gchar *);
 
 int
-manage_rebuild (GSList *, const gchar *);
+manage_rebuild (GSList *, const db_conn_info_t *);
 
 
 /* Wizards. */
@@ -4280,25 +3723,18 @@ char*
 type_trash_columns (const char *);
 
 gboolean
-manage_migrate_needs_timezone (GSList *, const gchar *);
+manage_migrate_needs_timezone (GSList *, const db_conn_info_t *);
 
 
 /* Optimize. */
 
 int
-manage_optimize (GSList *, const gchar *, const gchar *);
+manage_optimize (GSList *, const db_conn_info_t *, const gchar *);
 
 
 /* Signal management */
 
 int
-get_termination_signal ();
-
-int
 sql_cancel ();
-
-/* Extra sensor handling functions */
-
-
 
 #endif /* not _GVMD_MANAGE_H */
