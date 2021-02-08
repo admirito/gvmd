@@ -97,7 +97,7 @@
 
 
 override_dh_auto_configure:
-	dh_auto_configure -- -DLOCALSTATEDIR=/var -DSYSCONFDIR=/etc -DBACKEND=POSTGRESQL -DLIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH)
+	dh_auto_configure -- -DLOCALSTATEDIR=/var -DGVM_RUN_DIR=/run/gvm -DSYSCONFDIR=/etc -DDEFAULT_CONFIG_DIR=/etc/default -DLOGROTATE_DIR=/etc/logrotate.d -DSYSTEMD_SERVICE_DIR=/lib/systemd/system -DBACKEND=POSTGRESQL -DLIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH)
 
 override_dh_auto_install:
 	dh_auto_install --destdir=$(shell realpath debian/gvmd-common)
@@ -119,14 +119,14 @@ override_dh_auto_install:
 	mkdir -p debian/gvmd-pg/usr/sbin debian/gvmd-pg/usr/share/man/man8
 	mv debian/gvmd-common/usr/sbin/gvmd debian/gvmd-pg/usr/sbin/gvmd-pg
 	mv debian/gvmd-common/usr/share/man/man8/gvmd.8 debian/gvmd-pg/usr/share/man/man8/gvmd-pg.8
-	mv debian/gvmd-common/usr/sbin/gvm-portnames-update debian/gvmd-pg/usr/sbin/gvm-portnames-update-pg
+#	#mv debian/gvmd-common/usr/sbin/gvm-portnames-update debian/gvmd-pg/usr/sbin/gvm-portnames-update-pg
 
 override_dh_installchangelogs:
 	dh_installchangelogs -k CHANGELOG.md
 
-override_dh_installinit:
-	dh_installinit --name=gvmd --only-scripts -pgvmd-pg
-	dh_installinit --name=gvmd --no-scripts --remaining
+# override_dh_installinit:
+# 	dh_installinit --name=gvmd --only-scripts -pgvmd-pg
+# 	dh_installinit --name=gvmd --no-scripts --remaining
 
 override_dh_auto_test:
 	true

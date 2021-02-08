@@ -17,6 +17,7 @@ set -e
 # for details, see http://www.debian.org/doc/debian-policy/ or
 # the debian-policy package
 
+GVMD="sudo -E -u gvm -g gvm gvmd-pg"
 
 case "$1" in
     configure)
@@ -30,26 +31,51 @@ case "$1" in
 
 		export GVMD_POSTGRESQL_URI="postgresql://$dbc_dbuser${dbc_dbpass+:}$dbc_dbpass${dbc_dbuser+@}${dbc_dbserver:-localhost}:${dbc_dbport:-5432}/${dbc_dbname:-gvmd}?application_name=gvmd"
 
-		echo "export GVMD_POSTGRESQL_URI=${GVMD_POSTGRESQL_URI}" > /etc/default/gvmd-pg
+		echo "GVMD_POSTGRESQL_URI=${GVMD_POSTGRESQL_URI}" > /etc/default/gvmd-pg
 	    fi
 	fi
 
+        if ! getent passwd gvm >/dev/null; then
+            addgroup --system gvm
+            adduser --system --home /var/lib/gvm --ingroup gvm gvm
+        fi
+
+	chown gvm:gvm /etc/default/gvmd-pg || true
+	chmod 600 /etc/default/gvmd-pg || true
+
+	# Without /var/lib/gvm/gvmd directory the gvmd process
+	# will complain about GnuPG home directory at
+	# /var/lib/gvm/gvmd/gnupg
+	chown gvm:gvm /var/lib/gvm /var/lib/gvm/gvmd /var/log/gvm || true
+
+	# this is just for upgrading from the verion 11 (which old
+	# files has the root:root as the owner) and could be removed
+	# in later versions
+	find /var/lib/gvm -user root -group root | xargs -n 64 chown gvm:gvm >/dev/null 2>&1 || true
+	[ -e /var/log/gvm/gvmd.log ] && chown gvm:gvm /var/log/gvm/gvmd.log || true
+
+	# without /run/gvm directory with appropriate permissions,
+	# gvmd-pg will not be executed
+	mkdir -p /run/gvm || true
+	chown gvm:gvm /run/gvm || true
+
 	echo "migrating the postgresql database..."
-	gvmd-pg --migrate || true
+	$GVMD --migrate || true
 
 	echo "Creating admin user..."
 	echo "Prime generation might be too slow. To make it faster it is a good idea to perform some other action (type on the keyboard, move the mouse, utilize the disks)."
-	USERS=$(gvmd-pg --get-users) || true
-	[ -z "$USERS" ] && gvmd-pg --create-user=admin --role=Admin && gvmd-pg --user=admin --new-password=admin || true
+	USERS=$($GVMD --get-users) || true
+	[ -z "$USERS" ] && $GVMD --create-user=admin --role=Admin && $GVMD --user=admin --new-password=admin || true
 
-	gvm-manage-certs -q -a || true
+	ADMIN_UUID=$($GVMD --get-users --verbose | grep "^admin" | sed 's/admin\s*//') || true
+	[ -n "$ADMIN_UUID" ] && $GVMD --modify-setting 78eceaec-3385-11ea-b237-28d24461215b --value $ADMIN_UUID || true
+
+	sudo -E -u gvm -g gvm gvm-manage-certs -q -a || true
 
 	if ! update-alternatives --display gvmd 2>/dev/null | grep -q '^/usr/sbin/gvmd-pg'; then
             update-alternatives --install /usr/sbin/gvmd gvmd /usr/sbin/gvmd-pg 1 \
 				--slave /usr/share/man/man8/gvmd.8.gz gvmd.8.gz \
-				/usr/share/man/man8/gvmd-pg.8.gz \
-				--slave /usr/sbin/gvm-portnames-update gvm-portnames-update \
-				/usr/sbin/gvm-portnames-update-pg
+				/usr/share/man/man8/gvmd-pg.8.gz
 	fi
 
 	db_stop || true

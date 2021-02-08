@@ -2,7 +2,7 @@ Source: gvmd
 Section: admin
 Priority: optional
 Maintainer: Mohammad Razavi <mrazavi64@gmail.com>
-Build-Depends: debhelper-compat (= 12), cmake, pkg-config, cppcheck, xmltoman, doxygen, libglib2.0-dev, libgnutls28-dev, libgcrypt20-dev, libgpgme-dev, libgvm-dev (>= 11.0.1), libical-dev, libpq-dev, postgresql-server-dev-12
+Build-Depends: debhelper-compat (= 12), cmake, pkg-config, cppcheck, xmltoman, doxygen, xsltproc, libglib2.0-dev, libgnutls28-dev, libgcrypt20-dev, libgpgme-dev, libgvm-dev (>= 20.8.1), libical-dev, libpq-dev, postgresql-server-dev-12
 Standards-Version: 4.4.1
 Homepage: https://community.greenbone.net/
 Vcs-Browser: https://github.com/greenbone/gvmd
@@ -13,7 +13,7 @@ Architecture: any
 Depends: lsb-base, ${shlibs:Depends}, ${misc:Depends}
 Recommends: texlive-latex-base, xsltproc, xml-twig-tools, gnutls-bin, rsync
 Conflicts: openvas9-manager
-Suggests: xmlstarlet, zip, python3, python3-lxml, smbclient, snmp, gnupg, openssh-client, sshpass, socat, haveged
+Suggests: texlive-latex-extra, texlive-fonts-recommended, xmlstarlet, zip, python3, python3-lxml, smbclient, snmp, gnupg, openssh-client, sshpass, socat, haveged, gpgsm
 Description: remote network security auditor - manager
  The Greenbone Vulnerability Management Solution (previously known as
  Open Vulnerability Assessment System) is a modular security auditing tool,
@@ -28,6 +28,7 @@ Description: remote network security auditor - manager
 
 Package: gvmd-pg
 Architecture: any
+Pre-Depends: adduser, sudo
 Depends: ${shlibs:Depends}, ${misc:Depends}, gvmd-common (= ${binary:Version}), debconf, dbconfig-pgsql | dbconfig-no-thanks
 Recommends: postgresql-client, libgvm-pg-server0
 Description: remote network security auditor - manager - with postgreql backend

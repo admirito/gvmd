@@ -9,4 +9,5 @@ variables:
 build_job:
   artifacts:
     paths:
+      - config/
       - src/

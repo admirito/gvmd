@@ -1,2 +1,2 @@
-change-ospd-socket-path.patch
+fix_systemd_service.patch
 gvmd_postgresql_uri_env.patch
