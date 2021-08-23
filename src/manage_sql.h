@@ -1,4 +1,4 @@
-/* Copyright (C) 2010-2020 Greenbone Networks GmbH
+/* Copyright (C) 2010-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -116,11 +116,6 @@
  * @brief UUID of 'Default CA Cert' setting.
  */
 #define SETTING_UUID_DEFAULT_CA_CERT "9ac801ea-39f8-11e6-bbaa-28d24461215b"
-
-/**
- * @brief UUID of 'GMP Slave Check Period' setting.
- */
-#define SETTING_UUID_SLAVE_CHECK_PERIOD "63adb79a-62ae-11e9-91ba-28d24461215b"
 
 /**
  * @brief UUID of 'Debian LSC Package Maintainer' setting.
@@ -303,12 +298,6 @@ int set_report_scan_run_status (report_t, task_status_t);
 
 int set_report_slave_progress (report_t, int);
 
-int update_from_slave (task_t, entity_t, entity_t *, int *);
-
-void set_report_slave_task_uuid (report_t, const char *);
-
-int set_task_requested (task_t, task_status_t *);
-
 void init_task_file_iterator (iterator_t *, task_t, const char *);
 const char *task_file_iterator_name (iterator_t *);
 const char *task_file_iterator_content (iterator_t *);
@@ -325,6 +314,7 @@ port_list_t target_port_list (target_t);
 credential_t target_ssh_credential (target_t);
 credential_t target_smb_credential (target_t);
 credential_t target_esxi_credential (target_t);
+credential_t target_ssh_elevate_credential (target_t);
 
 int create_current_report (task_t, char **, task_status_t);
 
@@ -483,5 +473,11 @@ add_role_permission_resource (const gchar *, const gchar *, const gchar *,
 
 void
 create_view_vulns ();
+
+int
+config_family_entire_and_growing (config_t, const char*);
+
+void
+reports_clear_count_cache_dynamic ();
 
 #endif /* not _GVMD_MANAGE_SQL_H */

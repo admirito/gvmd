@@ -1,4 +1,4 @@
-/* Copyright (C) 2014-2020 Greenbone Networks GmbH
+/* Copyright (C) 2014-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -38,6 +38,16 @@
  */
 #define G_LOG_DOMAIN "md manage"
 
+/**
+ * @brief Database superuser role
+ */
+#define DB_SUPERUSER_ROLE "dba"
+
+
+/* Headers */
+int
+check_db_extensions ();
+
 
 /* Session. */
 
@@ -49,7 +59,9 @@
 void
 manage_session_init (const char *uuid)
 {
-  sql ("SET SESSION \"gvmd.user.uuid\" = '%s';", uuid);
+  sql ("SET SESSION \"gvmd.user.id\" = %llu;",
+       sql_int64_0 ("SELECT id FROM users WHERE uuid = '%s';",
+                    uuid));
   sql ("SET SESSION \"gvmd.tz_override\" = '';");
 }
 
@@ -146,10 +158,7 @@ sql_rename_column (const char *old_table, const char *new_table,
  "    WHERE overrides.result_nvt = results.result_nvt"      \
  "    AND ((overrides.owner IS NULL)"                       \
  "         OR (overrides.owner"                             \
- "             = (SELECT id FROM users"                     \
- "                WHERE users.uuid"                         \
- "                      = (SELECT current_setting"          \
- "                                 ('gvmd.user.uuid')))))"  \
+ "             = gvmd_user ()))"        \
  "    AND ((overrides.end_time = 0)"                        \
  "         OR (overrides.end_time >= m_now ()))"            \
  "    AND (overrides.task = results.task"                   \
@@ -187,17 +196,12 @@ manage_create_sql_functions ()
   if (created)
     return 0;
 
-  if (sql_int ("SELECT count (*) FROM pg_available_extensions"
-               " WHERE name = 'uuid-ossp' AND installed_version IS NOT NULL;")
-      == 0)
-    {
-      g_warning ("%s: PostgreSQL extension uuid-ossp required", __func__);
-      return -1;
-    }
+  if (check_db_extensions ())
+    return -1;
 
   /* Functions in C. */
 
-  sql ("SET role dba;");
+  sql ("SET ROLE \"%s\";", DB_SUPERUSER_ROLE);
 
   sql ("CREATE OR REPLACE FUNCTION hosts_contains (text, text)"
        " RETURNS boolean"
@@ -226,18 +230,9 @@ manage_create_sql_functions ()
        "      v := " G_STRINGIFY (SEVERITY_LOG) ";"
        "    WHEN lower (lvl) = 'false positive' THEN"
        "      v := " G_STRINGIFY (SEVERITY_FP) ";"
-       "    WHEN lower (lvl) = 'debug' THEN"
-       "      v := " G_STRINGIFY (SEVERITY_DEBUG) ";"
        "    WHEN lower (lvl) = 'error' THEN"
        "      v :=  " G_STRINGIFY (SEVERITY_ERROR) ";"
-       "    WHEN cls = 'pci-dss' THEN"
-       "      CASE"
-       "        WHEN  lower (lvl) = 'high' THEN"
-       "          v := 10.0;"
-       "        ELSE"
-       "          v := " G_STRINGIFY (SEVERITY_UNDEFINED) ";"
-       "        END CASE;"
-       "    ELSE" // NIST/BSI.
+       "    ELSE"
        "      CASE"
        "        WHEN lower (lvl) = 'high' THEN"
        "          v := 10.0;"
@@ -267,18 +262,9 @@ manage_create_sql_functions ()
        "      v := " G_STRINGIFY (SEVERITY_LOG) ";"
        "    WHEN lower (lvl) = 'false positive' THEN"
        "      v := " G_STRINGIFY (SEVERITY_FP) ";"
-       "    WHEN lower (lvl) = 'debug' THEN"
-       "      v := " G_STRINGIFY (SEVERITY_DEBUG) ";"
        "    WHEN lower (lvl) = 'error' THEN"
        "      v :=  " G_STRINGIFY (SEVERITY_ERROR) ";"
-       "    WHEN cls = 'pci-dss' THEN"
-       "      CASE"
-       "        WHEN  lower (lvl) = 'high' THEN"
-       "          v := 4.0;"
-       "        ELSE"
-       "          v := " G_STRINGIFY (SEVERITY_UNDEFINED) ";"
-       "        END CASE;"
-       "    ELSE" // NIST/BSI.
+       "    ELSE"
        "      CASE"
        "        WHEN lower (lvl) = 'high' THEN"
        "          v := 7.0;"
@@ -306,13 +292,18 @@ manage_create_sql_functions ()
        " LANGUAGE C;",
        GVM_LIB_INSTALL_DIR);
 
-  sql ("CREATE OR REPLACE FUNCTION severity_matches_ov (double precision,"
-       "                                                double precision)"
-       " RETURNS boolean"
-       " AS '%s/libgvm-pg-server', 'sql_severity_matches_ov'"
-       " LANGUAGE C"
-       " IMMUTABLE;",
-       GVM_LIB_INSTALL_DIR);
+  sql ("CREATE OR REPLACE FUNCTION severity_matches_ov (a double precision,"
+       "                                                b double precision)"
+       "RETURNS BOOLEAN AS $$"
+       "BEGIN"
+       " RETURN CASE WHEN a IS NULL THEN false"
+       "        WHEN b IS NULL THEN true"
+       " ELSE CASE WHEN a::float8 <= 0 THEN a::float8 = b::float8"
+       "      ELSE a::float8 >= b::float8"
+       "      END"
+       " END;"
+       "END;"
+       "$$ LANGUAGE plpgsql IMMUTABLE;");
 
   sql ("CREATE OR REPLACE FUNCTION regexp (text, text)"
        " RETURNS boolean"
@@ -499,28 +490,6 @@ manage_create_sql_functions ()
        "$$ LANGUAGE plpgsql"
        " IMMUTABLE;");
 
-  sql ("CREATE OR REPLACE FUNCTION order_message_type (text)"
-       " RETURNS integer AS $$"
-       " BEGIN"
-       "   IF $1 = 'Security Hole' THEN"
-       "     RETURN 1;"
-       "   ELSIF $1 = 'Security Warning' THEN"
-       "     RETURN 2;"
-       "   ELSIF $1 = 'Security Note' THEN"
-       "     RETURN 3;"
-       "   ELSIF $1 = 'Log Message' THEN"
-       "     RETURN 4;"
-       "   ELSIF $1 = 'Debug Message' THEN"
-       "     RETURN 5;"
-       "   ELSIF $1 = 'Error Message' THEN"
-       "     RETURN 6;"
-       "   ELSE"
-       "     RETURN 7;"
-       "   END IF;"
-       " END;"
-       "$$ LANGUAGE plpgsql"
-       " IMMUTABLE;");
-
   sql ("CREATE OR REPLACE FUNCTION order_port (text)"
        " RETURNS integer AS $$"
        " BEGIN"
@@ -558,14 +527,12 @@ manage_create_sql_functions ()
        "     RETURN 3;"
        "   ELSIF $1 = 'Log' THEN"
        "     RETURN 4;"
-       "   ELSIF $1 = 'Debug' THEN"
-       "     RETURN 5;"
        "   ELSIF $1 = 'False Positive' THEN"
-       "     RETURN 6;"
+       "     RETURN 5;"
        "   ELSIF $1 = 'None' THEN"
-       "     RETURN 7;"
+       "     RETURN 6;"
        "   ELSE"
-       "     RETURN 8;"
+       "     RETURN 7;"
        "   END IF;"
        " END;"
        "$$ LANGUAGE plpgsql"
@@ -580,8 +547,6 @@ manage_create_sql_functions ()
        "     RETURN 'Log Message';"
        "   ELSIF $1 = " G_STRINGIFY (SEVERITY_FP) " THEN"
        "     RETURN 'False Positive';"
-       "   ELSIF $1 = " G_STRINGIFY (SEVERITY_DEBUG) " THEN"
-       "     RETURN 'Debug Message';"
        "   ELSIF $1 = " G_STRINGIFY (SEVERITY_ERROR) " THEN"
        "     RETURN 'Error Message';"
        "   ELSIF $1 > 0.0 AND $1 <= 10.0 THEN"
@@ -640,8 +605,7 @@ manage_create_sql_functions ()
        "   user_zone :="
        "     coalesce ((SELECT current_setting ('gvmd.tz_override')),"
        "               (SELECT timezone FROM users"
-       "                WHERE uuid"
-       "                      = (SELECT current_setting ('gvmd.user.uuid'))));"
+       "                WHERE id = gvmd_user ()));"
        " RETURN iso_time (seconds, user_zone);"
        " END;"
        "$$ LANGUAGE plpgsql;");
@@ -779,33 +743,17 @@ manage_create_sql_functions ()
        "                                       || ' WHERE id = $2)))))"
        "            AND subject_location = " G_STRINGIFY (LOCATION_TABLE)
        "            AND ((subject_type = ''user''"
-       "                  AND subject"
-       "                      = (SELECT id FROM users"
-       "                         WHERE users.uuid"
-       "                               = (SELECT current_setting"
-       "                                          (''gvmd.user.uuid''))))"
+       "                  AND subject = gvmd_user ())"
        "                 OR (subject_type = ''group''"
        "                     AND subject"
        "                         IN (SELECT DISTINCT \"group\""
        "                             FROM group_users"
-       "                             WHERE"
-       "                             \"user\""
-       "                             = (SELECT id"
-       "                                FROM users"
-       "                                WHERE users.uuid"
-       "                                      = (SELECT current_setting"
-       "                                                 (''gvmd.user.uuid'')))))"
+       "                             WHERE \"user\" = gvmd_user ()))"
        "                 OR (subject_type = ''role''"
        "                     AND subject"
        "                         IN (SELECT DISTINCT role"
        "                             FROM role_users"
-       "                             WHERE"
-       "                             \"user\""
-       "                             = (SELECT id"
-       "                                FROM users"
-       "                                WHERE users.uuid"
-       "                                      = (SELECT current_setting"
-       "                                                 (''gvmd.user.uuid'')))))))'"
+       "                             WHERE \"user\" = gvmd_user ()))))'"
        "   USING arg_type, arg_id"
        "   INTO owns;"
        "   RETURN owns;"
@@ -836,11 +784,7 @@ manage_create_sql_functions ()
        "                     WHERE results.id = arg_id"
        "                     AND results.report = reports.id"
        "                     AND ((reports.owner IS NULL)"
-       "                          OR (reports.owner"
-       "                              = (SELECT id FROM users"
-       "                                 WHERE users.uuid"
-       "                                       = (SELECT current_setting"
-       "                                                  ('gvmd.user.uuid'))))))"
+       "                          OR (reports.owner = gvmd_user ())))"
        "        THEN RETURN true;"
        "        ELSE RETURN false;"
        "        END CASE;"
@@ -850,11 +794,7 @@ manage_create_sql_functions ()
        "                     WHERE id = arg_id"
        "                     AND hidden < 2"
        "                     AND ((owner IS NULL)"
-       "                          OR (owner"
-       "                              = (SELECT id FROM users"
-       "                                 WHERE users.uuid"
-       "                                       = (SELECT current_setting"
-       "                                                  ('gvmd.user.uuid'))))))"
+       "                          OR (owner = gvmd_user ())))"
        "        THEN RETURN true;"
        "        ELSE RETURN false;"
        "        END CASE;"
@@ -864,10 +804,7 @@ manage_create_sql_functions ()
        "                 FROM ' || quote_ident_split ($1 || 's') || '"
        "                 WHERE id = $2"
        "                 AND ((owner IS NULL)"
-       "                      OR (owner = (SELECT id FROM users"
-       "                                   WHERE users.uuid"
-       "                                         = (SELECT current_setting"
-       "                                                    (''gvmd.user.uuid''))))))'"
+       "                      OR (owner = gvmd_user ())))'"
        "        USING arg_type, arg_id"
        "        INTO owns;"
        "        RETURN owns;"
@@ -912,9 +849,7 @@ manage_create_sql_functions ()
        "    task_uuid = null;"
        "  END CASE;"
        "  is_get = substr (arg_permission, 0, 4) = 'get';"
-       "  user_id = (SELECT id FROM users"
-       "              WHERE uuid = (SELECT current_setting"
-       "                                    ('gvmd.user.uuid')));"
+       "  user_id = gvmd_user ();"
        "  ret = (SELECT count(*) FROM permissions"
        "          WHERE resource_uuid = coalesce (task_uuid, arg_uuid)"
        "            AND subject_location = " G_STRINGIFY (LOCATION_TABLE)
@@ -933,9 +868,87 @@ manage_create_sql_functions ()
        "            AND (is_get OR name = arg_permission)) > 0;"
        "  RETURN ret;"
        " END;"
-       "$$ LANGUAGE plpgsql;");
+       "$$ LANGUAGE plpgsql"
+       " STABLE COST 1000;");
 
   /* Functions in SQL. */
+
+  if (sql_int ("SELECT (EXISTS (SELECT * FROM information_schema.tables"
+               "                WHERE table_catalog = '%s'"
+               "                AND table_schema = 'public'"
+               "                AND table_name = 'nvts')"
+               "        AND EXISTS (SELECT * FROM information_schema.tables"
+               "                    WHERE table_catalog = '%s'"
+               "                    AND table_schema = 'public'"
+               "                    AND table_name = 'nvt_preferences'))"
+               " ::integer;",
+               sql_database (),
+               sql_database ()))
+    {
+      char *quoted_collation;
+      if (get_vt_verification_collation ())
+        {
+          gchar *string_quoted_collation;
+          string_quoted_collation
+            = sql_quote (get_vt_verification_collation ());
+          quoted_collation = sql_string ("SELECT quote_ident('%s')",
+                                         string_quoted_collation);
+          g_free (string_quoted_collation);
+        }
+      else
+        {
+          char *encoding;
+          encoding = sql_string ("SHOW server_encoding;");
+
+          if (g_str_match_string ("UTF-8", encoding, 0)
+              || g_str_match_string ("UTF8", encoding, 0))
+            quoted_collation = strdup ("ucs_basic");
+          else
+            // quote C collation because this seems to be required
+            // without quoting it an error is raised
+            // other collations don't need quoting
+            quoted_collation = strdup ("\"C\"");
+
+          free (encoding);
+        }
+
+      g_debug ("Using vt verification collation %s", quoted_collation);
+
+      sql ("CREATE OR REPLACE FUNCTION vts_verification_str ()"
+           " RETURNS text AS $$"
+           " WITH pref_str AS ("
+           "   SELECT name,"
+           "          substring(name, '^(.*?):') AS oid,"
+           "          substring (name, '^.*?:([^:]+):') AS pref_id,"
+           "          (substring (name, '^.*?:([^:]+):')"
+           "           || substring (name,"
+           "                         '^[^:]*:[^:]*:[^:]*:(.*)')"
+           "           || value) AS pref"
+           "   FROM nvt_preferences"
+           "  ),"
+           "  nvt_str AS ("
+           "   SELECT (SELECT nvts.oid"
+           "             || max(modification_time)"
+           "             || coalesce (string_agg"
+           "                            (pref_str.pref, ''"
+           "                             ORDER BY (pref_id"
+           "                                       COLLATE %s)),"
+           "                          ''))"
+           "          AS vt_string"
+           "   FROM nvts"
+           "   LEFT JOIN pref_str ON nvts.oid = pref_str.oid"
+           "   GROUP BY nvts.oid"
+           "   ORDER BY (nvts.oid COLLATE %s) ASC"
+           "  )"
+           " SELECT coalesce (string_agg (nvt_str.vt_string, ''), '')"
+           "   FROM nvt_str"
+           "$$ LANGUAGE SQL"
+           " STABLE;",
+           quoted_collation,
+           quoted_collation);
+
+      g_free (quoted_collation);
+    }
 
   sql ("CREATE OR REPLACE FUNCTION t () RETURNS boolean AS $$"
        "  SELECT true;"
@@ -946,6 +959,11 @@ manage_create_sql_functions ()
        "  SELECT extract (epoch FROM now ())::integer;"
        "$$ LANGUAGE SQL"
        " STABLE;");
+
+  sql ("CREATE OR REPLACE FUNCTION gvmd_user ()"
+       " RETURNS integer AS $$"
+       "  SELECT current_setting ('gvmd.user.id')::integer;"
+       "$$ LANGUAGE SQL;");
 
   sql ("CREATE OR REPLACE FUNCTION common_cve (text, text)"
        " RETURNS boolean AS $$"
@@ -992,7 +1010,7 @@ manage_create_sql_functions ()
            "  SELECT CASE"
            "         WHEN (SELECT scan_run_status FROM reports"
            "               WHERE reports.id = $1)"
-           "               IN (SELECT unnest (ARRAY [%i, %i, %i, %i, %i, %i,"
+           "               IN (SELECT unnest (ARRAY [%i, %i, %i, %i, %i,"
            "                                         %i, %i, %i]))"
            "         THEN true"
            "         ELSE false"
@@ -1003,7 +1021,6 @@ manage_create_sql_functions ()
            TASK_STATUS_DELETE_REQUESTED,
            TASK_STATUS_DELETE_ULTIMATE_REQUESTED,
            TASK_STATUS_STOP_REQUESTED,
-           TASK_STATUS_STOP_REQUESTED_GIVEUP,
            TASK_STATUS_STOPPED,
            TASK_STATUS_INTERRUPTED,
            TASK_STATUS_QUEUED);
@@ -1014,9 +1031,6 @@ manage_create_sql_functions ()
            "  SELECT CASE"
            "         WHEN $1 = 0"
            "         THEN -1"
-           "         WHEN (SELECT slave_task_uuid FROM reports WHERE id = $1)"
-           "              != ''"
-           "         THEN (SELECT slave_progress FROM reports WHERE id = $1)"
            "         WHEN report_active ($1)"
            "         THEN (SELECT slave_progress FROM reports WHERE id = $1)"
            "         ELSE -1"
@@ -1029,10 +1043,7 @@ manage_create_sql_functions ()
            "  SELECT CAST (value AS integer) = 1 FROM settings"
            "  WHERE name = 'Dynamic Severity'"
            "  AND ((owner IS NULL)"
-           "       OR (owner = (SELECT id FROM users"
-           "                    WHERE users.uuid"
-           "                          = (SELECT current_setting"
-           "                                     ('gvmd.user.uuid')))))"
+           "       OR (owner = gvmd_user ()))"
            "  ORDER BY coalesce (owner, 0) DESC LIMIT 1;"
            "$$ LANGUAGE SQL;");
 
@@ -1055,13 +1066,14 @@ manage_create_sql_functions ()
              "                                            min_qod integer)"
              " RETURNS double precision AS $$"
              /* Calculate the severity of a report. */
-             "  WITH max_severity AS (SELECT max(severity) AS max"
-             "                        FROM report_counts"
-             // FIX should have user like report_counts_cache_exists?  c version too?
-             "                        WHERE report = $1"
-             "                        AND override = $2"
-             "                        AND min_qod = $3"
-             "                        AND (end_time = 0 or end_time >= m_now ()))"
+             "  WITH max_severity"
+             "       AS (SELECT max(severity) AS max"
+             "           FROM report_counts"
+             "           WHERE report = $1"
+             "           AND \"user\" = gvmd_user ()"
+             "           AND override = $2"
+             "           AND min_qod = $3"
+             "           AND (end_time = 0 or end_time >= m_now ()))"
              "  SELECT CASE"
              "         WHEN EXISTS (SELECT max FROM max_severity)"
              "              AND (SELECT max FROM max_severity) IS NOT NULL"
@@ -1126,10 +1138,7 @@ manage_create_sql_functions ()
            "  SELECT value FROM settings"
            "  WHERE name = 'Severity Class'"
            "  AND ((owner IS NULL)"
-           "       OR (owner = (SELECT id FROM users"
-           "                    WHERE users.uuid"
-           "                          = (SELECT current_setting"
-           "                                     ('gvmd.user.uuid')))))"
+           "       OR (owner = gvmd_user ()))"
            "  ORDER BY coalesce (owner, 0) DESC LIMIT 1;"
            "$$ LANGUAGE SQL;");
 
@@ -1140,18 +1149,20 @@ manage_create_sql_functions ()
              "                        min_qod integer, level text)"
              " RETURNS bigint AS $$"
              /* Calculate the severity of a report. */
-             "  WITH severity_count AS (SELECT sum (count) AS total"
-             "                          FROM report_counts"
-             "                          WHERE report = $1"
-             "                          AND override = $2"
-             "                          AND min_qod = $3"
-             "                          AND (end_time = 0"
-             "                               or end_time >= m_now ())"
-             "                          AND (severity"
-             "                               BETWEEN level_min_severity"
-             "                                        ($4, severity_class ())"
-             "                                       AND level_max_severity"
-             "                                            ($4, severity_class ())))"
+             "  WITH severity_count"
+             "       AS (SELECT sum (count) AS total"
+             "           FROM report_counts"
+             "           WHERE report = $1"
+             "           AND \"user\" = gvmd_user ()"
+             "           AND override = $2"
+             "           AND min_qod = $3"
+             "           AND (end_time = 0"
+             "                or end_time >= m_now ())"
+             "           AND (severity"
+             "                BETWEEN level_min_severity"
+             "                         ($4, severity_class ())"
+             "                        AND level_max_severity"
+             "                             ($4, severity_class ())))"
              "  SELECT CASE"
              "         WHEN EXISTS (SELECT total FROM severity_count)"
              "              AND (SELECT total FROM severity_count) IS NOT NULL"
@@ -1228,8 +1239,9 @@ manage_create_sql_functions ()
 
       /* result_nvt column (in OVERRIDES_SQL) was added in version 189. */
       if (current_db_version >= 189)
-        sql ("CREATE OR REPLACE FUNCTION task_severity (integer, integer,"
-             "                                          integer)"
+        sql ("CREATE OR REPLACE FUNCTION task_severity (integer,"  // task
+             "                                          integer,"  // overrides
+             "                                          integer)"  // min_qod
              " RETURNS double precision AS $$"
              /* Calculate the severity of a task. */
              "  SELECT CASE"
@@ -1270,7 +1282,7 @@ manage_create_sql_functions ()
            "         AND scan_run_status = %u)"
            "   THEN RETURN ''::text;"
            /*  Get trend only for authenticated users. */
-           "   WHEN (SELECT current_setting ('gvmd.user.uuid') = '')"
+           "   WHEN gvmd_user () = 0"
            "   THEN RETURN ''::text;"
            /*  Skip running and container tasks. */
            "   WHEN (SELECT run_status = %u OR target = 0"
@@ -1374,7 +1386,7 @@ manage_create_sql_functions ()
        "         THEN 'Requested'"
        "         WHEN $1 = %i"
        "         THEN 'Running'"
-       "         WHEN $1 = %i OR $1 = %i OR $1 = %i"
+       "         WHEN $1 = %i OR $1 = %i"
        "         THEN 'Stop Requested'"
        "         WHEN $1 = %i"
        "         THEN 'Stopped'"
@@ -1392,7 +1404,6 @@ manage_create_sql_functions ()
        TASK_STATUS_NEW,
        TASK_STATUS_REQUESTED,
        TASK_STATUS_RUNNING,
-       TASK_STATUS_STOP_REQUESTED_GIVEUP,
        TASK_STATUS_STOP_REQUESTED,
        TASK_STATUS_STOP_WAITING,
        TASK_STATUS_STOPPED,
@@ -1459,54 +1470,34 @@ manage_create_sql_functions ()
                sql_database ()))
     {
       sql ("CREATE OR REPLACE FUNCTION severity_in_level (double precision,"
-           "                                              text,"
            "                                              text)"
            " RETURNS boolean AS $$"
-           "  SELECT CASE $3"
-           "         WHEN 'pci-dss'"
-           "         THEN (CASE lower ($2)"
-           "               WHEN 'high'"
-           "               THEN $1 >= 4.0"
-           "               WHEN 'none'"
-           "               THEN $1 >= 0.0 AND $1 < 4.0"
-           "               WHEN 'log'"
-           "               THEN $1 >= 0.0 AND $1 < 4.0"
-           "               ELSE 0::boolean"
-           "               END)"
-           "         ELSE " /* NIST/BSI */
-           "              (CASE lower ($2)"
-           "               WHEN 'high'"
-           "               THEN $1 >= 7"
-           "                    AND $1 <= 10"
-           "               WHEN 'medium'"
-           "               THEN $1 >= 4"
-           "                    AND $1 < 7"
-           "               WHEN 'low'"
-           "               THEN $1 > 0"
-           "                    AND $1 < 4"
-           "               WHEN 'none'"
-           "               THEN $1 = 0"
-           "               WHEN 'log'"
-           "               THEN $1 = 0"
-           "               ELSE 0::boolean"
-           "               END)"
-           "         END;"
-           "$$ LANGUAGE SQL;");
+           "  (SELECT CASE lower ($2)"
+           "         WHEN 'high'"
+           "         THEN $1 >= 7"
+           "              AND $1 <= 10"
+           "         WHEN 'medium'"
+           "         THEN $1 >= 4"
+           "              AND $1 < 7"
+           "         WHEN 'low'"
+           "         THEN $1 > 0"
+           "              AND $1 < 4"
+           "         WHEN 'none'"
+           "         THEN $1 = 0"
+           "         WHEN 'log'"
+           "         THEN $1 = 0"
+           "         WHEN 'false'"
+           "         THEN $1 = -1"
+           "         ELSE 0::boolean"
+           "         END);"
+           "$$ LANGUAGE SQL"
+           " STABLE;");
 
-      sql ("CREATE OR REPLACE FUNCTION severity_in_level (double precision,"
-           "                                              text)"
+      sql ("CREATE OR REPLACE FUNCTION severity_in_levels (double precision,"
+           "                                               VARIADIC text[])"
            " RETURNS boolean AS $$"
-           " SELECT severity_in_level"
-           "         ($1,"
-           "          $2,"
-           "          (SELECT value FROM settings"
-           "           WHERE name = 'Severity Class'"
-           "           AND ((owner IS NULL)"
-           "                OR (owner = (SELECT id FROM users"
-           "                             WHERE users.uuid"
-           "                                   = (SELECT current_setting"
-           "                                              ('gvmd.user.uuid')))))"
-           "           ORDER BY coalesce (owner, 0) DESC LIMIT 1))"
+           "  (SELECT true = ANY (SELECT severity_in_level ($1, severity)"
+           "                      FROM unnest ($2) AS severity));"
            "$$ LANGUAGE SQL"
            " STABLE;");
 
@@ -1517,8 +1508,6 @@ manage_create_sql_functions ()
            "         THEN 'Log'"
            "         WHEN $1::double precision = " G_STRINGIFY (SEVERITY_FP)
            "         THEN 'False Positive'"
-           "         WHEN $1::double precision = " G_STRINGIFY (SEVERITY_DEBUG)
-           "         THEN 'Debug'"
            "         WHEN $1::double precision = " G_STRINGIFY (SEVERITY_ERROR)
            "         THEN 'Error'"
            "         WHEN $1::double precision > 0.0"
@@ -1550,8 +1539,6 @@ manage_create_sql_functions ()
            "         THEN 'Log'"
            "         WHEN $1 = " G_STRINGIFY (SEVERITY_FP)
            "         THEN 'False Positive'"
-           "         WHEN $1 = " G_STRINGIFY (SEVERITY_DEBUG)
-           "         THEN 'Debug'"
            "         WHEN $1 = " G_STRINGIFY (SEVERITY_ERROR)
            "         THEN 'Error'"
            "         WHEN $1 > 0.0 AND $1 <= 10.0"
@@ -1676,11 +1663,25 @@ manage_create_sql_functions ()
            "   AND ($4 IS NULL OR results.host = $4)"
            "   AND (results.severity != " G_STRINGIFY (SEVERITY_ERROR) ")"
            "   AND (SELECT has_permission FROM permissions_get_tasks"
-           "         WHERE \"user\" = (SELECT id FROM users"
-           "                           WHERE uuid"
-           "                                 = (SELECT current_setting"
-           "                                            ('gvmd.user.uuid')))"
+           "         WHERE \"user\" = gvmd_user ()"
            "           AND task = results.task)"
+           "$$ LANGUAGE SQL;");
+
+      sql ("DROP FUNCTION IF EXISTS"
+           " vuln_results_exist (text, bigint, bigint, text, integer);");
+      sql ("CREATE OR REPLACE FUNCTION"
+           " vuln_results_exist (text, bigint, bigint, text)"
+           " RETURNS boolean AS $$"
+           " SELECT EXISTS"
+           "  (SELECT * FROM results"
+           "   WHERE results.nvt = $1"
+           "   AND ($2 IS NULL OR results.task = $2)"
+           "   AND ($3 IS NULL OR results.report = $3)"
+           "   AND ($4 IS NULL OR results.host = $4)"
+           "   AND (results.severity != " G_STRINGIFY (SEVERITY_ERROR) ")"
+           "   AND (SELECT has_permission FROM permissions_get_tasks"
+           "        WHERE \"user\" = gvmd_user ()"
+           "        AND task = results.task))"
            "$$ LANGUAGE SQL;");
     }
 
@@ -1705,19 +1706,13 @@ manage_create_result_indexes ()
 }
 
 /**
- * @brief Results WHERE SQL for creating views in create_tabes.
- */
-#define VULNS_RESULTS_WHERE                                           \
-  " WHERE uuid IN"                                                    \
-  "   (SELECT nvt FROM results"                                       \
-  "     WHERE (results.severity != " G_STRINGIFY (SEVERITY_ERROR) "))"
-
-/**
  * @brief Create or replace the vulns view.
  */
 void
 create_view_vulns ()
 {
+  sql ("DROP VIEW IF EXISTS vulns;");
+
   if (sql_int ("SELECT EXISTS (SELECT * FROM information_schema.tables"
                "               WHERE table_catalog = '%s'"
                "               AND table_schema = 'scap'"
@@ -1725,28 +1720,34 @@ create_view_vulns ()
                " ::integer;",
                sql_database ()))
     sql ("CREATE OR REPLACE VIEW vulns AS"
+         " WITH used_nvts"
+         " AS (SELECT DISTINCT nvt FROM results"
+         "     WHERE (results.severity != " G_STRINGIFY (SEVERITY_ERROR) "))"
          " SELECT id, uuid, name, creation_time, modification_time,"
-         "        cast (cvss_base AS double precision) AS severity, qod,"
-         "        'nvt' AS type"
+         "        cvss_base::double precision AS severity, qod, 'nvt' AS type"
          " FROM nvts"
-         VULNS_RESULTS_WHERE
+         " WHERE uuid in (SELECT * FROM used_nvts)"
          " UNION SELECT id, uuid, name, creation_time, modification_time,"
-         "       cvss AS severity, " G_STRINGIFY (QOD_DEFAULT) " AS qod,"
+         "       severity, "
+         G_STRINGIFY (QOD_DEFAULT) " AS qod,"
          "       'cve' AS type"
          " FROM cves"
-         VULNS_RESULTS_WHERE
+         " WHERE uuid in (SELECT * FROM used_nvts)"
          " UNION SELECT id, uuid, name, creation_time, modification_time,"
-         "       max_cvss AS severity, " G_STRINGIFY (QOD_DEFAULT) " AS qod,"
+         "       severity, "
+         G_STRINGIFY (QOD_DEFAULT) " AS qod,"
          "       'ovaldef' AS type"
          " FROM ovaldefs"
-         VULNS_RESULTS_WHERE);
+         " WHERE uuid in (SELECT * FROM used_nvts)");
   else
     sql ("CREATE OR REPLACE VIEW vulns AS"
+         " WITH used_nvts"
+         " AS (SELECT DISTINCT nvt FROM results"
+         "     WHERE (results.severity != " G_STRINGIFY (SEVERITY_ERROR) "))"
          " SELECT id, uuid, name, creation_time, modification_time,"
-         "        cast (cvss_base AS double precision) AS severity, qod,"
-         "        'nvt' AS type"
+         "        cvss_base::double precision AS severity, qod, 'nvt' AS type"
          " FROM nvts"
-         VULNS_RESULTS_WHERE);
+         " WHERE uuid in (SELECT * FROM used_nvts)");
 }
 
 #undef VULNS_RESULTS_WHERE
@@ -2092,7 +2093,8 @@ create_tables ()
        "  port_list integer REFERENCES port_lists (id) ON DELETE RESTRICT,"
        "  alive_test integer,"
        "  creation_time integer,"
-       "  modification_time integer);");
+       "  modification_time integer,"
+       "  allow_simultaneous_ips integer DEFAULT 1);");
 
   sql ("CREATE TABLE IF NOT EXISTS targets_trash"
        " (id SERIAL PRIMARY KEY,"
@@ -2108,7 +2110,8 @@ create_tables ()
        "  port_list_location integer,"
        "  alive_test integer,"
        "  creation_time integer,"
-       "  modification_time integer);");
+       "  modification_time integer,"
+       "  allow_simultaneous_ips integer DEFAULT 1);");
 
   sql ("CREATE TABLE IF NOT EXISTS targets_login_data"
        " (id SERIAL PRIMARY KEY,"
@@ -2412,11 +2415,6 @@ create_tables ()
        "  comment text,"
        "  scan_run_status integer,"
        "  slave_progress integer,"
-       "  slave_task_uuid text,"
-       "  slave_uuid text,"
-       "  slave_name text,"
-       "  slave_host text,"
-       "  slave_port integer,"
        "  source_iface text,"
        "  flags integer);");
 
@@ -2586,6 +2584,15 @@ create_tables ()
        "  type text NOT NULL,"
        "  ref_id text NOT NULL,"
        "  ref_text text);");
+
+  sql ("CREATE TABLE IF NOT EXISTS vt_severities"
+       " (id SERIAL PRIMARY KEY,"
+       "  vt_oid text NOT NULL,"
+       "  type text NOT NULL,"
+       "  origin text,"
+       "  date integer,"
+       "  score double precision,"
+       "  value text);");
 
   sql ("CREATE TABLE IF NOT EXISTS nvt_preferences"
        " (id SERIAL PRIMARY KEY,"
@@ -2765,7 +2772,7 @@ create_tables ()
    * result_new_severities. */
   manage_create_sql_functions ();
 
-  owned_clause = acl_where_owned_for_get ("override", "users.id", NULL);
+  owned_clause = acl_where_owned_for_get ("override", "users.id", NULL, NULL);
 
   sql ("CREATE OR REPLACE VIEW result_overrides AS"
        " SELECT users.id AS user,"
@@ -2798,101 +2805,57 @@ create_tables ()
 
   g_free (owned_clause);
 
+  sql ("CREATE OR REPLACE VIEW result_new_severities_dynamic AS"
+       "  SELECT results.id as result, users.id as user, 1 AS dynamic, 1 AS override,"
+       "         coalesce ((SELECT ov_new_severity FROM result_overrides"
+       "                    WHERE result = results.id"
+       "                    AND result_overrides.user = users.id"
+       "                    AND severity_matches_ov"
+       "                         (current_severity (results.severity,"
+       "                                            results.nvt),"
+       "                          ov_old_severity)"
+       "                    LIMIT 1),"
+       "                   current_severity (results.severity, results.nvt))"
+       "         AS new_severity"
+       "  FROM results, users;");
+
+  sql ("CREATE OR REPLACE VIEW result_new_severities_static AS"
+       "  SELECT results.id as result, users.id as user, 0 AS dynamic, 1 AS override,"
+       "         coalesce ((SELECT ov_new_severity FROM result_overrides"
+       "                    WHERE result = results.id"
+       "                    AND result_overrides.user = users.id"
+       "                    AND severity_matches_ov"
+       "                         (results.severity,"
+       "                          ov_old_severity)"
+       "                    LIMIT 1),"
+       "                   results.severity)"
+       "         AS new_severity"
+       "  FROM results, users;");
+
   sql ("CREATE OR REPLACE VIEW result_new_severities AS"
-       "  SELECT results.id as result, users.id as user, dynamic, override,"
+       "  SELECT results.id as result, users.id as user, dynamic, 1 AS override,"
        "    CASE WHEN dynamic != 0 THEN"
-       "      CASE WHEN override != 0 THEN"
-       "        coalesce ((SELECT ov_new_severity FROM result_overrides"
-       "                   WHERE result = results.id"
-       "                     AND result_overrides.user = users.id"
-       "                     AND severity_matches_ov"
-       "                           (current_severity (results.severity,"
-       "                                              results.nvt),"
-       "                            ov_old_severity)"
-       "                   LIMIT 1),"
-       "                  current_severity (results.severity, results.nvt))"
-       "      ELSE"
-       "        current_severity (results.severity, results.nvt)"
-       "      END"
+       "      coalesce ((SELECT ov_new_severity FROM result_overrides"
+       "                 WHERE result = results.id"
+       "                   AND result_overrides.user = users.id"
+       "                   AND severity_matches_ov"
+       "                         (current_severity (results.severity,"
+       "                                            results.nvt),"
+       "                          ov_old_severity)"
+       "                 LIMIT 1),"
+       "                current_severity (results.severity, results.nvt))"
        "    ELSE"
-       "      CASE WHEN override != 0 THEN"
-       "        coalesce ((SELECT ov_new_severity FROM result_overrides"
-       "                   WHERE result = results.id"
-       "                     AND result_overrides.user = users.id"
-       "                     AND severity_matches_ov"
-       "                           (results.severity,"
-       "                            ov_old_severity)"
-       "                   LIMIT 1),"
-       "                  results.severity)"
-       "      ELSE"
-       "        results.severity"
-       "      END"
+       "      coalesce ((SELECT ov_new_severity FROM result_overrides"
+       "                 WHERE result = results.id"
+       "                   AND result_overrides.user = users.id"
+       "                   AND severity_matches_ov"
+       "                         (results.severity,"
+       "                          ov_old_severity)"
+       "                 LIMIT 1),"
+       "                results.severity)"
        "    END AS new_severity"
        "  FROM results, users,"
-       "  (SELECT 0 AS override UNION SELECT 1 AS override) AS override_opts,"
        "  (SELECT 0 AS dynamic UNION SELECT 1 AS dynamic) AS dynamic_opts;");
-
-  sql ("CREATE OR REPLACE VIEW results_autofp AS"
-       " SELECT results.id as result, autofp_selection,"
-       "        (CASE autofp_selection"
-       "         WHEN 1 THEN"
-       "          (CASE WHEN"
-       "           (((SELECT family FROM nvts WHERE oid = results.nvt)"
-       "             IN (" LSC_FAMILY_LIST "))"
-       "            OR EXISTS"
-       "              (SELECT id FROM nvts"
-       "               WHERE oid = results.nvt"
-       "               AND"
-       "                (cve = ''"
-       "                 OR cve NOT IN (SELECT cve FROM nvts"
-       "                                WHERE oid"
-       "                                      IN (SELECT source_name"
-       "                                          FROM report_host_details"
-       "                                          WHERE report_host"
-       "                                                = (SELECT id"
-       "                                                   FROM report_hosts"
-       "                                                   WHERE report = %llu"
-       "                                                   AND host"
-       "                                                       = results.host)"
-       "                                          AND name = 'EXIT_CODE'"
-       "                                          AND value = 'EXIT_NOTVULN')"
-       "                                AND family IN (" LSC_FAMILY_LIST ")))))"
-       "           THEN NULL"
-       "           WHEN severity = " G_STRINGIFY (SEVERITY_ERROR) " THEN NULL"
-       "           ELSE 1 END)"
-       "         WHEN 2 THEN"
-       "          (CASE WHEN"
-       "            (((SELECT family FROM nvts WHERE oid = results.nvt)"
-       "              IN (" LSC_FAMILY_LIST "))"
-       "             OR EXISTS"
-       "             (SELECT id FROM nvts AS outer_nvts"
-       "              WHERE oid = results.nvt"
-       "              AND"
-       "              (cve = ''"
-       "               OR NOT EXISTS"
-       "                  (SELECT cve FROM nvts"
-       "                   WHERE oid IN (SELECT source_name"
-       "                                 FROM report_host_details"
-       "                                 WHERE report_host"
-       "                                 = (SELECT id"
-       "                                    FROM report_hosts"
-       "                                    WHERE report = results.report"
-       "                                    AND host = results.host)"
-       "                                 AND name = 'EXIT_CODE'"
-       "                                 AND value = 'EXIT_NOTVULN')"
-       "                   AND family IN (" LSC_FAMILY_LIST ")"
-       /* The CVE of the result NVT is outer_nvts.cve.  The CVE of the
-        * NVT that has registered the "closed" host detail is nvts.cve.
-        * Either can be a list of CVEs. */
-       "                   AND common_cve (nvts.cve, outer_nvts.cve)))))"
-       "           THEN NULL"
-       "           WHEN severity = " G_STRINGIFY (SEVERITY_ERROR) " THEN NULL"
-       "           ELSE 1 END)"
-       "         ELSE 0 END) AS autofp"
-       " FROM results,"
-       "  (SELECT 0 AS autofp_selection"
-       "   UNION SELECT 1 AS autofp_selection"
-       "   UNION SELECT 2 AS autofp_selection) AS autofp_opts;");
 
   sql ("CREATE OR REPLACE VIEW tls_certificate_source_origins AS"
        " SELECT sources.id AS source_id, tls_certificate,"
@@ -2969,22 +2932,17 @@ create_tables ()
   sql ("SELECT create_index ('vt_refs_by_vt_oid',"
        "                     'vt_refs', 'vt_oid');");
 
+  sql ("SELECT create_index ('vt_severities_by_vt_oid',"
+       "                     'vt_severities', 'vt_oid');");
 
-#if 0
-  /* TODO The value column can be bigger than 8191, the maximum size that
-   *      Postgres can handle.  For example, this can happen for "ports".
-   *      Mostly value is short, like a CPE for the "App" detail, which is
-   *      what the index is for. */
-  sql ("SELECT create_index"
-       "        ('report_host_details_by_report_host_and_name_and_value',"
-       "         'report_host_details',"
-       "         'report_host, name, value');");
-#else
+  /* Previously this included the value column but that can be bigger than 8191,
+   * the maximum size that Postgres can handle.  For example, this can happen
+   * for "ports".  Mostly value is short, like a CPE for the "App" detail,
+   * which is what the index is for. */
   sql ("SELECT create_index"
        "        ('report_host_details_by_report_host_and_name',"
        "         'report_host_details',"
        "         'report_host, name');");
-#endif
   sql ("SELECT create_index"
        "        ('report_hosts_by_report_and_host',"
        "         'report_hosts',"
@@ -3036,6 +2994,60 @@ check_db_sequences ()
   cleanup_iterator (&sequence_tables);
 }
 
+/**
+ * @brief Check if an extension is available and can be installed.
+ * 
+ * @param[in]  name  Name of the extension to check.
+ *
+ * @return TRUE extension is available, FALSE otherwise.
+ */
+static gboolean
+db_extension_available (const char *name)
+{
+  if (sql_int ("SELECT count(*) FROM pg_available_extensions"
+               " WHERE name = '%s'",
+               name))
+    {
+      g_debug ("%s: Extension '%s' is available.",
+                 __func__, name);
+      return TRUE;
+    }
+  else
+    {
+      g_message ("%s: Extension '%s' is not available.",
+                 __func__, name);
+      return FALSE;
+    }
+}
+
+/**
+ * @brief Ensure all extensions are installed.
+ *
+ * @return 0 success, 1 extension missing.
+ */
+int
+check_db_extensions ()
+{
+  if (db_extension_available ("uuid-ossp")
+      && db_extension_available ("pgcrypto"))
+    {
+      g_debug ("%s: All required extensions are available.", __func__);
+
+      // Switch to superuser role and try to install extensions.
+      sql ("SET ROLE \"%s\";", DB_SUPERUSER_ROLE);
+      
+      sql ("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"");
+      sql ("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"");
+
+      sql ("RESET ROLE;");
+      return 0;
+    }
+  else
+    {
+      g_warning ("%s: A required extension is not available.", __func__);
+      return 1;
+    }
+}
 
 /* SecInfo. */
 
@@ -3108,7 +3120,7 @@ manage_db_init (const gchar *name)
            "  title TEXT,"
            "  summary TEXT,"
            "  cve_refs INTEGER,"
-           "  max_cvss FLOAT);");
+           "  severity DOUBLE PRECISION);");
       sql ("CREATE UNIQUE INDEX cert_bund_advs_idx"
            " ON cert.cert_bund_advs (name);");
       sql ("CREATE INDEX cert_bund_advs_by_creation_time"
@@ -3132,7 +3144,7 @@ manage_db_init (const gchar *name)
            "  title TEXT,"
            "  summary TEXT,"
            "  cve_refs INTEGER,"
-           "  max_cvss FLOAT);");
+           "  severity DOUBLE PRECISION);");
       sql ("CREATE UNIQUE INDEX dfn_cert_advs_idx"
            " ON cert.dfn_cert_advs (name);");
       sql ("CREATE INDEX dfn_cert_advs_by_creation_time"
@@ -3175,7 +3187,8 @@ manage_db_init (const gchar *name)
       /* Init tables. */
 
       sql ("INSERT INTO cert.meta (name, value)"
-           " VALUES ('database_version', '6');");
+           " VALUES ('database_version', '%i');",
+           GVMD_CERT_DATABASE_VERSION);
       sql ("INSERT INTO cert.meta (name, value)"
            " VALUES ('last_update', '0');");
     }
@@ -3215,14 +3228,9 @@ manage_db_init (const gchar *name)
            "  description text,"
            "  creation_time integer,"
            "  modification_time integer,"
-           "  vector text,"
-           "  complexity text,"
-           "  authentication text,"
-           "  confidentiality_impact text,"
-           "  integrity_impact text,"
-           "  availability_impact text,"
+           "  cvss_vector text,"
            "  products text,"
-           "  cvss FLOAT DEFAULT 0);");
+           "  severity DOUBLE PRECISION DEFAULT 0);");
 
       sql ("CREATE TABLE scap2.cpes"
            " (id SERIAL PRIMARY KEY,"
@@ -3234,7 +3242,7 @@ manage_db_init (const gchar *name)
            "  title text,"
            "  status text,"
            "  deprecated_by_id INTEGER,"
-           "  max_cvss FLOAT DEFAULT 0,"
+           "  severity DOUBLE PRECISION DEFAULT 0,"
            "  cve_refs INTEGER DEFAULT 0,"
            "  nvd_id text);");
 
@@ -3256,7 +3264,7 @@ manage_db_init (const gchar *name)
            "  description TEXT,"
            "  xml_file TEXT,"
            "  status TEXT,"
-           "  max_cvss FLOAT DEFAULT 0,"
+           "  severity DOUBLE PRECISION DEFAULT 0,"
            "  cve_refs INTEGER DEFAULT 0);");
 
       sql ("CREATE TABLE scap2.ovalfiles"
@@ -3270,7 +3278,8 @@ manage_db_init (const gchar *name)
       /* Init tables. */
 
       sql ("INSERT INTO scap2.meta (name, value)"
-           " VALUES ('database_version', '16');");
+           " VALUES ('database_version', '%i');",
+           GVMD_SCAP_DATABASE_VERSION);
       sql ("INSERT INTO scap2.meta (name, value)"
            " VALUES ('last_update', '0');");
     }
@@ -3347,8 +3356,8 @@ manage_db_init_indexes (const gchar *name)
            " ON scap2.cves (creation_time);");
       sql ("CREATE INDEX cves_by_modification_time_idx"
            " ON scap2.cves (modification_time);");
-      sql ("CREATE INDEX cves_by_cvss"
-           " ON scap2.cves (cvss);");
+      sql ("CREATE INDEX cves_by_severity"
+           " ON scap2.cves (severity);");
 
       sql ("CREATE UNIQUE INDEX cpe_idx"
            " ON scap2.cpes (name);");
@@ -3356,8 +3365,8 @@ manage_db_init_indexes (const gchar *name)
            " ON scap2.cpes (creation_time);");
       sql ("CREATE INDEX cpes_by_modification_time_idx"
            " ON scap2.cpes (modification_time);");
-      sql ("CREATE INDEX cpes_by_cvss"
-           " ON scap2.cpes (max_cvss);");
+      sql ("CREATE INDEX cpes_by_severity"
+           " ON scap2.cpes (severity);");
       sql ("CREATE INDEX cpes_by_uuid"
            " ON scap2.cpes (uuid);");
 

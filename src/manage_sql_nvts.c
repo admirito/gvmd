@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2020 Greenbone Networks GmbH
+/* Copyright (C) 2009-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -30,6 +30,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -39,6 +40,7 @@
 #include "manage_sql_nvts.h"
 #include "manage_preferences.h"
 #include "manage_sql.h"
+#include "manage_sql_configs.h"
 #include "sql.h"
 #include "utils.h"
 
@@ -269,6 +271,7 @@ insert_nvt (const nvti_t *nvti)
   gchar *quoted_cvss_base, *quoted_qod_type, *quoted_family;
   gchar *quoted_solution, *quoted_solution_type, *quoted_solution_method;
   int qod, i;
+  double highest;
 
   cve = nvti_refs (nvti, "cve", "", 0);
 
@@ -327,19 +330,53 @@ insert_nvt (const nvti_t *nvti)
   for (i = 0; i < nvti_vtref_len (nvti); i++)
     {
       vtref_t *ref;
-      gchar *quoted_id, *quoted_text;
+      gchar *quoted_type, *quoted_id, *quoted_text;
 
       ref = nvti_vtref (nvti, i);
+      quoted_type = sql_quote (vtref_type (ref));
       quoted_id = sql_quote (vtref_id (ref));
       quoted_text = sql_quote (vtref_text (ref) ? vtref_text (ref) : "");
 
       sql ("INSERT into vt_refs (vt_oid, type, ref_id, ref_text)"
            " VALUES ('%s', '%s', '%s', '%s');",
-           nvti_oid (nvti), vtref_type (ref), quoted_id, quoted_text);
+           nvti_oid (nvti), quoted_type, quoted_id, quoted_text);
 
+      g_free (quoted_type);
       g_free (quoted_id);
       g_free (quoted_text);
     }
+
+  sql ("DELETE FROM vt_severities where vt_oid = '%s';", nvti_oid (nvti));
+
+  highest = 0;
+
+  for (i = 0; i < nvti_vtseverities_len (nvti); i++)
+    {
+      vtseverity_t *severity;
+      gchar *quoted_origin, *quoted_value;
+
+      severity = nvti_vtseverity (nvti, i);
+      quoted_origin = sql_quote (vtseverity_origin (severity) ?
+                                 vtseverity_origin (severity) : "");
+      quoted_value = sql_quote (vtseverity_value (severity) ?
+                                 vtseverity_value (severity) : "");
+
+      sql ("INSERT into vt_severities (vt_oid, type, origin, date, score,"
+           "                           value)"
+           " VALUES ('%s', '%s', '%s', %i, %0.1f, '%s');",
+           nvti_oid (nvti), vtseverity_type (severity),
+           quoted_origin, vtseverity_date (severity),
+           vtseverity_score (severity), quoted_value);
+      if (vtseverity_score (severity) > highest)
+        highest = vtseverity_score (severity);
+
+      g_free (quoted_origin);
+      g_free (quoted_value);
+    }
+
+  sql ("UPDATE nvts SET cvss_base = %0.1f WHERE oid = '%s';",
+       highest,
+       nvti_oid (nvti));
 
   g_free (quoted_name);
   g_free (quoted_summary);
@@ -377,7 +414,6 @@ init_nvt_info_iterator (iterator_t* iterator, get_data_t *get, const char *name)
 
   if (get->id)
     {
-      // FIX what for anyway?
       gchar *quoted = sql_quote (get->id);
       clause = g_strdup_printf (" AND uuid = '%s'", quoted);
       g_free (quoted);
@@ -597,7 +633,8 @@ select_config_nvts (const config_t config, const char* family, int ascending,
                         quoted_family,
                         quoted_selector,
                         quoted_family,
-                        // FIX PG "ERROR: missing FROM-clause" using nvts.name.
+                        /* This works around "ERROR: missing FROM-clause" from
+                         * Postgres when using nvts.name. */
                         sort_field && strcmp (sort_field, "nvts.name")
                          ? sort_field : "3", /* 3 is nvts.name. */
                         ascending ? "ASC" : "DESC");
@@ -641,7 +678,8 @@ select_config_nvts (const config_t config, const char* family, int ascending,
                     quoted_family,
                     quoted_selector,
                     quoted_family,
-                    // FIX PG "ERROR: missing FROM-clause" using nvts.name.
+                    /* This works around "ERROR: missing FROM-clause" from
+                     * Postgres when using nvts.name. */
                     sort_field && strcmp (sort_field, "nvts.name")
                      ? sort_field : "3", /* 3 is nvts.name. */
                     ascending ? "ASC" : "DESC");
@@ -1206,8 +1244,8 @@ nvti_from_vt (entity_t vt)
   const char *id;
   entity_t name, summary, insight, affected, impact, detection, solution;
   entity_t creation_time, modification_time;
-  entity_t refs, ref, custom, family, category;
-  entity_t severities;
+  entity_t refs, ref, custom, family, category, deprecated;
+  entity_t severities, severity;
 
   entities_t children;
 
@@ -1287,6 +1325,83 @@ nvti_from_vt (entity_t vt)
         nvti_set_solution_method (nvti, method);
     }
 
+  severities = entity_child (vt, "severities");
+  if (severities == NULL)
+    {
+      g_warning ("%s: VT missing SEVERITIES", __func__);
+      nvti_free (nvti);
+      return NULL;
+    }
+
+  children = severities->entities;
+  while ((severity = first_entity (children)))
+    {
+      const gchar *severity_type;
+
+      severity_type = entity_attribute (severity, "type");
+
+      if (severity_type == NULL)
+        {
+          GString *debug = g_string_new ("");
+          g_warning ("%s: SEVERITY missing type attribute", __func__);
+          print_entity_to_string (severity, debug);
+          g_warning ("%s: severity: %s", __func__, debug->str);
+          g_string_free (debug, TRUE);
+        }
+      else
+        {
+          entity_t value;
+
+          value = entity_child (severity, "value");
+
+          if (!value)
+            {
+              GString *debug = g_string_new ("");
+              g_warning ("%s: SEVERITY missing value element", __func__);
+              print_entity_to_string (severity, debug);
+              g_warning ("%s: severity: %s", __func__, debug->str);
+              g_string_free (debug, TRUE);
+            }
+          else
+            {
+              entity_t origin, severity_date;
+              double cvss_base_dbl;
+              gchar * cvss_base;
+              time_t parsed_severity_date;
+
+              cvss_base_dbl
+                = get_cvss_score_from_base_metrics (entity_text (value));
+
+              origin
+                = entity_child (severity, "origin");
+              severity_date
+                = entity_child (severity, "date");
+              
+              if (severity_date)
+                parsed_severity_date = strtol (entity_text (severity_date),
+                                               NULL, 10);
+              else
+                parsed_severity_date = nvti_creation_time (nvti);
+
+              nvti_add_vtseverity (nvti,
+                vtseverity_new (severity_type,
+                                origin ? entity_text (origin) : NULL,
+                                parsed_severity_date,
+                                cvss_base_dbl,
+                                entity_text (value)));
+
+              nvti_add_tag (nvti, "cvss_base_vector", entity_text (value));
+
+              cvss_base = g_strdup_printf ("%.1f",
+                get_cvss_score_from_base_metrics (entity_text (value)));
+              nvti_set_cvss_base (nvti, cvss_base);
+              g_free (cvss_base);
+            }
+        }
+
+      children = next_entities (children);
+    }
+
   refs = entity_child (vt, "refs");
   if (refs)
     {
@@ -1327,33 +1442,6 @@ nvti_from_vt (entity_t vt)
         }
     }
 
-  severities = entity_child (vt, "severities");
-  if (severities)
-    {
-      entity_t severity;
-
-      severity = entity_child (severities, "severity");
-      if (severity
-          && entity_attribute (severity, "type")
-          && (strcmp (entity_attribute (severity, "type"),
-                      "cvss_base_v2")
-              == 0))
-        {
-          gchar * cvss_base;
-
-          nvti_add_tag (nvti, "cvss_base_vector", entity_text (severity));
-
-          cvss_base = g_strdup_printf ("%.1f",
-            get_cvss_score_from_base_metrics (entity_text (severity)));
-          nvti_set_cvss_base (nvti, cvss_base);
-          g_free (cvss_base);
-        }
-      else
-        g_warning ("%s: no severity", __func__);
-    }
-  else
-    g_warning ("%s: no severities", __func__);
-
   custom = entity_child (vt, "custom");
   if (custom == NULL)
     {
@@ -1379,6 +1467,12 @@ nvti_from_vt (entity_t vt)
       return NULL;
     }
   nvti_set_category (nvti, atoi (entity_text (category)));
+
+  deprecated = entity_child (custom, "deprecated");
+  if (deprecated)
+    {
+      nvti_add_tag (nvti, "deprecated", entity_text (deprecated));
+    }
 
   return nvti;
 }
@@ -1500,35 +1594,10 @@ update_nvts_from_vts (entity_t *get_vts_response,
        * All values are concatenated without a separator.
        */
       db_vts_hash
-        = sql_string ("WITH pref_str AS ("
-                      "  SELECT name,"
-                      "         substring(name, '^(.*?):') AS oid,"
-                      "         substring (name, '^.*?:([^:]+):') AS pref_id,"
-                      "         (substring (name, '^.*?:([^:]+):')"
-                      "          || substring (name,"
-                      "                        '^[^:]*:[^:]*:[^:]*:(.*)')"
-                      "          || value) AS pref"
-                      "  FROM nvt_preferences"
-                      " ),"
-                      " nvt_str AS ("
-                      "  SELECT (SELECT nvts.oid"
-                      "            || max(modification_time)"
-                      "            || coalesce (string_agg(pref_str.pref, ''"
-                      "                                    ORDER BY pref_id),"
-                      "                         ''))"
-                      "         AS vt_string"
-                      "  FROM nvts"
-                      "  LEFT JOIN pref_str ON nvts.oid = pref_str.oid"
-                      "  GROUP BY nvts.oid"
-                      "  ORDER BY nvts.oid ASC"
-                      " )"
-                      " SELECT encode"
-                      "         (digest"
-                      "           (coalesce (string_agg (nvt_str.vt_string, ''),"
-                      "                      ''),"
-                      "            'sha256'),"
-                      "          'hex')"
-                      " FROM nvt_str;");
+        = sql_string ("SELECT encode ("
+                      "  digest (vts_verification_str (), 'SHA256'),"
+                      "  'hex'"
+                      " );");
 
       if (strcmp (osp_vt_hash, db_vts_hash ? db_vts_hash : ""))
         {
@@ -1644,6 +1713,76 @@ check_preference_names (int trash, time_t modification_time)
 }
 
 /**
+ * @brief Initialise an NVT severity iterator.
+ *
+ * @param[in]  iterator  Iterator.
+ * @param[in]  oid       OID of NVT.
+ */
+void
+init_nvt_severity_iterator (iterator_t* iterator, const char *oid)
+{
+  gchar *quoted_oid;
+  quoted_oid = sql_quote (oid ? oid : "");
+
+  init_iterator (iterator,
+                 "SELECT type, origin, iso_time(date), score, value"
+                 " FROM vt_severities"
+                 " WHERE vt_oid = '%s'",
+                 quoted_oid);
+
+  g_free (quoted_oid);
+}
+
+/**
+ * @brief Gets the type from an NVT severity iterator.
+ *
+ * @param[in]  iterator  Iterator.
+ * 
+ * @return The type of the severity.
+ */
+DEF_ACCESS (nvt_severity_iterator_type, 0)
+
+/**
+ * @brief Gets the origin from an NVT severity iterator.
+ *
+ * @param[in]  iterator  Iterator.
+ * 
+ * @return The origin of the severity.
+ */
+DEF_ACCESS (nvt_severity_iterator_origin, 1);
+
+/**
+ * @brief Gets the date from an NVT severity iterator.
+ *
+ * @param[in]  iterator  Iterator.
+ * 
+ * @return The date of the severity in ISO time format.
+ */
+DEF_ACCESS (nvt_severity_iterator_date, 2);
+
+/**
+ * @brief Gets the score from an NVT severity iterator.
+ *
+ * @param[in]  iterator  Iterator.
+ * 
+ * @return The score of the severity.
+ */
+double
+nvt_severity_iterator_score (iterator_t *iterator)
+{
+  return iterator_double (iterator, 3);
+}
+
+/**
+ * @brief Gets the value from an NVT severity iterator.
+ *
+ * @param[in]  iterator  Iterator.
+ * 
+ * @return The value of the severity in ISO time format.
+ */
+DEF_ACCESS (nvt_severity_iterator_value, 4);
+
+/**
  * @brief Update VTs via OSP.
  *
  * @param[in]  update_socket         Socket to use to contact scanner.
@@ -1693,7 +1832,6 @@ update_nvt_cache_osp (const gchar *update_socket, gchar *db_feed_version,
   g_free (get_vts_opts.filter);
 
   osp_connection_close (connection);
-
   ret = update_nvts_from_vts (&vts, scanner_feed_version);
   free_entity (vts);
   if (ret)
@@ -1758,6 +1896,10 @@ update_nvt_cache_osp (const gchar *update_socket, gchar *db_feed_version,
       g_string_free (prefs_sql, TRUE);
     }
 
+  /* Update the cache of report counts. */
+
+  reports_clear_count_cache_dynamic ();
+
   /* Tell the main process to update its NVTi cache. */
   sql ("UPDATE %s.meta SET value = 1 WHERE name = 'update_nvti_cache';",
        sql_schema ());
@@ -1785,6 +1927,8 @@ update_nvt_cache_osp (const gchar *update_socket, gchar *db_feed_version,
 
   check_preference_names (0, old_nvts_last_modified);
   check_preference_names (1, old_nvts_last_modified);
+
+  check_whole_only_in_configs ();
 
   return 0;
 }
@@ -2026,7 +2170,7 @@ manage_rebuild (GSList *log_config, const db_conn_info_t *database)
 
   g_info ("   Rebuilding NVTs.");
 
-  switch (feed_lockfile_lock (&lockfile))
+  switch (feed_lockfile_lock_timeout (&lockfile))
     {
       case 1:
         printf ("A feed sync is already running.\n");
@@ -2054,4 +2198,48 @@ manage_rebuild (GSList *log_config, const db_conn_info_t *database)
   manage_option_cleanup ();
 
   return ret;
+}
+
+/**
+ * @brief Dump the string used to calculate the VTs verification hash
+ *  to stdout.
+ *
+ * @param[in]  log_config  Log configuration.
+ * @param[in]  database    Location of manage database.
+ *
+ * @return 0 success, -1 error, -2 database is wrong version,
+ *         -3 database needs to be initialised from server, -5 sync active.
+ */
+int
+manage_dump_vt_verification (GSList *log_config,
+                             const db_conn_info_t *database)
+{
+  int ret;
+  static lockfile_t lockfile;
+  char *verification_str;
+
+  switch (feed_lockfile_lock_timeout (&lockfile))
+    {
+      case 1:
+        printf ("A feed sync is already running.\n");
+        return -5;
+      case -1:
+        printf ("Error getting sync lock.\n");
+        return -1;
+    }
+
+  ret = manage_option_setup (log_config, database);
+  if (ret)
+    {
+      feed_lockfile_unlock (&lockfile);
+      return ret;
+    }
+
+  verification_str = sql_string ("SELECT vts_verification_str ();");
+  printf ("%s\n", verification_str);
+
+  feed_lockfile_unlock (&lockfile);
+  manage_option_cleanup ();
+
+  return 0;
 }

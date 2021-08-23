@@ -28,6 +28,12 @@ Create admin user USERNAME and exit.
 \fB-d, --database=\fINAME\fB\f1
 Use NAME as database for PostgreSQL.
 .TP
+\fB--db-host=\fIHOST\fB\f1
+Use HOST as database host or socket directory for PostgreSQL.
+.TP
+\fB--db-port=\fIPORT\fB\f1
+Use PORT as database port or socket extension for PostgreSQL.
+.TP
 \fB--delete-scanner=\fISCANNER-UUID\fB\f1
 Delete scanner SCANNER-UUID and exit.
 .TP
@@ -55,6 +61,9 @@ Disable task scheduling.
 \fB--feed-lock-path=\fIPATH\fB\f1
 Sets the path to the feed lock file.
 .TP
+\fB--feed-lock-timeout=\fITIMEOUT\fB\f1
+Sets the number of seconds to retry for if the feed is locked in contexts (like migration or rebuilds) that do not retry on their own (like automatic syncs). Defaults to 0 (no retry).
+.TP
 \fB-f, --foreground\f1
 Run in foreground.
 .TP
@@ -72,6 +81,9 @@ Have USERNAME inherit from deleted user.
 .TP
 \fB-a, --listen=\fIADDRESS\fB\f1
 Listen on ADDRESS.
+.TP
+\fB--ldap-debug\f1
+Enable debugging of LDAP authentication.
 .TP
 \fB--listen2=\fIADDRESS\fB\f1
 Listen also on ADDRESS.
@@ -113,7 +125,7 @@ Modify user's password and exit.
 Modify user's password and exit.
 .TP
 \fB--optimize=\fINAME\fB\f1
-Run an optimization: vacuum, analyze, cleanup-config-prefs, cleanup-port-names, cleanup-report-formats, cleanup-result-nvts, cleanup-result-severities, cleanup-schedule-times, migrate-relay-sensors, rebuild-report-cache or update-report-cache.
+Run an optimization: vacuum, add-feed-permissions, analyze, cleanup-config-prefs, cleanup-feed-permissions, cleanup-port-names, cleanup-report-formats, cleanup-result-nvts, cleanup-result-severities, cleanup-schedule-times, migrate-relay-sensors, rebuild-report-cache or update-report-cache.
 .TP
 \fB--osp-vt-update=\fISCANNER-SOCKET\fB\f1
 Unix socket for OSP NVT update. Defaults to the path of the 'OpenVAS Default' scanner if it is an absolute path.
@@ -145,7 +157,7 @@ Scanner credential for --create-scanner and --modify-scanner.
 Can be blank to unset or a credential UUID. If omitted, a new credential can be created instead.
 .TP
 \fB--scanner-host=\fISCANNER-HOST\fB\f1
-Scanner host for --create-scanner and --modify-scanner.
+Scanner host or socket for --create-scanner and --modify-scanner.
 .TP
 \fB--scanner-key-priv=\fISCANNER-KEY-PRIVATE\fB\f1
 Scanner private key path for --[create|modify]-scanner if --scanner-credential is not given.
@@ -164,14 +176,14 @@ Scanner type for --create-scanner and --modify-scanner.
 
 Either 'OpenVAS', 'OSP', 'GMP', 'OSP-Sensor' or a number as used in GMP.
 .TP
+\fB--scanner-connection-retry=\fINUMBER\fB\f1
+Number of auto retries if scanner connection is lost in a running task.
+.TP
 \fB--schedule-timeout=\fITIME\fB\f1
 Time out tasks that are more than TIME minutes overdue. -1 to disable, 0 for minimum time.
 .TP
 \fB--secinfo-commit-size=\fINUMBER\fB\f1
 During CERT and SCAP sync, commit updates to the database every NUMBER items, 0 for unlimited.
-.TP
-\fB--slave-commit-size=\fINUMBER\fB\f1
-During slave updates, commit after every NUMBER updated results and hosts, 0 for unlimited.
 .TP
 \fB-c, --unix-socket=\fIFILENAME\fB\f1
 Listen on UNIX socket at FILENAME.
@@ -190,6 +202,9 @@ Verify scanner SCANNER-UUID and exit.
 .TP
 \fB--version\f1
 Print version and exit.
+.TP
+\fB--vt-verification-collation=\fICOLLATION\fB\f1
+Set collation for VT verification to COLLATION, omit or leave empty to choose automatically. Should be 'ucs_default' if DB uses UTF-8 or 'C' for single-byte encodings. 
 .SH SIGNALS
 SIGHUP causes gvmd to rebuild the database with information from the Scanner (openvas).
 .SH EXAMPLES
@@ -197,23 +212,14 @@ gvmd --port 1241
 
 Serve GMP clients on port 1241 and connect to an OpenVAS scanner via the default OTP file socket.
 .SH SEE ALSO
-\fBopenvas(8)\f1, \fBgsad(8)\f1, \fBospd-openvas(8)\f1, \fBgreenbone-certdata-sync(8)\f1, \fBgreenbone-scapdata-sync(8)\f1,
+\fBopenvas(8)\f1, \fBgsad(8)\f1, \fBospd-openvas(8)\f1, \fBgreenbone-certdata-sync(8)\f1, \fBgreenbone-scapdata-sync(8)\f1, 
 .SH MORE INFORMATION
 The canonical places where you will find more information about the Greenbone Vulnerability Manager are: 
 
-.RS
-.UR https://community.greenbone.net
-Community Portal
-.UE
-.br
-.UR https://github.com/greenbone
-Development Platform
-.UE
-.br
-.UR https://www.greenbone.net
-Greenbone Website
-.UE
-.RE
+\fBhttps://community.greenbone.net\f1 (Community Portal) 
 
+\fBhttps://github.com/greenbone\f1 (Development Platform) 
+
+\fBhttps://www.greenbone.net\f1 (Greenbone Website) 
 .SH COPYRIGHT
 The Greenbone Vulnerability Manager is released under the GNU GPL, version 2, or, at your option, any later version. 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2012-2020 Greenbone Networks GmbH
+/* Copyright (C) 2012-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -78,6 +78,9 @@ sql_nquote (const char *, size_t);
 
 gchar *
 sql_quote (const char *);
+
+gchar *
+sql_ascii_escape_and_quote (const char *);
 
 gchar *
 sql_insert (const char *);

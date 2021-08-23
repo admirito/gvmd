@@ -39,6 +39,7 @@
 #include <fnmatch.h>
 #include <ftw.h>
 #include <glib/gstdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
@@ -82,6 +83,12 @@ manage_db_init_indexes (const gchar *);
 
 int
 manage_db_add_constraints (const gchar *);
+
+static int
+sync_cert ();
+
+static int
+update_scap (gboolean);
 
 
 /* Helpers. */
@@ -278,10 +285,10 @@ split_xml_file (gchar *path, const gchar *size, const gchar *tail)
                  WIFEXITED (ret) ? WEXITSTATUS (ret) : 0,
                  command);
       g_free (command);
-      g_free (previous_dir);
 
       if (chdir (previous_dir))
         g_warning ("%s: and failed to chdir back", __func__);
+      g_free (previous_dir);
 
       return NULL;
     }
@@ -320,8 +327,6 @@ typedef struct
  * @param[in]  max_chunk_size  Max chunk size.
  * @param[in]  open_sql        SQL to to start each statement.
  * @param[in]  close_sql       SQL to append to the end of each statement.
- *
- * @return Whether this is the first value in the statement.
  */
 static void
 inserts_init (inserts_t *inserts, int max_chunk_size, const gchar *open_sql,
@@ -544,14 +549,14 @@ DEF_ACCESS (cpe_info_iterator_title, GET_ITERATOR_COLUMN_COUNT);
 DEF_ACCESS (cpe_info_iterator_status, GET_ITERATOR_COLUMN_COUNT + 1);
 
 /**
- * @brief Get the Highest CVSS Score of all CVE's referencing this cpe.
+ * @brief Get the highest severity Score of all CVE's referencing this cpe.
  *
  * @param[in]  iterator  Iterator.
  *
- * @return The Highest CVSS of the CPE, or NULL if iteration is complete.
- *         Freed by cleanup_iterator.
+ * @return The highest severity score of the CPE,
+ *         or NULL if iteration is complete. Freed by cleanup_iterator.
  */
-DEF_ACCESS (cpe_info_iterator_max_cvss, GET_ITERATOR_COLUMN_COUNT + 3);
+DEF_ACCESS (cpe_info_iterator_severity, GET_ITERATOR_COLUMN_COUNT + 3);
 
 /**
  * @brief Get the Number of CVE's referencing this cpe from a CPE iterator.
@@ -616,13 +621,14 @@ init_cpe_cve_iterator (iterator_t *iterator, const char *cve, int ascending,
   assert (cve);
   quoted_cpe = sql_quote (cve);
   init_iterator (iterator,
-                 "SELECT id, name, cvss FROM cves WHERE id IN"
+                 "SELECT id, name, severity FROM cves"
+                 " WHERE id IN"
                  " (SELECT cve FROM affected_products"
                  "  WHERE cpe ="
                  "  (SELECT id FROM cpes WHERE name = '%s'))"
                  " ORDER BY %s %s;",
                  quoted_cpe,
-                 sort_field ? sort_field : "cvss DESC, name",
+                 sort_field ? sort_field : "severity DESC, name",
                  ascending ? "ASC" : "DESC");
   g_free (quoted_cpe);
 }
@@ -638,29 +644,28 @@ init_cpe_cve_iterator (iterator_t *iterator, const char *cve, int ascending,
 DEF_ACCESS (cve_iterator_name, 1);
 
 /**
- * @brief Get the CVSS from a CVE iterator.
+ * @brief Get the severity score from a CVE iterator.
  *
  * @param[in]  iterator  Iterator.
  *
- * @return The CVSS of the CVE, or NULL if iteration is complete.  Freed by
- *         cleanup_iterator.
+ * @return The CVSS score of the CVE,
+ *         or NULL if iteration is complete.  Freed by cleanup_iterator.
  */
-DEF_ACCESS (cve_iterator_cvss, 2);
+DEF_ACCESS (cve_iterator_cvss_score, 2);
 
 /**
- * @brief Get the short file name for an OVALDEF.
+ * @brief Get the CVSS score for a CVE.
  *
- * @param[in]  cve  Full OVAL identifier with file suffix.
+ * @param[in]  cve  CVE-ID of the CVE to get the score of.
  *
- * @return The file name of the OVAL definition relative to the SCAP directory,
- *         Freed by g_free.
+ * @return The CVSS score of the CVE.
  */
 gchar *
 cve_cvss_base (const gchar *cve)
 {
   gchar *quoted_cve, *ret;
   quoted_cve = sql_quote (cve);
-  ret = sql_string ("SELECT cvss FROM cves WHERE name = '%s'",
+  ret = sql_string ("SELECT severity FROM cves WHERE name = '%s'",
                     quoted_cve);
   g_free (quoted_cve);
   return ret;
@@ -752,46 +757,6 @@ DEF_ACCESS (cve_info_iterator_vector, GET_ITERATOR_COLUMN_COUNT);
 DEF_ACCESS (cve_info_iterator_complexity, GET_ITERATOR_COLUMN_COUNT + 1);
 
 /**
- * @brief Get the CVSS attack authentication for this CVE.
- *
- * @param[in]  iterator  Iterator.
- *
- * @return The CVSS attack authentication of this CVE, or NULL if iteration is
- *         complete. Freed by cleanup_iterator.
- */
-DEF_ACCESS (cve_info_iterator_authentication, GET_ITERATOR_COLUMN_COUNT + 2);
-
-/**
- * @brief Get the CVSS confidentiality impact for this CVE.
- *
- * @param[in]  iterator  Iterator.
- *
- * @return The CVSS confidentiality impact of this CVE, or NULL if iteration is
- *         complete. Freed by cleanup_iterator.
- */
-DEF_ACCESS (cve_info_iterator_confidentiality_impact, GET_ITERATOR_COLUMN_COUNT + 3);
-
-/**
- * @brief Get the CVSS integrity impact for this CVE.
- *
- * @param[in]  iterator  Iterator.
- *
- * @return The CVSS integrity impact of this CVE, or NULL if iteration is
- *         complete. Freed by cleanup_iterator.
- */
-DEF_ACCESS (cve_info_iterator_integrity_impact, GET_ITERATOR_COLUMN_COUNT + 4);
-
-/**
- * @brief Get the CVSS availability impact for this CVE.
- *
- * @param[in]  iterator  Iterator.
- *
- * @return The CVSS availability impact of this CVE, or NULL if iteration is
- *         complete. Freed by cleanup_iterator.
- */
-DEF_ACCESS (cve_info_iterator_availability_impact, GET_ITERATOR_COLUMN_COUNT + 5);
-
-/**
  * @brief Get a space separated list of CPEs affected by this CVE.
  *
  * @param[in]  iterator  Iterator.
@@ -799,17 +764,17 @@ DEF_ACCESS (cve_info_iterator_availability_impact, GET_ITERATOR_COLUMN_COUNT + 5
  * @return A space separated list of CPEs or NULL if iteration is
  *         complete. Freed by cleanup_iterator.
  */
-DEF_ACCESS (cve_info_iterator_products, GET_ITERATOR_COLUMN_COUNT + 6);
+DEF_ACCESS (cve_info_iterator_products, GET_ITERATOR_COLUMN_COUNT + 1);
 
 /**
- * @brief Get the CVSS base score for this CVE.
+ * @brief Get the severity score for this CVE.
  *
  * @param[in]  iterator  Iterator.
  *
- * @return The CVSS base score of this CVE, or NULL if iteration is
- *         complete. Freed by cleanup_iterator.
+ * @return The severity score of this CVE, or NULL if iteration is complete.
+ *         Freed by cleanup_iterator.
  */
-DEF_ACCESS (cve_info_iterator_cvss, GET_ITERATOR_COLUMN_COUNT + 7);
+DEF_ACCESS (cve_info_iterator_severity, GET_ITERATOR_COLUMN_COUNT + 2);
 
 /**
  * @brief Get the Summary for this CVE.
@@ -819,7 +784,7 @@ DEF_ACCESS (cve_info_iterator_cvss, GET_ITERATOR_COLUMN_COUNT + 7);
  * @return The Summary of this CVE, or NULL if iteration is
  *         complete. Freed by cleanup_iterator.
  */
-DEF_ACCESS (cve_info_iterator_description, GET_ITERATOR_COLUMN_COUNT + 8);
+DEF_ACCESS (cve_info_iterator_description, GET_ITERATOR_COLUMN_COUNT + 3);
 
 
 /* OVAL data. */
@@ -992,26 +957,27 @@ DEF_ACCESS (ovaldef_info_iterator_file, GET_ITERATOR_COLUMN_COUNT + 5);
 DEF_ACCESS (ovaldef_info_iterator_status, GET_ITERATOR_COLUMN_COUNT + 6);
 
 /**
- * @brief Get maximum CVSS score from an OVALDEF iterator.
+ * @brief Get maximum severity score from an OVALDEF iterator.
  *
  * @param[in]  iterator  Iterator.
  *
- * @return The maximum CVSS score of the OVAL definition,
+ * @return The maximum severity score of the OVAL definition,
  *         or NULL if iteration is complete.
  *         Freed by cleanup_iterator.
  */
-DEF_ACCESS (ovaldef_info_iterator_max_cvss, GET_ITERATOR_COLUMN_COUNT + 7);
+DEF_ACCESS (ovaldef_info_iterator_severity, GET_ITERATOR_COLUMN_COUNT + 7);
 
 /**
  * @brief Get number of referenced CVEs from an OVALDEF iterator.
  *
  * @param[in]  iterator  Iterator.
  *
- * @return The maximum CVSS score of the OVAL definition,
+ * @return The number of CVEs referenced CVEs of the OVAL definition,
  *         or NULL if iteration is complete.
  *         Freed by cleanup_iterator.
  */
 DEF_ACCESS (ovaldef_info_iterator_cve_refs, GET_ITERATOR_COLUMN_COUNT + 8);
+
 
 /**
  * @brief Get the short file name for an OVALDEF.
@@ -1067,7 +1033,7 @@ ovaldef_severity (const char *id)
 
   assert (id);
   quoted_id = sql_quote (id);
-  ret = sql_string ("SELECT max_cvss FROM ovaldefs WHERE uuid = '%s';",
+  ret = sql_string ("SELECT severity FROM ovaldefs WHERE uuid = '%s';",
                     quoted_id);
   g_free (quoted_id);
   return ret;
@@ -1261,15 +1227,15 @@ DEF_ACCESS (cert_bund_adv_info_iterator_cve_refs,
             GET_ITERATOR_COLUMN_COUNT + 2);
 
 /**
- * @brief Get the maximum CVSS from an CERT_BUND_ADV iterator.
+ * @brief Get the maximum severity score from an CERT_BUND_ADV iterator.
  *
  * @param[in]  iterator  Iterator.
  *
- * @return The maximum CVSS of the CVEs referenced in the CERT-Bund advisory,
- *         or NULL if iteration is complete.
+ * @return The maximum severity score of the CVEs referenced
+ *         in the CERT-Bund advisory, or NULL if iteration is complete.
  *         Freed by cleanup_iterator.
  */
-DEF_ACCESS (cert_bund_adv_info_iterator_max_cvss,
+DEF_ACCESS (cert_bund_adv_info_iterator_severity,
             GET_ITERATOR_COLUMN_COUNT + 3);
 
 /**
@@ -1466,15 +1432,15 @@ DEF_ACCESS (dfn_cert_adv_info_iterator_summary, GET_ITERATOR_COLUMN_COUNT + 1);
 DEF_ACCESS (dfn_cert_adv_info_iterator_cve_refs, GET_ITERATOR_COLUMN_COUNT + 2);
 
 /**
- * @brief Get the maximum CVSS from an DFN_CERT_ADV iterator.
+ * @brief Get the maximum severity score from an DFN_CERT_ADV iterator.
  *
  * @param[in]  iterator  Iterator.
  *
- * @return The maximum CVSS of the CVEs referenced in the DFN-CERT advisory,
- *         or NULL if iteration is complete.
+ * @return The maximum score of the CVEs referenced
+ *         in the DFN-CERT advisory, or NULL if iteration is complete.
  *         Freed by cleanup_iterator.
  */
-DEF_ACCESS (dfn_cert_adv_info_iterator_max_cvss, GET_ITERATOR_COLUMN_COUNT + 3);
+DEF_ACCESS (dfn_cert_adv_info_iterator_severity, GET_ITERATOR_COLUMN_COUNT + 3);
 
 /**
  * @brief Initialise CVE iterator, for CVEs referenced by a DFN-CERT advisory.
@@ -2725,15 +2691,11 @@ static int
 insert_cve_from_entry (element_t entry, element_t last_modified,
                        GHashTable *hashed_cpes, int *transaction_size)
 {
-  element_t published, summary, cvss, score, base_metrics;
-  element_t access_vector, access_complexity, authentication;
-  element_t confidentiality_impact, integrity_impact;
-  element_t availability_impact, list;
-  gchar *quoted_id, *quoted_summary;
-  gchar *quoted_access_vector, *quoted_access_complexity;
-  gchar *quoted_authentication, *quoted_confidentiality_impact;
-  gchar *quoted_integrity_impact, *quoted_availability_impact;
-  gchar *quoted_software, *id, *score_text;
+  gboolean cvss_is_v3;
+  element_t published, summary, cvss, score, base_metrics, cvss_vector, list;
+  double severity_dbl;
+  gchar *quoted_id, *quoted_summary, *quoted_cvss_vector;
+  gchar *quoted_software, *id;
   GString *software;
   gchar *software_unescaped, *software_tilde;
   int time_modified, time_published;
@@ -2756,24 +2718,31 @@ insert_cve_from_entry (element_t entry, element_t last_modified,
       return -1;
     }
 
-  cvss = element_child (entry, "vuln:cvss");
+  cvss = element_child (entry, "vuln:cvss3");
+  if (cvss == NULL)
+    {
+      cvss = element_child (entry, "vuln:cvss");
+      cvss_is_v3 = FALSE;
+    }
+  else
+     cvss_is_v3 = TRUE;
+  
   if (cvss == NULL)
     base_metrics = NULL;
   else
-    base_metrics = element_child (cvss, "cvss:base_metrics");
+    base_metrics = element_child (cvss,
+                                  cvss_is_v3 ? "cvss3:base_metrics"
+                                             : "cvss:base_metrics");
+
   if (base_metrics == NULL)
     {
       score = NULL;
-      access_vector = NULL;
-      access_complexity = NULL;
-      authentication = NULL;
-      confidentiality_impact = NULL;
-      integrity_impact = NULL;
-      availability_impact = NULL;
+      cvss_vector = NULL;
     }
   else
     {
-      score = element_child (base_metrics, "cvss:score");
+      score = element_child (base_metrics,
+                             cvss_is_v3 ? "cvss3:base-score" : "cvss:score");
       if (score == NULL)
         {
           g_warning ("%s: cvss:score missing", __func__);
@@ -2781,67 +2750,21 @@ insert_cve_from_entry (element_t entry, element_t last_modified,
           return -1;
         }
 
-      access_vector = element_child (base_metrics, "cvss:access-vector");
-      if (access_vector == NULL)
+      cvss_vector = element_child (base_metrics,
+                                   cvss_is_v3 ? "cvss3:vector-string"
+                                              : "cvss:vector-string");
+      if (cvss_vector == NULL)
         {
           g_warning ("%s: cvss:access-vector missing", __func__);
           g_free (id);
           return -1;
         }
-
-      access_complexity = element_child (base_metrics,
-                                        "cvss:access-complexity");
-      if (access_complexity == NULL)
-        {
-          g_warning ("%s: cvss:access-complexity missing",
-                     __func__);
-          g_free (id);
-          return -1;
-        }
-
-      authentication = element_child (base_metrics,
-                                     "cvss:authentication");
-      if (authentication == NULL)
-        {
-          g_warning ("%s: cvss:authentication missing",
-                     __func__);
-          g_free (id);
-          return -1;
-        }
-
-      confidentiality_impact = element_child
-                                (base_metrics,
-                                 "cvss:confidentiality-impact");
-      if (confidentiality_impact == NULL)
-        {
-          g_warning ("%s: cvss:confidentiality-impact missing",
-                     __func__);
-          g_free (id);
-          return -1;
-        }
-
-      integrity_impact = element_child
-                          (base_metrics,
-                           "cvss:integrity-impact");
-      if (integrity_impact == NULL)
-        {
-          g_warning ("%s: cvss:integrity-impact missing",
-                     __func__);
-          g_free (id);
-          return -1;
-        }
-
-      availability_impact = element_child
-                             (base_metrics,
-                              "cvss:availability-impact");
-      if (availability_impact == NULL)
-        {
-          g_warning ("%s: cvss:availability-impact missing",
-                     __func__);
-          g_free (id);
-          return -1;
-        }
     }
+
+  if (score == NULL)
+    severity_dbl = 0;
+  else
+    severity_dbl = atof (element_text (score));
 
   summary = element_child (entry, "vuln:summary");
   if (summary == NULL)
@@ -2874,15 +2797,7 @@ insert_cve_from_entry (element_t entry, element_t last_modified,
   quoted_id = sql_quote (id);
   g_free (id);
   quoted_summary = sql_quote_element_text (summary);
-  quoted_access_vector = sql_quote_element_text (access_vector);
-  quoted_access_complexity = sql_quote_element_text
-                              (access_complexity);
-  quoted_authentication = sql_quote_element_text (authentication);
-  quoted_confidentiality_impact = sql_quote_element_text
-                                   (confidentiality_impact);
-  quoted_integrity_impact = sql_quote_element_text (integrity_impact);
-  quoted_availability_impact = sql_quote_element_text
-                                (availability_impact);
+  quoted_cvss_vector = sql_quote_element_text (cvss_vector);
   software_unescaped = g_uri_unescape_string (software->str, NULL);
   g_string_free (software, TRUE);
   software_tilde = string_replace (software_unescaped,
@@ -2892,53 +2807,33 @@ insert_cve_from_entry (element_t entry, element_t last_modified,
   g_free (software_tilde);
   time_modified = parse_iso_time_element_text (last_modified);
   time_published = parse_iso_time_element_text (published);
-  score_text = score ? element_text (score) : g_strdup ("NULL");
   cve = sql_int64_0
          ("INSERT INTO scap2.cves"
           " (uuid, name, creation_time, modification_time,"
-          "  cvss, description, vector, complexity,"
-          "  authentication, confidentiality_impact,"
-          "  integrity_impact, availability_impact, products)"
+          "  severity, description, cvss_vector, products)"
           " VALUES"
-          " ('%s', '%s', %i, %i, %s, '%s', '%s', '%s', '%s',"
-          "  '%s', '%s', '%s', '%s')"
+          " ('%s', '%s', %i, %i,"
+          "  %0.1f, '%s', '%s', '%s')"
           " ON CONFLICT (uuid) DO UPDATE"
           " SET name = EXCLUDED.name,"
           "     creation_time = EXCLUDED.creation_time,"
           "     modification_time = EXCLUDED.modification_time,"
-          "     cvss = EXCLUDED.cvss,"
+          "     severity = EXCLUDED.severity,"
           "     description = EXCLUDED.description,"
-          "     vector = EXCLUDED.vector,"
-          "     complexity = EXCLUDED.complexity,"
-          "     authentication = EXCLUDED.authentication,"
-          "     confidentiality_impact"
-          "     = EXCLUDED.confidentiality_impact,"
-          "     integrity_impact = EXCLUDED.integrity_impact,"
-          "     availability_impact = EXCLUDED.availability_impact,"
+          "     cvss_vector = EXCLUDED.cvss_vector,"
           "     products = EXCLUDED.products"
           " RETURNING scap2.cves.id;",
           quoted_id,
           quoted_id,
           time_published,
           time_modified,
-          score_text,
+          severity_dbl,
           quoted_summary,
-          quoted_access_vector,
-          quoted_access_complexity,
-          quoted_authentication,
-          quoted_confidentiality_impact,
-          quoted_integrity_impact,
-          quoted_availability_impact,
+          quoted_cvss_vector,
           quoted_software);
   increment_transaction_size (transaction_size);
   g_free (quoted_summary);
-  g_free (quoted_access_vector);
-  g_free (quoted_access_complexity);
-  g_free (quoted_authentication);
-  g_free (quoted_confidentiality_impact);
-  g_free (quoted_integrity_impact);
-  g_free (quoted_availability_impact);
-  g_free (score_text);
+  g_free (quoted_cvss_vector);
 
   insert_cve_products (list, cve, time_published, time_modified,
                        hashed_cpes, transaction_size);
@@ -3560,9 +3455,9 @@ update_ovaldef_xml (gchar **file_and_date, int private)
                    " (uuid, name, comment, creation_time,"
                    "  modification_time, version, deprecated, def_class,"
                    "  title, description, xml_file, status,"
-                   "  max_cvss, cve_refs)"
+                   "  severity, cve_refs)"
                    " VALUES ('%s', '%s', '', %i, %i, %s, %i, '%s', '%s',"
-                   "         '%s', '%s', '%s', 0.0, %i)"
+                   "         '%s', '%s', '%s', 0, %i)"
                    " ON CONFLICT (uuid) DO UPDATE"
                    " SET name = EXCLUDED.name,"
                    "     comment = EXCLUDED.comment,"
@@ -3575,7 +3470,7 @@ update_ovaldef_xml (gchar **file_and_date, int private)
                    "     description = EXCLUDED.description,"
                    "     xml_file = EXCLUDED.xml_file,"
                    "     status = EXCLUDED.status,"
-                   "     max_cvss = 0.0,"
+                   "     severity = 0,"
                    "     cve_refs = EXCLUDED.cve_refs;",
                    quoted_id,
                    quoted_oval_id,
@@ -3845,7 +3740,7 @@ oval_files_free ()
   int index;
 
   index = 0;
-  while (index < oval_files->len)
+  while (oval_files && index < oval_files->len)
     {
       gchar **pair;
 
@@ -3980,7 +3875,6 @@ update_scap_ovaldefs (int private)
           if (g_error_matches (error, G_FILE_ERROR, G_FILE_ERROR_NOENT))
             {
               g_warning ("No user data directory '%s' found.", oval_dir);
-              g_free (oval_dir);
               g_error_free (error);
             }
           else
@@ -4306,17 +4200,24 @@ secinfo_feed_version_status (const char *feed_type)
 int
 check_cert_db_version ()
 {
-  switch (manage_cert_db_version ())
+  int db_version = manage_cert_db_version ();
+
+  if (db_version < GVMD_CERT_DATABASE_VERSION)
     {
-      case 0:
-      case 1:
-      case 2:
-      case 3:
-      case 4:
-      case 5:
-       g_info ("Reinitialization of the database necessary");
-       return manage_db_reinit ("cert");
-       break;
+      int ret;
+      g_info ("Reinitialization of the CERT database necessary");
+
+      ret = manage_db_reinit ("cert");
+      if (ret)
+        return ret;
+
+      return sync_cert ();
+    }
+  else if (db_version > GVMD_CERT_DATABASE_VERSION)
+    {
+      g_warning ("%s: CERT database version %d is newer than"
+                 " supported version %d",
+                 __func__, db_version, GVMD_CERT_DATABASE_VERSION);
     }
   return 0;
 }
@@ -4392,13 +4293,13 @@ update_cvss_dfn_cert (int updated_dfn_cert, int last_cert_update,
     {
       g_info ("Updating Max CVSS for DFN-CERT");
       sql ("UPDATE cert.dfn_cert_advs"
-           " SET max_cvss = (SELECT max (cvss)"
-           "                 FROM scap.cves"
-           "                 WHERE name"
-           "                 IN (SELECT cve_name"
-           "                     FROM cert.dfn_cert_cves"
-           "                     WHERE adv_id = dfn_cert_advs.id)"
-           "                 AND cvss != 0.0);");
+           " SET severity = (SELECT max (severity)"
+           "                  FROM scap.cves"
+           "                  WHERE name"
+           "                  IN (SELECT cve_name"
+           "                      FROM cert.dfn_cert_cves"
+           "                      WHERE adv_id = dfn_cert_advs.id)"
+           "                  AND severity != 0);");
 
       g_info ("Updating DFN-CERT CVSS max succeeded.");
     }
@@ -4423,13 +4324,13 @@ update_cvss_cert_bund (int updated_cert_bund, int last_cert_update,
     {
       g_info ("Updating Max CVSS for CERT-Bund");
       sql ("UPDATE cert.cert_bund_advs"
-           " SET max_cvss = (SELECT max (cvss)"
-           "                 FROM scap.cves"
-           "                 WHERE name"
-           "                       IN (SELECT cve_name"
-           "                           FROM cert.cert_bund_cves"
-           "                           WHERE adv_id = cert_bund_advs.id)"
-           "                 AND cvss != 0.0);");
+           " SET severity = (SELECT max (severity)"
+           "                  FROM scap.cves"
+           "                  WHERE name"
+           "                     IN (SELECT cve_name"
+           "                         FROM cert.cert_bund_cves"
+           "                         WHERE adv_id = cert_bund_advs.id)"
+           "                  AND severity != 0);");
 
       g_info ("Updating CERT-Bund CVSS max succeeded.");
     }
@@ -4445,6 +4346,7 @@ update_cvss_cert_bund (int updated_cert_bund, int last_cert_update,
 static int
 sync_cert ()
 {
+  int scap_db_version;
   int last_feed_update, last_cert_update, updated_dfn_cert;
   int updated_cert_bund;
 
@@ -4506,7 +4408,19 @@ sync_cert ()
 
   g_debug ("%s: update cvss", __func__);
 
-  if (manage_scap_loaded ())
+  /* Update CERT data that depends on SCAP. */
+  scap_db_version = manage_scap_db_version();
+
+  if (scap_db_version == -1)
+    g_info ("SCAP database does not exist (yet),"
+            " skipping CERT severity score update");
+  else if (scap_db_version < GVMD_SCAP_DATABASE_VERSION)
+    g_info ("SCAP database has to be migrated,"
+            " skipping CERT severity score update");
+  else if (scap_db_version > GVMD_SCAP_DATABASE_VERSION)
+    g_warning ("SCAP database is newer than supported version,"
+               " skipping CERT severity score update");
+  else
     {
       int last_scap_update;
 
@@ -4562,33 +4476,19 @@ manage_sync_cert (sigset_t *sigmask_current)
 int
 check_scap_db_version ()
 {
-  switch (manage_scap_db_version ())
+  int db_version = manage_scap_db_version ();
+
+  if (db_version < GVMD_SCAP_DATABASE_VERSION)
     {
-      /* TODO The sync script had a whole lot of migrators in here. */
-      case 0:
-      case 1:
-      case 2:
-      case 3:
-      case 4:
-      case 5:
-      case 6:
-      case 7:
-      case 8:
-      case 9:
-      case 10:
-      case 11:
-      case 12:
-      case 13:
-      case 14:
-       g_info ("Reinitialization of the database necessary");
-       return manage_db_reinit ("scap");
-       break;
-      case 15:
-       sql ("ALTER TABLE scap2.affected_products ADD UNIQUE (cve, cpe);");
-       sql ("UPDATE scap2.meta"
-            " SET value = '16'"
-            " WHERE name = 'database_version';");
-       break;
+      g_info ("Reinitialization of the SCAP database necessary");
+      manage_db_remove ("scap");
+      return update_scap (TRUE);
+    }
+  else if (db_version > GVMD_SCAP_DATABASE_VERSION)
+    {
+      g_warning ("%s: SCAP database version %d is newer than"
+                 " supported version %d",
+                 __func__, db_version, GVMD_SCAP_DATABASE_VERSION);
     }
   return 0;
 }
@@ -4657,22 +4557,22 @@ update_scap_cvss ()
 
   g_info ("Updating CVSS scores and CVE counts for CPEs");
   sql ("UPDATE scap2.cpes"
-       " SET (max_cvss, cve_refs)"
-       "     = (WITH affected_cves"
-       "        AS (SELECT cve FROM scap2.affected_products"
-       "            WHERE cpe=cpes.id)"
-       "        SELECT (SELECT max (cvss) FROM scap2.cves"
-       "                WHERE id IN (SELECT cve FROM affected_cves)),"
-       "               (SELECT count (*) FROM affected_cves));");
+       " SET (severity, cve_refs)"
+       "       = (WITH affected_cves"
+       "          AS (SELECT cve FROM scap2.affected_products"
+       "              WHERE cpe=cpes.id)"
+       "          SELECT (SELECT max (severity) FROM scap2.cves"
+       "                  WHERE id IN (SELECT cve FROM affected_cves)),"
+       "                 (SELECT count (*) FROM affected_cves));");
 
   g_info ("Updating CVSS scores for OVAL definitions");
   sql ("UPDATE scap2.ovaldefs"
-       " SET max_cvss = (SELECT max (cvss)"
+       " SET severity = (SELECT max (severity)"
        "                 FROM scap2.cves"
        "                 WHERE id IN (SELECT cve"
        "                              FROM scap2.affected_ovaldefs"
        "                              WHERE ovaldef=ovaldefs.id)"
-       "                 AND cvss != 0.0);");
+       "                 AND severity != 0);");
 }
 
 /**
@@ -4706,6 +4606,8 @@ update_scap_placeholders ()
 static int
 update_scap_end ()
 {
+  int cert_db_version;
+
   g_debug ("%s: update timestamp", __func__);
 
   if (update_scap_timestamp ())
@@ -4728,8 +4630,18 @@ update_scap_end ()
     sql ("ALTER SCHEMA scap2 RENAME TO scap;");
 
   /* Update CERT data that depends on SCAP. */
+  cert_db_version = manage_cert_db_version();
 
-  if (manage_cert_loaded ())
+  if (cert_db_version == -1)
+    g_info ("CERT database does not exist (yet),"
+            " skipping CERT severity score update");
+  else if (cert_db_version < GVMD_CERT_DATABASE_VERSION)
+    g_info ("CERT database has to be migrated,"
+            " skipping CERT severity score update");
+  else if (cert_db_version > GVMD_CERT_DATABASE_VERSION)
+    g_warning ("CERT database is newer than supported version,"
+               " skipping CERT severity score update");
+  else
     {
       int last_cert_update, last_scap_update;
 
@@ -5013,7 +4925,7 @@ rebuild_scap ()
   int ret = -1;
   lockfile_t lockfile;
 
-  ret = feed_lockfile_lock (&lockfile);
+  ret = feed_lockfile_lock_timeout (&lockfile);
   if (ret == 1)
     return 2;
   else if (ret)

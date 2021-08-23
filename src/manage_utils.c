@@ -63,7 +63,7 @@ current_offset (const char *zone)
   gchar *tz;
   long offset;
   time_t now;
-  struct tm *now_broken;
+  struct tm now_broken;
 
   if (zone == NULL)
     return 0;
@@ -83,8 +83,7 @@ current_offset (const char *zone)
   tzset ();
 
   time (&now);
-  now_broken = localtime (&now);
-  if (now_broken == NULL)
+  if (localtime_r (&now, &now_broken) == NULL)
     {
       g_warning ("%s: localtime failed", __func__);
       if (tz != NULL)
@@ -101,7 +100,7 @@ current_offset (const char *zone)
       return 0;
     }
   tzset ();
-  offset = - (now - mktime (now_broken));
+  offset = - (now - mktime (&now_broken));
 
   /* Revert to stored TZ. */
   if (tz)
@@ -131,14 +130,15 @@ current_offset (const char *zone)
 time_t
 add_months (time_t time, int months)
 {
-  struct tm *broken = localtime (&time);
-  if (broken == NULL)
+  struct tm broken;
+  
+  if (localtime_r (&time, &broken) == NULL)
     {
       g_warning ("%s: localtime failed", __func__);
       return 0;
     }
-  broken->tm_mon += months;
-  return mktime (broken);
+  broken.tm_mon += months;
+  return mktime (&broken);
 }
 
 /**
@@ -192,89 +192,63 @@ manage_count_hosts_max (const char *given_hosts, const char *exclude_hosts,
 }
 
 /**
- * @brief Get the minimum severity for a severity level and class.
+ * @brief Get the minimum severity for a severity level.
  *
  * This function has a database equivalent in manage_pg_server.c.
  * These two functions must stay in sync.
  *
  * @param[in] level  The name of the severity level.
- * @param[in] class  The severity class, NULL to get from current user setting.
  *
  * @return The minimum severity.
  */
 double
-level_min_severity (const char *level, const char *class)
+level_min_severity (const char *level)
 {
   if (strcasecmp (level, "Log") == 0)
     return SEVERITY_LOG;
   else if (strcasecmp (level, "False Positive") == 0)
     return SEVERITY_FP;
-  else if (strcasecmp (level, "Debug") == 0)
-    return SEVERITY_DEBUG;
   else if (strcasecmp (level, "Error") == 0)
     return SEVERITY_ERROR;
-  else if (strcasecmp (class, "pci-dss") == 0)
-    {
-      if (strcasecmp (level, "high") == 0)
-        return 4.0;
-      else
-        return SEVERITY_UNDEFINED;
-    }
+
+  if (strcasecmp (level, "high") == 0)
+    return 7.0;
+  else if (strcasecmp (level, "medium") == 0)
+    return 4.0;
+  else if (strcasecmp (level, "low") == 0)
+    return 0.1;
   else
-    {
-      /* NIST/BSI. */
-      if (strcasecmp (level, "high") == 0)
-        return 7.0;
-      else if (strcasecmp (level, "medium") == 0)
-        return 4.0;
-      else if (strcasecmp (level, "low") == 0)
-        return 0.1;
-      else
-        return SEVERITY_UNDEFINED;
-    }
+    return SEVERITY_UNDEFINED;
 }
 
 /**
- * @brief Get the minimum severity for a severity level and class.
+ * @brief Get the maximum severity for a severity level.
  *
  * This function has a database equivalent in manage_pg_server.c.
  * These two functions must stay in sync.
  *
  * @param[in] level  The name of the severity level.
- * @param[in] class  The severity class.
  *
- * @return The minimum severity.
+ * @return The maximunm severity.
  */
 double
-level_max_severity (const char *level, const char *class)
+level_max_severity (const char *level)
 {
   if (strcasecmp (level, "Log") == 0)
     return SEVERITY_LOG;
   else if (strcasecmp (level, "False Positive") == 0)
     return SEVERITY_FP;
-  else if (strcasecmp (level, "Debug") == 0)
-    return SEVERITY_DEBUG;
   else if (strcasecmp (level, "Error") == 0)
     return SEVERITY_ERROR;
-  else if (strcasecmp (class, "pci-dss") == 0)
-    {
-      if (strcasecmp (level, "high") == 0)
-        return 10.0;
-      else
-        return SEVERITY_UNDEFINED;
-    }
+
+  if (strcasecmp (level, "high") == 0)
+    return 10.0;
+  else if (strcasecmp (level, "medium") == 0)
+    return 6.9;
+  else if (strcasecmp (level, "low") == 0)
+    return 3.9;
   else
-    {
-      /* NIST/BSI. */
-      if (strcasecmp (level, "high") == 0)
-        return 10.0;
-      else if (strcasecmp (level, "medium") == 0)
-        return 6.9;
-      else if (strcasecmp (level, "low") == 0)
-        return 3.9;
-      else
-        return SEVERITY_UNDEFINED;
-    }
+    return SEVERITY_UNDEFINED;
 }
 
 /**
@@ -717,7 +691,7 @@ icalcomponent *
 icalendar_from_string (const char *ical_string, icaltimezone *zone,
                        gchar **error)
 {
-  icalcomponent *ical_new, *ical_parsed;
+  icalcomponent *ical_new, *ical_parsed, *timezone_component;
   icalproperty *error_prop;
   GString *warnings_buffer;
   int vevent_count = 0;
@@ -754,7 +728,9 @@ icalendar_from_string (const char *ical_string, icaltimezone *zone,
   icalcomponent_add_property (ical_new,
                               icalproperty_new_prodid (GVM_PRODID));
 
-  icalcomponent_add_component (ical_new, icaltimezone_get_component (zone));
+  timezone_component
+    = icalcomponent_new_clone (icaltimezone_get_component (zone));
+  icalcomponent_add_component (ical_new, timezone_component);
 
   switch (icalcomponent_isa (ical_parsed))
     {

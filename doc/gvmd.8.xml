@@ -3,7 +3,7 @@
 <?xml-stylesheet type="text/xsl" href="/usr/share/xmltoman/xmltoman.xsl" ?>
 
 <!--
-Copyright (C) 2009-2020 Greenbone Networks GmbH
+Copyright (C) 2009-2021 Greenbone Networks GmbH
 
 SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -150,6 +150,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       </optdesc>
     </option>
     <option>
+      <p><opt>--feed-lock-timeout=<arg>TIMEOUT</arg></opt></p>
+      <optdesc>
+        <p>
+          Sets the number of seconds to retry for if the feed is locked
+          in contexts (like migration or rebuilds) that do not retry
+          on their own (like automatic syncs). Defaults to 0 (no retry).
+        </p>
+      </optdesc>
+    </option>
+    <option>
       <p><opt>-f, --foreground</opt></p>
       <optdesc>
         <p>Run in foreground.</p>
@@ -183,6 +193,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       <p><opt>-a, --listen=<arg>ADDRESS</arg></opt></p>
       <optdesc>
         <p>Listen on ADDRESS.</p>
+      </optdesc>
+    </option>
+    <option>
+      <p><opt>--ldap-debug</opt></p>
+      <optdesc>
+        <p>Enable debugging of LDAP authentication.</p>
       </optdesc>
     </option>
     <option>
@@ -267,7 +283,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <option>
       <p><opt>--optimize=<arg>NAME</arg></opt></p>
       <optdesc>
-        <p>Run an optimization: vacuum, analyze, cleanup-config-prefs,
+        <p>Run an optimization: vacuum, add-feed-permissions, analyze,
+           cleanup-config-prefs, cleanup-feed-permissions,
            cleanup-port-names, cleanup-report-formats, cleanup-result-nvts,
            cleanup-result-severities, cleanup-schedule-times,
            migrate-relay-sensors, rebuild-report-cache
@@ -339,7 +356,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <option>
       <p><opt>--scanner-host=<arg>SCANNER-HOST</arg></opt></p>
       <optdesc>
-        <p>Scanner host for --create-scanner and --modify-scanner.</p>
+        <p>Scanner host or socket for --create-scanner and --modify-scanner.</p>
       </optdesc>
     </option>
     <option>
@@ -377,6 +394,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       </optdesc>
     </option>
     <option>
+      <p><opt>--scanner-connection-retry=<arg>NUMBER</arg></opt></p>
+      <optdesc>
+        <p>Number of auto retries if scanner connection is lost
+           in a running task.</p>
+      </optdesc>
+    </option>    
+    <option>
       <p><opt>--schedule-timeout=<arg>TIME</arg></opt></p>
       <optdesc>
         <p>Time out tasks that are more than TIME minutes overdue.
@@ -388,13 +412,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       <optdesc>
         <p>During CERT and SCAP sync, commit updates to the database every
            NUMBER items, 0 for unlimited.</p>
-      </optdesc>
-    </option>
-    <option>
-      <p><opt>--slave-commit-size=<arg>NUMBER</arg></opt></p>
-      <optdesc>
-        <p>During slave updates, commit after every NUMBER updated results and
-           hosts, 0 for unlimited.</p>
       </optdesc>
     </option>
     <option>
@@ -431,6 +448,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       <p><opt>--version</opt></p>
       <optdesc>
         <p>Print version and exit.</p>
+      </optdesc>
+    </option>
+    <option>
+      <p><opt>--vt-verification-collation=<arg>COLLATION</arg></opt></p>
+      <optdesc>
+        <p>
+          Set collation for VT verification to COLLATION, omit or leave empty
+          to choose automatically. Should be 'ucs_default' if DB uses UTF-8
+          or 'C' for single-byte encodings.
+        </p>
       </optdesc>
     </option>
   </options>

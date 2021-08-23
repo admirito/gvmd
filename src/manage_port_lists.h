@@ -1,4 +1,4 @@
-/* Copyright (C) 2020 Greenbone Networks GmbH
+/* Copyright (C) 2020-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -93,11 +93,6 @@ trash_port_list_writable (port_list_t);
 
 int
 port_list_writable (port_list_t);
-
-#if 0
-int
-trash_port_list_in_use (port_list_t);
-#endif
 
 int
 trash_port_list_readable_uuid (const gchar *);

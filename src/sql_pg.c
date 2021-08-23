@@ -1,4 +1,4 @@
-/* Copyright (C) 2014-2020 Greenbone Networks GmbH
+/* Copyright (C) 2014-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -280,12 +280,14 @@ sql_open (const db_conn_info_t *database)
   conn_info = g_strdup_printf ("dbname='%s'"
                                " host='%s'"
                                " port='%s'"
+                               " user='%s'"
                                " application_name='%s'",
                                database->name
                                 ? database->name
                                 : sql_default_database (),
                                database->host ? database->host : "",
                                database->port ? database->port : "",
+                               database->user ? database->user : "",
                                "gvmd");
   conn = PQconnectStart (conn_info);
   g_free (conn_info);
@@ -412,7 +414,6 @@ sql_close ()
 void
 sql_close_fork ()
 {
-  // FIX PQfinish?
   conn = NULL;
 }
 
@@ -484,8 +485,6 @@ sql_exec_internal (int retry, sql_stmt_t *stmt)
 
   if (stmt->executed == 0)
     {
-      // FIX retry?
-
       result = PQexecParams (conn,
                              stmt->sql,
                              stmt->param_values->len,
@@ -524,7 +523,15 @@ sql_exec_internal (int retry, sql_stmt_t *stmt)
               g_warning ("%s: SQL: %s", __func__, stmt->sql);
               return -4;
             }
-
+            else if (sqlstate && (strcmp (sqlstate, "40P01") == 0))
+              {
+                /* deadlock_detected */
+                g_debug ("%s: deadlock: %s",
+                         __func__,
+                         PQresultErrorMessage (result));
+                g_debug ("%s: SQL: %s", __func__, stmt->sql);
+                return -5;
+              }
           if (log_errors)
             {
               g_warning ("%s: PQexec failed: %s (%i)",
@@ -533,11 +540,6 @@ sql_exec_internal (int retry, sql_stmt_t *stmt)
                          PQresultStatus (result));
               g_warning ("%s: SQL: %s", __func__, stmt->sql);
             }
-#if 0
-          // FIX ?
-          PQclear (result);
-          PQfinish (conn);
-#endif
           return -1;
         }
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2010-2020 Greenbone Networks GmbH
+/* Copyright (C) 2010-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -75,10 +75,8 @@
  * @brief Filter columns for CVE iterator.
  */
 #define CVE_INFO_ITERATOR_FILTER_COLUMNS                         \
- { GET_ITERATOR_FILTER_COLUMNS, "vector",                        \
-   "complexity", "authentication", "confidentiality_impact",     \
-   "integrity_impact", "availability_impact", "products",        \
-   "cvss", "description", "severity", "published", NULL }
+ { GET_ITERATOR_FILTER_COLUMNS, "cvss_vector", "products",       \
+   "description", "published", "severity", NULL }
 
 /**
  * @brief CVE iterator columns.
@@ -88,16 +86,10 @@
    GET_ITERATOR_COLUMNS_PREFIX (""),                            \
    { "''", "_owner", KEYWORD_TYPE_STRING },                     \
    { "0", NULL, KEYWORD_TYPE_INTEGER },                         \
-   { "vector", NULL, KEYWORD_TYPE_STRING },                     \
-   { "complexity", NULL, KEYWORD_TYPE_STRING },                 \
-   { "authentication", NULL, KEYWORD_TYPE_STRING },             \
-   { "confidentiality_impact", NULL, KEYWORD_TYPE_STRING },     \
-   { "integrity_impact", NULL, KEYWORD_TYPE_STRING },           \
-   { "availability_impact", NULL, KEYWORD_TYPE_STRING },        \
+   { "cvss_vector", NULL, KEYWORD_TYPE_STRING },                \
    { "products", NULL, KEYWORD_TYPE_STRING },                   \
-   { "cvss", NULL, KEYWORD_TYPE_DOUBLE },                       \
+   { "severity", NULL, KEYWORD_TYPE_DOUBLE },                   \
    { "description", NULL, KEYWORD_TYPE_STRING },                \
-   { "cvss", "severity", KEYWORD_TYPE_DOUBLE },                 \
    { "creation_time", "published", KEYWORD_TYPE_INTEGER },      \
    { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                         \
  }
@@ -107,8 +99,8 @@
  */
 #define CPE_INFO_ITERATOR_FILTER_COLUMNS                    \
  { GET_ITERATOR_FILTER_COLUMNS, "title", "status",          \
-   "deprecated_by_id", "max_cvss", "cves", "nvd_id",        \
-   "severity", NULL }
+   "deprecated_by_id", "severity", "cves", "nvd_id",        \
+   NULL }
 
 /**
  * @brief CPE iterator columns.
@@ -121,10 +113,9 @@
    { "title", NULL, KEYWORD_TYPE_STRING },                      \
    { "status", NULL, KEYWORD_TYPE_STRING },                     \
    { "deprecated_by_id", NULL, KEYWORD_TYPE_INTEGER },          \
-   { "max_cvss", NULL, KEYWORD_TYPE_DOUBLE },                   \
+   { "severity", NULL, KEYWORD_TYPE_DOUBLE },                   \
    { "cve_refs", "cves", KEYWORD_TYPE_INTEGER },                \
    { "nvd_id", NULL, KEYWORD_TYPE_INTEGER },                    \
-   { "max_cvss", "severity", KEYWORD_TYPE_DOUBLE },             \
    { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                         \
  }
 
@@ -134,7 +125,8 @@
 #define OVALDEF_INFO_ITERATOR_FILTER_COLUMNS                \
  { GET_ITERATOR_FILTER_COLUMNS, "version", "deprecated",    \
    "class", "title", "description", "file",                 \
-   "status", "max_cvss", "cves", "severity", NULL }
+   "status", "cves", "severity",                            \
+   NULL }
 
 /**
  * @brief OVALDEF iterator columns.
@@ -151,9 +143,8 @@
    { "description", NULL, KEYWORD_TYPE_STRING },                 \
    { "xml_file", "file", KEYWORD_TYPE_STRING },                  \
    { "status", NULL, KEYWORD_TYPE_STRING },                      \
-   { "max_cvss", NULL, KEYWORD_TYPE_DOUBLE },                    \
+   { "severity", NULL, KEYWORD_TYPE_DOUBLE },                    \
    { "cve_refs", "cves", KEYWORD_TYPE_INTEGER },                 \
-   { "max_cvss", "severity", KEYWORD_TYPE_DOUBLE },              \
    { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                          \
  }
 
@@ -161,8 +152,8 @@
  * @brief Filter columns for CERT_BUND_ADV iterator.
  */
 #define CERT_BUND_ADV_INFO_ITERATOR_FILTER_COLUMNS           \
- { GET_ITERATOR_FILTER_COLUMNS, "title", "summary",         \
-   "cves", "max_cvss", "severity", NULL }
+ { GET_ITERATOR_FILTER_COLUMNS, "title", "summary",          \
+   "cves", "severity", NULL }
 
 /**
  * @brief CERT_BUND_ADV iterator columns.
@@ -175,8 +166,7 @@
    { "title", NULL, KEYWORD_TYPE_STRING },                       \
    { "summary", NULL, KEYWORD_TYPE_STRING },                     \
    { "cve_refs", "cves", KEYWORD_TYPE_INTEGER },                 \
-   { "max_cvss", NULL, KEYWORD_TYPE_DOUBLE },                    \
-   { "max_cvss", "severity", KEYWORD_TYPE_DOUBLE },              \
+   { "severity", NULL, KEYWORD_TYPE_DOUBLE },                    \
    { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                          \
  }
 
@@ -185,7 +175,7 @@
  */
 #define DFN_CERT_ADV_INFO_ITERATOR_FILTER_COLUMNS           \
  { GET_ITERATOR_FILTER_COLUMNS, "title", "summary",         \
-   "cves", "max_cvss", "severity", NULL }
+   "cves", "severity", NULL }
 
 /**
  * @brief DFN_CERT_ADV iterator columns.
@@ -198,8 +188,7 @@
    { "title", NULL, KEYWORD_TYPE_STRING },                       \
    { "summary", NULL, KEYWORD_TYPE_STRING },                     \
    { "cve_refs", "cves", KEYWORD_TYPE_INTEGER },                 \
-   { "max_cvss", NULL, KEYWORD_TYPE_DOUBLE },                    \
-   { "max_cvss", "severity", KEYWORD_TYPE_DOUBLE },              \
+   { "severity", NULL, KEYWORD_TYPE_DOUBLE },                    \
    { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                          \
  }
 

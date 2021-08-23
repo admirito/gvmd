@@ -239,16 +239,6 @@ verify_signature (const gchar *installer, gsize installer_size,
         *trust = TRUST_NO;
       else
         {
-#if 0
-          g_debug ("%s: failed to run gpgv(%s): %d (WIF %i, WEX %i)",
-                   __func__, get_trustedkeys_name (),
-                   exit_status,
-                   WIFEXITED (exit_status),
-                   WEXITSTATUS (exit_status));
-          g_debug ("%s: stdout: %s", __func__, standard_out);
-          g_debug ("%s: stderr: %s", __func__, standard_err);
-          ret = -1;
-#endif
           /* This can be caused by the contents of the signature file, so
            * always return success. */
           *trust = TRUST_UNKNOWN;
@@ -2853,7 +2843,7 @@ init_report_format_alert_iterator (iterator_t* iterator,
   get.trash = 0;
   permissions = make_array ();
   array_add (permissions, g_strdup ("get_alerts"));
-  available = acl_where_owned ("alert", &get, 1, "any", 0, permissions,
+  available = acl_where_owned ("alert", &get, 1, "any", 0, permissions, 0,
                                &with_clause);
   array_free (permissions);
 
@@ -3449,9 +3439,8 @@ run_report_format_script (gchar *report_format_id,
                 }
 
               ret = system (command);
-              /* Ignore the shell command exit status, because we've not
-                * specified what it must be in the past. */
-              if (ret == -1)
+              /* Report scripts should return 0 since version 21.04 */
+              if (ret == -1 || WIFEXITED(ret) == 0 || WEXITSTATUS(ret))
                 {
                   g_warning ("%s (child):"
                               " system failed with ret %i, %i, %s",
@@ -3485,7 +3474,6 @@ run_report_format_script (gchar *report_format_id,
 
               /* Parent on success.  Wait for child, and check result. */
 
-              g_free (command);
 
               while (waitpid (pid, &status, 0) < 0)
                 {
@@ -3524,6 +3512,7 @@ run_report_format_script (gchar *report_format_id,
                         g_warning ("%s: and chdir failed",
                                     __func__);
                       g_free (previous_dir);
+                      g_free (command);
                       return -1;
                   }
               else
@@ -3534,9 +3523,11 @@ run_report_format_script (gchar *report_format_id,
                   if (chdir (previous_dir))
                     g_warning ("%s: and chdir failed",
                                 __func__);
+                  g_free (command);
                   g_free (previous_dir);
                   return -1;
                 }
+              g_free (command);
 
               /* Child succeeded, continue to process result. */
 
@@ -3549,9 +3540,8 @@ run_report_format_script (gchar *report_format_id,
       /* Just run the command as the current user. */
 
       ret = system (command);
-      /* Ignore the shell command exit status, because we've not
-        * specified what it must be in the past. */
-      if (ret == -1)
+      /* Report scripts should return 0 since version 21.04 */
+      if (ret == -1 || WIFEXITED(ret) == 0 || WEXITSTATUS(ret))
         {
           g_warning ("%s: system failed with ret %i, %i, %s",
                       __func__,
@@ -3593,12 +3583,11 @@ run_report_format_script (gchar *report_format_id,
  *
  * @return 0 success, -1 error.
  */
-static int
+int
 print_report_xml_end (gchar *xml_start, gchar *xml_full,
                       report_format_t report_format)
 {
   FILE *out;
-  iterator_t params;
 
   if (gvm_file_copy (xml_start, xml_full) == FALSE)
     {
@@ -3617,16 +3606,20 @@ print_report_xml_end (gchar *xml_start, gchar *xml_full,
 
   /* A bit messy having report XML here, but simplest for now. */
 
-  PRINT (out, "<report_format>");
-  init_report_format_param_iterator (&params, report_format, 0, 1, NULL);
-  while (next (&params))
-    PRINT (out,
-           "<param><name>%s</name><value>%s</value></param>",
-           report_format_param_iterator_name (&params),
-           report_format_param_iterator_value (&params));
-  cleanup_iterator (&params);
+  if (report_format > 0)
+    {
+      iterator_t params;
+      PRINT (out, "<report_format>");
+      init_report_format_param_iterator (&params, report_format, 0, 1, NULL);
+      while (next (&params))
+        PRINT (out,
+               "<param><name>%s</name><value>%s</value></param>",
+               report_format_param_iterator_name (&params),
+               report_format_param_iterator_value (&params));
+      cleanup_iterator (&params);
 
-  PRINT (out, "</report_format>");
+      PRINT (out, "</report_format>");
+    }
 
   PRINT (out, "</report>");
 
@@ -3854,13 +3847,15 @@ apply_report_format (gchar *report_format_id,
   while (temp_dirs)
     {
       gvm_file_remove_recurse (temp_dirs->data);
-      g_free (temp_dirs->data);
-      temp_dirs = g_list_remove (temp_dirs, temp_dirs->data);
+      gpointer data = temp_dirs->data;
+      temp_dirs = g_list_remove (temp_dirs, data);
+      g_free (data);
     }
   while (temp_files)
     {
-      g_free (temp_files->data);
-      temp_files = g_list_remove (temp_files, temp_files->data);
+      gpointer data = temp_files->data;
+      temp_files = g_list_remove (temp_files, data);
+      g_free (data);
     }
   g_free (files_xml);
   g_hash_table_destroy (subreports);

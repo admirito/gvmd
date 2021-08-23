@@ -7,12 +7,11 @@ necessary to install dependent development packages.
 ## Prerequisites for Greenbone Vulnerability Manager
 
 Prerequisites:
-
 * GCC (Debian package: gcc)
 * cmake >= 3.0 (Debian package: cmake)
 * glib-2.0 >= 2.42 (Debian package: libglib2.0-dev)
 * gnutls >= 3.2.15 (Debian package: libgnutls28-dev)
-* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 20.08.1 ([gvm-libs](https://github.com/greenbone/gvm-libs/tree/gvm-libs-20.08) component)
+* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 21.4.1 ([gvm-libs](https://github.com/greenbone/gvm-libs/tree/gvm-libs-21.04) component)
 * PostgreSQL database >= 9.6 (Debian packages: libpq-dev postgresql-server-dev-11)
 * pkg-config (Debian package: pkg-config)
 * libical >= 1.0.0 (Debian package: libical-dev)
@@ -145,22 +144,13 @@ Certificates`.
     grant dba to mattm;    # mattm is the user created in step 3
     ```
 
-5.  Create DB extensions (also necessary when the database got dropped).
-
-    ```sh
-    sudo -u postgres bash  # if you logged out after step 4
-    psql gvmd
-    create extension "uuid-ossp";
-    create extension "pgcrypto";
-    ```
-
-6.  Make Postgres aware of the gvm libraries if not installed
+5.  Make Postgres aware of the gvm libraries if not installed
     in a ld-aware directory. For example create file `/etc/ld.so.conf.d/gvm.conf`
     with appropriate path and then run `ldconfig`.
 
-7.  Run Manager as usual.
+6.  Run Manager as usual.
 
-8. To run SQL on the database.
+7. To run SQL on the database.
 
     ```sh
     psql gvmd
@@ -360,12 +350,30 @@ supported values for `<name>` are:
   For more information see the documentation for the `ANALYZE` command of the
   database back-end you are using.
 
+- `add-feed-permissions`
+
+  This option adds new read permissions on all feed data objects for the roles
+  defined in the "Feed Import Roles" setting if they do not exist.
+  The new permissions will be owned by the same user as the data objects,
+  usually the feed import owner.
+
+  This does not affect the command permissions, any permissions created for
+  users or groups, or other types of permissions like modify or delete.
+
 - `cleanup-config-prefs`
 
   This option removes duplicate preferences from Scan Configs and corrects
   some broken preference values.  For the latter, the NVT preferences in the
   database must be up to date (if Manager and Scanner are both running, then
   this should happen automatically).
+
+- `cleanup-feed-permissions`
+
+  This option removes permissions on all feed data objects for all roles
+  that are not defined in the "Feed Import Roles" setting.
+
+  This does not affect the command permissions, any permissions created for
+  users or groups, or other types of permissions like modify or delete.
 
 - `cleanup-port-names`
 

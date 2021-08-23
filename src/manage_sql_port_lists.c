@@ -1,4 +1,4 @@
-/* Copyright (C) 2020 Greenbone Networks GmbH
+/* Copyright (C) 2020-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -1304,7 +1304,6 @@ create_port_list_internal (int check_access, const char *id, const char *name,
       array_free (ranges);
       if (ret)
         {
-          g_free (quoted_name);
           sql_rollback ();
           return ret;
         }
@@ -2318,7 +2317,7 @@ init_port_list_target_iterator (iterator_t* iterator, port_list_t port_list,
   get.trash = 0;
   permissions = make_array ();
   array_add (permissions, g_strdup ("get_targets"));
-  available = acl_where_owned ("target", &get, 1, "any", 0, permissions,
+  available = acl_where_owned ("target", &get, 1, "any", 0, permissions, 0,
                                &with_clause);
   array_free (permissions);
 

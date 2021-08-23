@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2020 Greenbone Networks GmbH
+/* Copyright (C) 2009-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -39,6 +39,15 @@
  * @brief GLib log domain.
  */
 #define G_LOG_DOMAIN "md manage"
+/**
+ * @brief amount of ms sql should wait before retrying when a deadlock occurred
+ */
+#define DEADLOCK_SLEEP 1000
+
+/**
+ * @brief defines the amount of retries after a deadlock is considered a warning 
+ */
+#define DEADLOCK_THRESHOLD 25
 
 
 /* Headers of internal symbols defined in backend files. */
@@ -141,6 +150,43 @@ sql_quote (const char* string)
 }
 
 /**
+ * @brief Quotes a string for use in SQL statements, also ASCII escaping it
+ *         if it is not valid UTF-8.
+ *
+ * @param[in]  string  String to quote, has to be \\0 terminated.
+ *
+ * @return Freshly allocated, quoted string. Free with g_free.
+ */
+gchar*
+sql_ascii_escape_and_quote (const char* string)
+{
+  gchar *quoted_string;
+
+  assert (string);
+
+  if (string == NULL)
+    {
+      return NULL;
+    }
+  else if (g_utf8_validate (string, -1, NULL))
+    {
+      // Quote valid UTF-8 without ASCII escaping
+      quoted_string = sql_quote (string);
+    }
+  else
+    {
+      // Assume invalid UTF-8 uses a different, unknown encoding and
+      //  ASCII-escape it.
+      gchar *escaped_string;
+      escaped_string = g_strescape (string, "");
+      quoted_string = sql_quote (escaped_string);
+      g_free (escaped_string);
+    }
+
+  return quoted_string;
+}
+
+/**
  * @brief Get the SQL insert expression for a string.
  *
  * @param[in]  string  The string, which may be NULL.
@@ -206,6 +252,8 @@ sqlv (int retry, char* sql, va_list args)
         return -1;
       if (ret == -4)
         return 3;
+      if (ret == -5)
+        return 4;
       assert (ret == -1 || ret == 0);
       return ret;
     }
@@ -220,6 +268,7 @@ sqlv (int retry, char* sql, va_list args)
 void
 sql (char* sql, ...)
 {
+  unsigned int deadlock_amount =  0;
   while (1)
     {
       va_list args;
@@ -231,6 +280,15 @@ sql (char* sql, ...)
       if (ret == 1)
         /* Gave up with statement reset. */
         continue;
+      else if (ret == 4)
+        {
+            if (deadlock_amount++ > DEADLOCK_THRESHOLD)
+              {
+                  g_warning("%s: %d deadlocks detected, waiting and retrying %s", __func__, deadlock_amount, sql);
+              } 
+            gvm_usleep (DEADLOCK_SLEEP);
+            continue;
+         }
       else if (ret)
         abort();
       break;
@@ -498,7 +556,7 @@ sql_int64 (long long int* ret, char* sql, ...)
  * @param[in]  sql    Format string for SQL query.
  * @param[in]  ...    Arguments for format string.
  *
- * @return 0 success, 1 too few rows, -1 error.
+ * @return Column value.  0 if no row.
  */
 long long int
 sql_int64_0 (char* sql, ...)

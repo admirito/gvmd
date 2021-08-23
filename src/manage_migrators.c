@@ -1,4 +1,4 @@
-/* Copyright (C) 2013-2020 Greenbone Networks GmbH
+/* Copyright (C) 2013-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -851,9 +851,9 @@ make_tls_certificate_214 (user_t owner,
   quoted_certificate_b64
     = certificate_b64 ? sql_quote (certificate_b64) : NULL;
   quoted_subject_dn
-    = subject_dn ? sql_quote (subject_dn) : NULL;
+    = subject_dn ? sql_ascii_escape_and_quote (subject_dn) : NULL;
   quoted_issuer_dn
-    = issuer_dn ? sql_quote (issuer_dn) : NULL;
+    = issuer_dn ? sql_ascii_escape_and_quote (issuer_dn) : NULL;
   quoted_md5_fingerprint
     = md5_fingerprint ? sql_quote (md5_fingerprint) : NULL;
   quoted_sha256_fingerprint
@@ -2206,7 +2206,7 @@ migrate_232_to_233_set_predefined (const gchar *type, const gchar *table)
   gchar *dir_path;
 
   dir_path = g_build_filename (GVMD_FEED_DIR,
-                               GMP_VERSION,
+                               GMP_VERSION_FEED,
                                type,
                                NULL);
 
@@ -2308,6 +2308,349 @@ migrate_232_to_233 ()
   return 0;
 }
 
+/**
+ * @brief Migrate the database from version 233 to version 234.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+migrate_233_to_234 ()
+{
+  sql_begin_immediate ();
+
+  /* Ensure that the database is currently version 233. */
+
+  if (manage_db_version () != 233)
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  /* Update the database. */
+
+  /* Support for GMP Scanners was removed, including setting "GMP Slave
+   * Check Period" and various report slave columns. */
+
+  /* Delete setting. */
+  sql ("DELETE FROM settings WHERE uuid = '63adb79a-62ae-11e9-91ba-28d24461215b';");
+
+  /* Drop columns. */
+  sql ("ALTER TABLE reports"
+       " DROP column slave_task_uuid,"
+       " DROP column slave_uuid,"
+       " DROP column slave_name,"
+       " DROP column slave_host,"
+       " DROP column slave_port;");
+
+  /* Convert existing GMP Scanners to OSP Sensors. */
+  sql ("UPDATE scanners SET type = 5 WHERE type = 4;");
+  sql ("UPDATE scanners_trash SET type = 5 WHERE type = 4;");
+
+  /* Set the database version to 234. */
+
+  set_db_version (234);
+
+  sql_commit ();
+
+  return 0;
+}
+
+/**
+ * @brief Migrate the database from version 234 to version 235.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+migrate_234_to_235 ()
+{
+  sql_begin_immediate ();
+
+  /* Ensure that the database is currently version 234. */
+
+  if (manage_db_version () != 234)
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  /* Update the database. */
+
+  /* Support of multiple individual selectable severity classification ranges
+   * was removed. Therefore any entry in settings table where "Severity Class"
+   * is configured, can be removed. This setting has a specific uuid. */
+
+  /* Delete any setting for "Severity Class" . */
+  sql ("DELETE FROM settings WHERE uuid = 'f16bb236-a32d-4cd5-a880-e0fcf2599f59';");
+
+  /* Set the database version to 235. */
+
+  set_db_version (235);
+
+  sql_commit ();
+
+  return 0;
+}
+
+/**
+ * @brief Migrate the database from version 235 to version 236.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+migrate_235_to_236 ()
+{
+  sql_begin_immediate ();
+
+  /* Ensure that the database is currently version 235. */
+
+  if (manage_db_version () != 235)
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  /* Update the database. */
+
+  /* Replace any result type "Debug Message" by "Error Message". */
+
+  sql ("UPDATE results SET type = 'Error Message' WHERE type = 'Debug Message';");
+  sql ("UPDATE results_trash SET type = 'Error Message' WHERE type = 'Debug Message';");
+
+  /* Set the database version to 236. */
+
+  set_db_version (236);
+
+  sql_commit ();
+
+  return 0;
+}
+
+/**
+ * @brief Migrate the database from version 236 to version 237.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+migrate_236_to_237 ()
+{
+  sql_begin_immediate ();
+
+  /* Ensure that the database is currently version 236. */
+
+  if (manage_db_version () != 236)
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  /* Update the database. */
+
+  /* This previously added a "score" column to the nvts table */
+
+  /* Set the database version to 237. */
+
+  set_db_version (237);
+
+  sql_commit ();
+
+  return 0;
+}
+
+/**
+ * @brief Migrate the database from version 237 to version 238.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+migrate_237_to_238 ()
+{
+  sql_begin_immediate ();
+
+  /* Ensure that the database is currently version 237. */
+
+  if (manage_db_version () != 237)
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  /* Update the database. */
+
+  /* This previously added a "score" column to the results and results_trash
+   * tables. */
+
+  /* Set the database version to 238. */
+
+  set_db_version (238);
+
+  sql_commit ();
+
+  return 0;
+}
+
+/**
+ * @brief Migrate the database from version 238 to version 239.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+migrate_238_to_239 ()
+{
+  sql_begin_immediate ();
+
+  /* Ensure that the database is currently version 238. */
+
+  if (manage_db_version () != 238)
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  /* Update the database. */
+
+  /* Table targets(_trash) got a allow_simult_ips_same_host column. */
+
+  sql ("ALTER TABLE targets ADD COLUMN"
+       " allow_simult_ips_same_host integer DEFAULT 1;");
+
+  sql ("ALTER TABLE targets_trash ADD COLUMN"
+       " allow_simult_ips_same_host integer DEFAULT 1;");
+
+  /* Set the database version to 239. */
+
+  set_db_version (239);
+
+  sql_commit ();
+
+  return 0;
+}
+
+/**
+ * @brief Migrate the database from version 239 to version 240.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+migrate_239_to_240 ()
+{
+  sql_begin_immediate ();
+
+  /* Ensure that the database is currently version 239. */
+
+  if (manage_db_version () != 239)
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  /* Update the database. */
+
+  /* Table results also got a score column, for extended severities. */
+
+  sql ("DROP VIEW IF EXISTS vulns;");
+
+  /* Set the database version to 240. */
+
+  set_db_version (240);
+
+  sql_commit ();
+
+  return 0;
+}
+
+/**
+ * @brief Migrate the database from version 240 to version 241.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+migrate_240_to_241 ()
+{
+  sql_begin_immediate ();
+
+  /* Ensure that the database is currently version 240. */
+
+  if (manage_db_version () != 240)
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  /* Update the database. */
+
+  /* Rename allow_simult_ips_same_host column to allow_simultaneous_ips */
+
+  sql ("ALTER TABLE targets RENAME COLUMN"
+       " allow_simult_ips_same_host TO allow_simultaneous_ips;");
+
+  sql ("ALTER TABLE targets_trash RENAME COLUMN"
+       " allow_simult_ips_same_host TO allow_simultaneous_ips;");
+
+  /* Set the database version to 241. */
+
+  set_db_version (241);
+
+  sql_commit ();
+
+  return 0;
+}
+
+/**
+ * @brief Migrate the database from version 241 to version 242.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+migrate_241_to_242 ()
+{
+  sql_begin_immediate ();
+
+  /* Ensure that the database is currently version 241. */
+
+  if (manage_db_version () != 241)
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  /* Update the database. */
+
+  /* Remove score columns from results and nvts if they were added in
+   *  migrations to previous versions.
+   */
+
+  sql ("DROP VIEW IF EXISTS vulns;");
+
+  sql ("ALTER TABLE nvts DROP COLUMN IF EXISTS score;");
+
+  sql ("ALTER TABLE results DROP COLUMN IF EXISTS score;");
+
+  sql ("ALTER TABLE results_trash DROP COLUMN IF EXISTS score;");
+
+  /* Change the vt_severities table to use a CVSS score
+   * if it already exists (migrating from a 21.04 development version) */
+  if (sql_int ("SELECT EXISTS (SELECT * FROM information_schema.tables"
+               "               WHERE table_catalog = '%s'"
+               "               AND table_schema = 'public'"
+               "               AND table_name = 'vt_severities')"
+               " ::integer;",
+               sql_database ()))
+    {
+      sql ("ALTER TABLE vt_severities ALTER COLUMN score"
+           " SET DATA TYPE double precision;");
+      sql ("UPDATE vt_severities"
+           " SET score = round((score / 10.0)::numeric, 1);");
+    }
+
+  /* Set the database version to 242. */
+
+  set_db_version (242);
+
+  sql_commit ();
+
+  return 0;
+}
+
 #undef UPDATE_DASHBOARD_SETTINGS
 
 /**
@@ -2347,6 +2690,15 @@ static migrator_t database_migrators[] = {
   {231, migrate_230_to_231},
   {232, migrate_231_to_232},
   {233, migrate_232_to_233},
+  {234, migrate_233_to_234},
+  {235, migrate_234_to_235},
+  {236, migrate_235_to_236},
+  {237, migrate_236_to_237},
+  {238, migrate_237_to_238},
+  {239, migrate_238_to_239},
+  {240, migrate_239_to_240},
+  {241, migrate_240_to_241},
+  {242, migrate_241_to_242},
   /* End marker. */
   {-1, NULL}};
 

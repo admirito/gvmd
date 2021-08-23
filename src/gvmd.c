@@ -97,10 +97,12 @@
 #include <gvm/base/proctitle.h>
 #include <gvm/util/fileutils.h>
 #include <gvm/util/serverutils.h>
+#include <gvm/util/ldaputils.h>
 
 #include "manage.h"
 #include "manage_sql_nvts.h"
 #include "manage_sql_secinfo.h"
+#include "manage_authentication.h"
 #include "gmpd.h"
 #include "utils.h"
 
@@ -220,7 +222,7 @@ static gnutls_certificate_credentials_t client_credentials;
 /**
  * @brief Database connection info.
  */
-static db_conn_info_t database = { NULL, NULL, NULL };
+static db_conn_info_t database = { NULL, NULL, NULL, NULL };
 
 /**
  * @brief Is this process parent or child?
@@ -1102,7 +1104,7 @@ update_nvt_cache_retry ()
               ret = update_nvt_cache_osp (osp_update_socket);
               if (ret == 1)
                 {
-                  g_message ("Rebuilding NVTs because integrity check failed");
+                  g_message ("Rebuilding all NVTs because of a hash value mismatch");
                   ret = update_or_rebuild_nvts (0);
                   if (ret)
                     g_warning ("%s: rebuild failed", __func__);
@@ -1674,6 +1676,53 @@ manager_listen (const char *address_str_unix, const char *address_str_tls,
 }
 
 /**
+ * @brief parse_authentication_goption_arg is used to parse authentication 
+ * parameter.
+ *
+ * @param[in] opt the parameter (e.g. --pepper).
+ * @param[in] arg the value of the parameter.
+ * @param[in] data the pointer of the data to set (unused).
+ * @param[in] err used to set error string on failure. 
+ *
+ * @return TRUE success, FALSE on failure.
+ **/
+static gboolean
+parse_authentication_goption_arg (const gchar *opt, const gchar *arg,
+                                  gpointer data, GError **err)
+{
+  if (strcmp (opt, "--pepper") == 0)
+    {
+      if (manage_authentication_setup(arg, strlen(arg), 0, NULL) != GMA_SUCCESS)
+        {
+          g_set_error (
+            err, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE,
+            "Unable to set given pepper (%s)",
+            arg);
+          return FALSE;
+        }
+    }
+  else if (strcmp (opt, "--hashcount") == 0)
+    {
+      if (manage_authentication_setup(NULL, 0, strtol(arg, NULL, 0), NULL) != GMA_SUCCESS)
+        {
+          g_set_error (
+            err, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE,
+            "Unable to set hash_count (%s)",
+            arg);
+          return FALSE;
+        }
+    }
+  else
+    {
+      g_set_error (err, G_OPTION_ERROR, G_OPTION_ERROR_UNKNOWN_OPTION,
+                   "Unknown authentication option: %s.", opt);
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+/**
  * @brief Entry point to the manager.
  *
  * \if STATIC
@@ -1699,6 +1748,7 @@ gvmd (int argc, char** argv)
   static gboolean decrypt_all_credentials = FALSE;
   static gboolean disable_password_policy = FALSE;
   static gboolean disable_scheduling = FALSE;
+  static gboolean dump_vt_verification = FALSE;
   static gboolean get_roles = FALSE;
   static gboolean get_users = FALSE;
   static gboolean get_scanners = FALSE;
@@ -1722,13 +1772,14 @@ gvmd (int argc, char** argv)
   static gchar *scanner_credential = NULL;
   static gchar *scanner_key_pub = NULL;
   static gchar *scanner_key_priv = NULL;
+  static int scanner_connection_retry = SCANNER_CONNECTION_RETRY_DEFAULT;
   static int schedule_timeout = SCHEDULE_TIMEOUT_DEFAULT;
   static int secinfo_commit_size = SECINFO_COMMIT_SIZE_DEFAULT;
-  static int slave_commit_size = SLAVE_COMMIT_SIZE_DEFAULT;
   static gchar *delete_scanner = NULL;
   static gchar *verify_scanner = NULL;
   static gchar *priorities = "NORMAL";
   static gchar *dh_params = NULL;
+  static gboolean ldap_debug = FALSE;
   static gchar *listen_owner = NULL;
   static gchar *listen_group = NULL;
   static gchar *listen_mode = NULL;
@@ -1751,6 +1802,9 @@ gvmd (int argc, char** argv)
   static gchar *disable = NULL;
   static gchar *value = NULL;
   static gchar *feed_lock_path = NULL;
+  static int feed_lock_timeout = 0;
+  static gchar *vt_verification_collation = NULL;
+
   GError *error = NULL;
   lockfile_t lockfile_checking, lockfile_serving;
   GOptionContext *option_context;
@@ -1786,6 +1840,10 @@ gvmd (int argc, char** argv)
           &(database.port),
           "Use <port> as database port or socket extension for PostgreSQL.",
           "<port>" },
+        { "db-user", '\0', 0, G_OPTION_ARG_STRING,
+          &(database.user),
+          "Use <user> as database user.",
+          "<user>" },
         { "decrypt-all-credentials", '\0', G_OPTION_FLAG_HIDDEN,
           G_OPTION_ARG_NONE,
           &decrypt_all_credentials,
@@ -1819,6 +1877,10 @@ gvmd (int argc, char** argv)
           &disable_scheduling,
           "Disable task scheduling.",
           NULL },
+        { "dump-vt-verification", '\0', 0, G_OPTION_ARG_NONE,
+          &dump_vt_verification,
+          "Dump the string the VTs verification hash is calculated from.",
+          NULL },
         { "encrypt-all-credentials", '\0', 0, G_OPTION_ARG_NONE,
           &encrypt_all_credentials,
           "(Re-)Encrypt all credentials.",
@@ -1827,6 +1889,12 @@ gvmd (int argc, char** argv)
           &feed_lock_path,
           "Sets the path to the feed lock file.",
           "<path>" },
+        { "feed-lock-timeout", '\0', 0, G_OPTION_ARG_INT,
+          &feed_lock_timeout,
+          "Sets the number of seconds to retry for if the feed is locked"
+          " in contexts (like migration or rebuilds) that do not retry"
+          " on their own (like automatic syncs). Defaults to 0 (no retry).",
+          "<timeout>" },
         { "foreground", 'f', 0, G_OPTION_ARG_NONE,
           &foreground,
           "Run in foreground.",
@@ -1851,6 +1919,10 @@ gvmd (int argc, char** argv)
           &inheritor,
           "Have <username> inherit from deleted user.",
           "<username>" },
+        { "ldap-debug", '\0', 0, G_OPTION_ARG_NONE,
+          &ldap_debug,
+          "Enable debugging of LDAP authentication",
+          NULL },
         { "listen", 'a', 0, G_OPTION_ARG_STRING,
           &manager_address_string,
           "Listen on <address>.",
@@ -1906,7 +1978,8 @@ gvmd (int argc, char** argv)
           "<password>" },
         { "optimize", '\0', 0, G_OPTION_ARG_STRING,
           &optimize,
-          "Run an optimization: vacuum, analyze, cleanup-config-prefs,"
+          "Run an optimization: vacuum, analyze, add-feed-permissions,"
+          " cleanup-config-prefs, cleanup-feed-permissions,"
           " cleanup-port-names, cleanup-report-formats, cleanup-result-encoding,"
           " cleanup-result-nvts, cleanup-result-severities,"
           " cleanup-schedule-times, migrate-relay-sensors,"
@@ -1952,6 +2025,11 @@ gvmd (int argc, char** argv)
           &scanner_ca_pub,
           "Scanner CA Certificate path for --[create|modify]-scanner.",
           "<scanner-ca-pub>" },
+        { "scanner-connection-retry", '\0', 0, G_OPTION_ARG_INT,
+          &scanner_connection_retry,
+          "Number of auto retries if scanner connection is lost in a running task,"
+          " default: "G_STRINGIFY (SCANNER_CONNECTION_RETRY_DEFAULT),
+          "<number>" },
         { "scanner-credential", '\0', 0, G_OPTION_ARG_STRING,
           &scanner_credential,
           "Scanner credential for --create-scanner and --modify-scanner."
@@ -1960,7 +2038,7 @@ gvmd (int argc, char** argv)
           "<scanner-credential>" },
         { "scanner-host", '\0', 0, G_OPTION_ARG_STRING,
           &scanner_host,
-          "Scanner host for --create-scanner and --modify-scanner.",
+          "Scanner host or socket for --create-scanner and --modify-scanner.",
           "<scanner-host>" },
         { "scanner-key-priv", '\0', 0, G_OPTION_ARG_STRING,
           &scanner_key_priv,
@@ -1984,7 +2062,7 @@ gvmd (int argc, char** argv)
         { "scanner-type", '\0', 0, G_OPTION_ARG_STRING,
           &scanner_type,
           "Scanner type for --create-scanner and --modify-scanner."
-          " Either 'OpenVAS', 'OSP', 'GMP', 'OSP-Sensor'"
+          " Either 'OpenVAS', 'OSP', 'OSP-Sensor'"
           " or a number as used in GMP.",
           "<scanner-type>" },
         { "schedule-timeout", '\0', 0, G_OPTION_ARG_INT,
@@ -1998,11 +2076,6 @@ gvmd (int argc, char** argv)
           "During CERT and SCAP sync, commit updates to the database every"
           " <number> items, 0 for unlimited, default: "
           G_STRINGIFY (SECINFO_COMMIT_SIZE_DEFAULT), "<number>" },
-        { "slave-commit-size", '\0', 0, G_OPTION_ARG_INT,
-          &slave_commit_size,
-          "During slave updates, commit after every <number> updated results"
-          " and hosts, 0 for unlimited",
-          "<number>"},
         { "unix-socket", 'c', 0, G_OPTION_ARG_STRING,
           &manager_address_string_unix,
           "Listen on UNIX socket at <filename>.",
@@ -2023,10 +2096,24 @@ gvmd (int argc, char** argv)
           &verify_scanner,
           "Verify scanner <scanner-uuid> and exit.",
           "<scanner-uuid>" },
+        { "pepper", '\0', 0, G_OPTION_ARG_CALLBACK,
+           parse_authentication_goption_arg,
+          "Use <pepper> to statically enhance salt of password hashes (maximal 4 character).",
+          "<pepper>" },
+        { "hashcount", '\0', 0, G_OPTION_ARG_CALLBACK,
+           parse_authentication_goption_arg,
+          "Use <hashcount> to enhance the computational cost of creating a password hash.",
+          "<hashcount>" },
         { "version", '\0', 0, G_OPTION_ARG_NONE,
           &print_version,
           "Print version and exit.",
           NULL },
+        { "vt-verification-collation", '\0', 0, G_OPTION_ARG_STRING,
+          &vt_verification_collation,
+          "Set collation for VT verification to <collation>, omit or leave"
+          " empty to choose automatically. Should be 'ucs_default' if DB uses"
+          " UTF-8 or 'C' for single-byte encodings.",
+          "<collation>" },
         { NULL }
       };
 
@@ -2071,17 +2158,23 @@ gvmd (int argc, char** argv)
 
   /* Set feed lock path */
   set_feed_lock_path (feed_lock_path);
+  
+  /* Set feed lock timeout */
+  set_feed_lock_timeout (feed_lock_timeout);
 
   /* Set schedule_timeout */
 
   set_schedule_timeout (schedule_timeout);
 
-  /* Set slave commit size */
-  set_slave_commit_size (slave_commit_size);
+  /* Set the connection auto retry */
+  set_scanner_connection_retry (scanner_connection_retry);
 
   /* Set SecInfo update commit size */
 
   set_secinfo_commit_size (secinfo_commit_size);
+
+  /* Set VT verification collation override */
+  set_vt_verification_collation (vt_verification_collation);
 
   /* Check which type of socket to use. */
 
@@ -2190,6 +2283,17 @@ gvmd (int argc, char** argv)
         }
       else
         g_debug ("No default relay mapper found.");
+    }
+
+  /**
+   * LDAP debugging
+   */
+  if (ldap_debug)
+    {
+      if (ldap_enable_debug () == 0)
+        g_message ("LDAP debugging enabled");
+      else
+        g_warning ("Could not enable LDAP debugging");
     }
 
 #ifdef GVMD_GIT_REVISION
@@ -2413,6 +2517,25 @@ gvmd (int argc, char** argv)
         }
       return EXIT_SUCCESS;
     }
+  
+  if (dump_vt_verification)
+    {
+      int ret;
+
+      proctitle_set ("gvmd: --dump-vt-verification");
+  
+      if (option_lock (&lockfile_checking))
+        return EXIT_FAILURE;
+
+      ret = manage_dump_vt_verification (log_config, &database);
+      log_config_free ();
+      if (ret)
+        {
+          printf ("Failed to dump VT verification data.\n");
+          return EXIT_FAILURE;
+        }
+      return EXIT_SUCCESS;
+    }
 
   if (create_scanner)
     {
@@ -2445,15 +2568,12 @@ gvmd (int argc, char** argv)
         type = SCANNER_TYPE_OPENVAS;
       else if (!strcasecmp (scanner_type, "OSP"))
         type = SCANNER_TYPE_OSP;
-      else if (!strcasecmp (scanner_type, "GMP"))
-        type = SCANNER_TYPE_GMP;
       else if (!strcasecmp (scanner_type, "OSP-Sensor"))
         type = SCANNER_TYPE_OSP_SENSOR;
       else
         {
           type = atoi (scanner_type);
-          if (type <= SCANNER_TYPE_NONE
-              || type >= SCANNER_TYPE_MAX
+          if (scanner_type_valid (type) == 0
               || type == SCANNER_TYPE_CVE)
             {
               fprintf (stderr, "Invalid scanner type value.\n");
@@ -2492,15 +2612,12 @@ gvmd (int argc, char** argv)
             type = SCANNER_TYPE_OPENVAS;
           else if (strcasecmp (scanner_type, "OSP") == 0)
             type = SCANNER_TYPE_OSP;
-          else if (!strcasecmp (scanner_type, "GMP"))
-            type = SCANNER_TYPE_GMP;
           else if (!strcasecmp (scanner_type, "OSP-Sensor"))
             type = SCANNER_TYPE_OSP_SENSOR;
           else
             {
               type = atoi (scanner_type);
-              if (type <= SCANNER_TYPE_NONE
-                  || type >= SCANNER_TYPE_MAX
+              if (scanner_type_valid (type) == 0
                   || type == SCANNER_TYPE_CVE)
                 {
                   fprintf (stderr, "Invalid scanner type value.\n");

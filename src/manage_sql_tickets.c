@@ -1,4 +1,4 @@
-/* Copyright (C) 2018-2020 Greenbone Networks GmbH
+/* Copyright (C) 2018-2021 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -78,7 +78,7 @@ ticket_status_integer (const char *status)
 #define TICKET_ITERATOR_FILTER_COLUMNS                                        \
  { GET_ITERATOR_FILTER_COLUMNS, "severity", "host", "location",               \
    "solution_type", "status", "opened", "fixed", "closed", "orphan",          \
-   "result_id", NULL }
+   "result_id", "username", NULL }
 
 /**
  * @brief Ticket iterator columns.
@@ -111,11 +111,7 @@ ticket_status_integer (const char *status)
      "                WHERE ticket = tickets.id"                              \
      "                LIMIT 1)"                                               \
      "       AND result_new_severities.user"                                  \
-     "           = (SELECT users.id"                                          \
-     "              FROM users"                                               \
-     "              WHERE users.uuid"                                         \
-     "                    = (SELECT current_setting ('gvmd.user.uuid')))"     \
-     "       AND result_new_severities.override = 1"                          \
+     "           = gvmd_user ()"                                              \
      "       AND result_new_severities.dynamic = 0"                           \
      "       LIMIT 1)"                                                        \
      " ELSE severity"                                                         \
@@ -158,7 +154,7 @@ ticket_status_integer (const char *status)
    { "nvt", NULL, KEYWORD_TYPE_STRING },                                      \
    {                                                                          \
      "(SELECT name FROM users WHERE id = assigned_to)",                       \
-     NULL,                                                                    \
+     "username",                                                              \
      KEYWORD_TYPE_STRING                                                      \
    },                                                                         \
    {                                                                          \
@@ -555,7 +551,7 @@ init_result_ticket_iterator (iterator_t *iterator, result_t result)
     return -1;
 
   memset (&get, 0, sizeof (get));
-  owned_clause = acl_where_owned ("ticket", &get, 1, "any", 0, NULL,
+  owned_clause = acl_where_owned ("ticket", &get, 1, "any", 0, NULL, 0,
                                   &with_clause);
 
   init_iterator (iterator,
