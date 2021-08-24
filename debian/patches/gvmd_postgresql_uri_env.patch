@@ -1,18 +1,20 @@
 --- a/src/sql_pg.c
 +++ b/src/sql_pg.c
-@@ -277,16 +277,19 @@
+@@ -277,18 +277,21 @@
    PostgresPollingStatusType poll_status;
    int socket;
  
 -  conn_info = g_strdup_printf ("dbname='%s'"
 -                               " host='%s'"
 -                               " port='%s'"
+-                               " user='%s'"
 -                               " application_name='%s'",
 -                               database->name
 -                                ? database->name
 -                                : sql_default_database (),
 -                               database->host ? database->host : "",
 -                               database->port ? database->port : "",
+-                               database->user ? database->user : "",
 -                               "gvmd");
 +  conn_info = getenv ("GVMD_POSTGRESQL_URI") ?
 +    g_strdup (getenv ("GVMD_POSTGRESQL_URI")) : NULL;
@@ -20,12 +22,14 @@
 +    conn_info = g_strdup_printf ("dbname='%s'"
 +				 " host='%s'"
 +				 " port='%s'"
++                                " user='%s'"
 +				 " application_name='%s'",
 +				 database->name
 +				 ? database->name
 +				 : sql_default_database (),
 +				 database->host ? database->host : "",
 +				 database->port ? database->port : "",
++                                database->user ? database->user : "",
 +				 "gvmd");
    conn = PQconnectStart (conn_info);
    g_free (conn_info);

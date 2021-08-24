@@ -12,5 +12,7 @@ GRANT CREATE ON DATABASE gvmd TO gvmduser;
 -- CREATE SCHEMA IF NOT EXISTS cert AUTHORIZATION gvmduser;
 -- CREATE SCHEMA IF NOT EXISTS scap AUTHORIZATION gvmduser;
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+-- gvmd 21 will create the extensions itself
+--
+-- CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- CREATE EXTENSION IF NOT EXISTS "pgcrypto";

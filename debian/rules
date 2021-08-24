@@ -110,9 +110,6 @@ override_dh_auto_install:
 	mkdir -p debian/libgvm-pg-server0/usr
 	mv debian/gvmd-common/usr/lib debian/libgvm-pg-server0/usr/
 
-#	# remove extra files not required by any of debain packages
-	rm debian/gvmd-common/usr/share/gvm/gvm-lsc-rpm-creator.sh
-
 #	# move the "gvmd" binary, its man page and
 #	# "gvm-portnames-update" script to gvmd-pg package
 #	# (update-alternatives will create files without -pg suffix)
