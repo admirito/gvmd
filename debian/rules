@@ -121,9 +121,10 @@ override_dh_auto_install:
 override_dh_installchangelogs:
 	dh_installchangelogs -k CHANGELOG.md
 
-# override_dh_installinit:
+override_dh_installinit:
 # 	dh_installinit --name=gvmd --only-scripts -pgvmd-pg
 # 	dh_installinit --name=gvmd --no-scripts --remaining
+	dh_installinit --name=gvmd -pgvmd-common
 
 override_dh_auto_test:
 	true

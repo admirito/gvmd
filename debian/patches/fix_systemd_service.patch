@@ -1,31 +1,12 @@
 --- a/config/gvmd.service.in
 +++ b/config/gvmd.service.in
-@@ -7,9 +7,17 @@
- 
- [Service]
- Type=forking
--User=$GVMD_USER
--Group=$GVMD_GROUP
--PIDFile=${GVM_RUN_DIR}/gvmd.pid
-+
-+#User=$GVMD_USER
-+#Group=$GVMD_GROUP
-+#PIDFile=${GVM_RUN_DIR}/gvmd.pid
-+
-+User=gvm
-+Group=gvm
-+RuntimeDirectory=gvm
-+PIDFile=/run/gvm/gvmd.pid
-+EnvironmentFile=-${DEFAULT_CONFIG_DIR}/gvmd-pg
-+
+@@ -13,7 +13,8 @@
+ RuntimeDirectory=gvm
+ RuntimeDirectoryMode=2775
  EnvironmentFile=${DEFAULT_CONFIG_DIR}/gvmd
- ExecStart=${SBINDIR}/gvmd --osp-vt-update=$OSP_VT_UPDATE $OPTIONS
+-ExecStart=${SBINDIR}/gvmd --osp-vt-update=/run/ospd/ospd-openvas.sock --listen-group=gvm
++EnvironmentFile=-${DEFAULT_CONFIG_DIR}/gvmd-pg
++ExecStart=${SBINDIR}/gvmd --osp-vt-update=/run/ospd/ospd-openvas.sock --listen-group=gvm $OPTIONS
  Restart=always
---- a/config/gvmd.default.in
-+++ b/config/gvmd.default.in
-@@ -16,4 +16,4 @@
- #
- # Additional options
- #
--OPTIONS=""
-+# OPTIONS="--listen=0.0.0.0 --port=9390"
+ TimeoutStopSec=10
+ 
