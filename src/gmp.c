@@ -16171,6 +16171,7 @@ handle_get_system_reports (gmp_parser_t *gmp_parser, GError **error)
          (&types,
           get_system_reports_data->name,
           get_system_reports_data->slave_id);
+
   switch (ret)
     {
       case 1:
@@ -16264,7 +16265,7 @@ handle_get_system_reports (gmp_parser_t *gmp_parser, GError **error)
                   "</system_report>",
                   report_type_iterator_name (&types),
                   report_type_iterator_title (&types),
-                  (ret == 3 ? "txt" : "png"),
+                  (report_ret == 3 ? "txt" : "png"),
                   get_system_reports_data->start_time
                     ? get_system_reports_data->start_time : "",
                   get_system_reports_data->end_time
@@ -18330,8 +18331,9 @@ gmp_xml_handle_result ()
   // https://www.freebsd.org/cgi/man.cgi?query=strcspn&sektion=3
   // strcspn returns the number of chars spanned so it should be safe
   // without double checking.
-  create_report_data
-    ->result_host[strcspn (create_report_data->result_host, "\n")] = 0;
+  if (create_report_data->result_host)
+    create_report_data
+      ->result_host[strcspn (create_report_data->result_host, "\n")] = 0;
   result->host = create_report_data->result_host;
   result->hostname = create_report_data->result_hostname;
   result->nvt_oid = create_report_data->result_nvt_oid;
@@ -18372,7 +18374,7 @@ gmp_xml_handle_result ()
           detail->ip = g_strdup (result->host);
           detail->name = g_strconcat ("detected_by@", detection->location, NULL);
           detail->source_desc = g_strdup ("create_report_import");
-          detail->source_name = g_strdup (detection->source_oid);
+          detail->source_name = g_strdup (result->nvt_oid);
           detail->source_type = g_strdup ("create_report_import");
           detail->value = g_strdup (detection->source_oid);
           array_add (create_report_data->details, detail);
