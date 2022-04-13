@@ -11,15 +11,16 @@ Prerequisites:
 * cmake >= 3.0 (Debian package: cmake)
 * glib-2.0 >= 2.42 (Debian package: libglib2.0-dev)
 * gnutls >= 3.2.15 (Debian package: libgnutls28-dev)
-* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 21.4.1 ([gvm-libs](https://github.com/greenbone/gvm-libs/tree/gvm-libs-21.04) component)
+* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 21.4.1 ([gvm-libs](https://github.com/greenbone/gvm-libs/tree/stable) component)
 * PostgreSQL database >= 9.6 (Debian packages: libpq-dev postgresql-server-dev-11)
 * pkg-config (Debian package: pkg-config)
 * libical >= 1.0.0 (Debian package: libical-dev)
 * xsltproc (Debian package: xsltproc)
+* gpgme
 
 Install these prerequisites on Debian GNU/Linux 'Buster' 10:
 
-    apt-get install gcc cmake libglib2.0-dev libgnutls28-dev libpq-dev postgresql-server-dev-11 pkg-config libical-dev xsltproc
+    apt-get install gcc cmake libglib2.0-dev libgnutls28-dev libpq-dev postgresql-server-dev-11 pkg-config libical-dev xsltproc libgpgme-dev
 
 Prerequisites for building documentation:
 * Doxygen

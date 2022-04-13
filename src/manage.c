@@ -2909,7 +2909,7 @@ fork_osp_scan_handler (task_t task, target_t target, int from,
   manage_session_init (current_credentials.uuid);
 
   if (scanner_type (task_scanner (task)) == SCANNER_TYPE_OPENVAS
-      || scanner_type (task_scanner (task) == SCANNER_TYPE_OSP_SENSOR))
+      || scanner_type (task_scanner (task)) == SCANNER_TYPE_OSP_SENSOR)
     {
       rc = launch_osp_openvas_task (task, target, report_id, from, &error);
     }
@@ -3120,6 +3120,13 @@ cve_scan_host (task_t task, report_t report, gvm_host_t *gvm_host)
                 {
                   const char *location;
                   location = app_locations_iterator_location (&locations_iter);
+
+                  if (location == NULL)
+                    {
+                      g_warning ("%s: Location is null for ip %s, app %s",
+                                 __func__, ip, app);
+                      continue;
+                    }
 
                   if (locations->len)
                     g_string_append (locations, ", ");
@@ -5648,11 +5655,11 @@ xsl_transform (gchar *stylesheet, gchar *xmlfile, gchar **param_names,
       || (WIFEXITED (exit_status) == 0)
       || WEXITSTATUS (exit_status))
     {
-      g_debug ("%s: failed to transform the xml: %d (WIF %i, WEX %i)",
-               __func__,
-               exit_status,
-               WIFEXITED (exit_status),
-               WEXITSTATUS (exit_status));
+      g_warning ("%s: failed to transform the xml: %d (WIF %i, WEX %i)",
+                 __func__,
+                 exit_status,
+                 WIFEXITED (exit_status),
+                 WEXITSTATUS (exit_status));
       g_debug ("%s: stderr: %s", __func__, standard_err);
       g_debug ("%s: stdout: %s", __func__, standard_out);
       success = FALSE;

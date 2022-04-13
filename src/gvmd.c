@@ -90,6 +90,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <execinfo.h>
 
 #include <gvm/base/pidfile.h>
 #include <gvm/base/pwpolicy.h>
@@ -181,6 +182,13 @@
  * @brief Default value for client_watch_interval
  */
 #define DEFAULT_CLIENT_WATCH_INTERVAL 1
+
+/**
+ * @brief Maximum number of frames in backtrace.
+ *
+ * For debugging backtrace in \ref handle_sigabrt and \ref handle_sigsegv.
+ */
+#define BA_SIZE 100
 
 /**
  * @brief Interval in seconds to check whether client connection was closed.
@@ -925,19 +933,8 @@ cleanup ()
   if (log_config) log_config_free ();
 
   /* Delete pidfile if this process is the parent. */
-  if (is_parent == 1) pidfile_remove ("gvmd");
+  if (is_parent == 1) pidfile_remove (GVMD_PID_PATH);
 }
-
-#ifndef NDEBUG
-#include <execinfo.h>
-
-/**
- * @brief Maximum number of frames in backtrace.
- *
- * For debugging backtrace in \ref handle_sigabrt.
- */
-#define BA_SIZE 100
-#endif
 
 /**
  * @brief Handle a SIGABRT signal.
@@ -952,7 +949,6 @@ handle_sigabrt (int given_signal)
   if (in_sigabrt) _exit (EXIT_FAILURE);
   in_sigabrt = 1;
 
-#ifndef NDEBUG
   void *frames[BA_SIZE];
   int frame_count, index;
   char **frames_text;
@@ -966,9 +962,8 @@ handle_sigabrt (int given_signal)
       frame_count = 0;
     }
   for (index = 0; index < frame_count; index++)
-    g_debug ("%s", frames_text[index]);
+    g_debug ("BACKTRACE: %s", frames_text[index]);
   free (frames_text);
-#endif
 
   manage_cleanup_process_error (given_signal);
   cleanup ();
@@ -998,6 +993,22 @@ handle_termination_signal (int signal)
 static void
 handle_sigsegv (/* unused */ int given_signal)
 {
+  void *frames[BA_SIZE];
+  int frame_count, index;
+  char **frames_text;
+
+  /* Print a backtrace. */
+  frame_count = backtrace (frames, BA_SIZE);
+  frames_text = backtrace_symbols (frames, frame_count);
+  if (frames_text == NULL)
+    {
+      perror ("backtrace symbols");
+      frame_count = 0;
+    }
+  for (index = 0; index < frame_count; index++)
+    g_debug ("BACKTRACE: %s", frames_text[index]);
+  free (frames_text);
+
   manage_cleanup_process_error (given_signal);
 
   /* This previously called "cleanup", but it seems that the regular manager
@@ -2192,7 +2203,7 @@ gvmd (int argc, char** argv)
       else
         {
           use_tls = 0;
-          manager_address_string_unix = g_build_filename (GVM_RUN_DIR,
+          manager_address_string_unix = g_build_filename (GVMD_RUN_DIR,
                                                           "gvmd.sock",
                                                           NULL);
         }
@@ -2400,7 +2411,7 @@ gvmd (int argc, char** argv)
             g_info ("   Migration succeeded.");
             return EXIT_SUCCESS;
           case 1:
-            g_warning ("%s: databases are already at the supported version",
+            g_info ("%s: databases are already at the supported version",
                        __func__);
             return EXIT_SUCCESS;
           case 2:
@@ -2966,7 +2977,7 @@ gvmd (int argc, char** argv)
 
   /* Set our pidfile. */
 
-  if (pidfile_create ("gvmd")) exit (EXIT_FAILURE);
+  if (pidfile_create (GVMD_PID_PATH)) exit (EXIT_FAILURE);
 
   /* Setup global variables. */
 
