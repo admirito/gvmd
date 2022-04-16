@@ -97,7 +97,8 @@
 
 
 override_dh_auto_configure:
-	dh_auto_configure -- -DLOCALSTATEDIR=/var -DGVM_RUN_DIR=/run/gvm -DSYSCONFDIR=/etc -DDEFAULT_CONFIG_DIR=/etc/default -DLOGROTATE_DIR=/etc/logrotate.d -DSYSTEMD_SERVICE_DIR=/lib/systemd/system -DBACKEND=POSTGRESQL -DLIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH)
+#	# gvmd 21.4.4 uses GVMD_RUN_DIR mainly, but due to a bug it has used GVM_RUN_DIR in the config/gvmd.service.in
+	dh_auto_configure -- -DLOCALSTATEDIR=/var -DGVM_RUN_DIR=/run/gvm -DGVMD_RUN_DIR=/run/gvm -DSYSCONFDIR=/etc -DDEFAULT_CONFIG_DIR=/etc/default -DLOGROTATE_DIR=/etc/logrotate.d -DSYSTEMD_SERVICE_DIR=/lib/systemd/system -DBACKEND=POSTGRESQL -DLIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH)
 
 override_dh_auto_install:
 	dh_auto_install --destdir=$(shell realpath debian/gvmd-common)

@@ -1,3 +1,9 @@
+gvmd (21.4.5-1) focal; urgency=medium
+
+  * Import upstream version 21.4.5
+
+ -- Mohammad Razavi <mrazavi64@gmail.com>  Wed, 13 Apr 2022 10:10:57 +0430
+
 gvmd (21.4.4-1) focal; urgency=medium
 
   * Import upstream version 21.4.4
