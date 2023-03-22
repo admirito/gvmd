@@ -1,4 +1,4 @@
-/* Copyright (C) 2010-2021 Greenbone Networks GmbH
+/* Copyright (C) 2010-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -158,6 +158,11 @@
 #define TIMEVAL_SUBTRACT_MS(a,b) ((((a).tv_sec - (b).tv_sec) * 1000) + \
                                   ((a).tv_usec - (b).tv_usec) / 1000)
 
+/**
+ * @brief Database superuser role
+ */
+#define DB_SUPERUSER_ROLE "dba"
+
 
 /* Macros. */
 
@@ -296,6 +301,8 @@ int delete_report_internal (report_t);
 
 int set_report_scan_run_status (report_t, task_status_t);
 
+int update_report_modification_time (report_t);
+
 int set_report_slave_progress (report_t, int);
 
 void init_task_file_iterator (iterator_t *, task_t, const char *);
@@ -355,8 +362,6 @@ int manage_update_nvti_cache ();
 int manage_report_host_details (report_t, const char *, entity_t);
 
 const char *run_status_name_internal (task_status_t);
-
-gchar *get_ovaldef_short_filename (char*);
 
 void update_config_cache_init (const char *);
 
@@ -479,5 +484,17 @@ config_family_entire_and_growing (config_t, const char*);
 
 void
 reports_clear_count_cache_dynamic ();
+
+int
+cleanup_config_sequences ();
+
+int
+cleanup_port_list_sequences ();
+
+int
+cleanup_nvt_sequences ();
+
+int
+cleanup_ids_for_table (const char *);
 
 #endif /* not _GVMD_MANAGE_SQL_H */

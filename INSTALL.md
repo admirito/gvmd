@@ -11,7 +11,7 @@ Prerequisites:
 * cmake >= 3.0 (Debian package: cmake)
 * glib-2.0 >= 2.42 (Debian package: libglib2.0-dev)
 * gnutls >= 3.2.15 (Debian package: libgnutls28-dev)
-* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 21.4.1 ([gvm-libs](https://github.com/greenbone/gvm-libs/tree/stable) component)
+* libgvm_base, libgvm_util, libgvm_osp, libgvm_gmp >= 20.08.0 ([gvm-libs](https://github.com/greenbone/gvm-libs/tree/gvm-libs-20.08) component)
 * PostgreSQL database >= 9.6 (Debian packages: libpq-dev postgresql-server-dev-11)
 * pkg-config (Debian package: pkg-config)
 * libical >= 1.0.0 (Debian package: libical-dev)
@@ -126,9 +126,14 @@ Certificates`.
     apt install postgresql postgresql-contrib postgresql-server-dev-all
     ```
 
-2.  Run cmake and build gvmd as usual.
+2.  Install the pg-gvm extension.
 
-3.  Setup Postgres User and DB (`/usr/share/doc/postgresql-common/README.Debian.gz`)
+    Install the pg-gvm extension library (https://github.com/greenbone/pg-gvm).
+    For instructions on how to do this, see the README file there.
+
+3.  Run cmake and build gvmd as usual.
+
+4.  Setup Postgres User and DB (`/usr/share/doc/postgresql-common/README.Debian.gz`)
 
     ```sh
     sudo -u postgres bash
@@ -136,22 +141,22 @@ Certificates`.
     createdb -O mattm gvmd
     ```
 
-4.  Setup permissions.
+5.  Setup permissions.
 
     ```sh
-    sudo -u postgres bash  # if you logged out after step 3
+    sudo -u postgres bash  # if you logged out after step 4
     psql gvmd
     create role dba with superuser noinherit;
-    grant dba to mattm;    # mattm is the user created in step 3
+    grant dba to mattm;    # mattm is the user created in step 4
     ```
 
-5.  Make Postgres aware of the gvm libraries if not installed
+6.  Make Postgres aware of the gvm libraries if not installed
     in a ld-aware directory. For example create file `/etc/ld.so.conf.d/gvm.conf`
     with appropriate path and then run `ldconfig`.
 
-6.  Run Manager as usual.
+7.  Run Manager as usual.
 
-7. To run SQL on the database.
+8.  To run SQL on the database.
 
     ```sh
     psql gvmd
@@ -268,6 +273,7 @@ The `gvmd Data`, `SCAP` and `CERT` Feeds should be kept up-to-date by calling th
 
 Please note: The `CERT` feed sync depends on data provided by the `SCAP` feed
 and should be called after syncing the latter.
+You will need the `rsync` tool for a successful synchronization.
 
 
 ## Configure the default OSPD scanner socket path
@@ -402,6 +408,11 @@ supported values for `<name>` are:
   All new results should have a severity assigned but this was not ensured in
   older versions, so this function can be used to correct missing severity
   scores in older reports.
+
+- `cleanup-sequences`
+
+  This cleans up id sequences that are likely to run out due to regular feed
+  updates like the ids for config preferences.
 
 - `migrate-relay-sensors`
 

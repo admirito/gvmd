@@ -1,4 +1,4 @@
-/* Copyright (C) 2020-2021 Greenbone Networks GmbH
+/* Copyright (C) 2020-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -52,8 +52,7 @@ feed_dir_port_lists ()
   static gchar *path = NULL;
   if (path == NULL)
     path = g_build_filename (GVMD_FEED_DIR,
-                             GMP_VERSION_FEED,
-                             "port_lists",
+                             "port-lists",
                              NULL);
   return path;
 }
@@ -253,7 +252,7 @@ should_sync_port_list_from_path (const char *path, gboolean rebuild,
 
   split = g_regex_split_simple
            (/* Full-and-Fast--daba56c8-73ec-11df-a475-002264764cea.xml */
-            "^.*([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12}).xml$",
+            "^.*([0-9a-f]{8})\\-([0-9a-f]{4})\\-([0-9a-f]{4})\\-([0-9a-f]{4})\\-([0-9a-f]{12}).xml$",
             path, 0, 0);
 
   if (split == NULL || g_strv_length (split) != 7)

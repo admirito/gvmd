@@ -1,4 +1,4 @@
-/* Copyright (C) 2016-2020 Greenbone Networks GmbH
+/* Copyright (C) 2016-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -48,6 +48,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include <gvm/base/gvm_sentry.h>
 
 #undef G_LOG_DOMAIN
 /**
@@ -337,7 +339,7 @@ parse_iso_time_tz (const char *text_time, const char *fallback_tz)
   epoch_time = 0;
 
   if (regex == NULL)
-    regex = g_regex_new ("^([0-9]{4}-[0-9]{2}-[0-9]{2})"
+    regex = g_regex_new ("^([0-9]{4}\\-[0-9]{2}\\-[0-9]{2})"
                          "[T ]([0-9]{2}:[0-9]{2})"
                          "(:[0-9]{2})?(?:\\.[0-9]+)?"
                          "(Z|[+-][0-9]{2}:?[0-9]{2})?$",
@@ -819,6 +821,7 @@ setup_signal_handler (int signal, void (*handler) (int), int block)
     {
       g_critical ("%s: failed to register %s handler",
                   __func__, strsignal (signal));
+      gvm_close_sentry ();
       exit (EXIT_FAILURE);
     }
 }
@@ -850,6 +853,7 @@ setup_signal_handler_info (int signal,
     {
       g_critical ("%s: failed to register %s handler",
                   __func__, strsignal (signal));
+      gvm_close_sentry ();
       exit (EXIT_FAILURE);
     }
 }

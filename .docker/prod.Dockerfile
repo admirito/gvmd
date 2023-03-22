@@ -1,18 +1,22 @@
 ARG VERSION=stable
 ARG DEBIAN_FRONTEND=noninteractive
 
-FROM greenbone/gvmd-build:${VERSION} as build
+FROM greenbone/gvmd-build:${VERSION} as builder
 
-# Install
 COPY . /source
-RUN cmake -DCMAKE_BUILD_TYPE=Release -B/build /source
-RUN DESTDIR=/install cmake --build /build -- install 
+WORKDIR /source
+
+RUN mkdir /build && \
+    mkdir /install && \
+    cd /build && \
+    cmake -DCMAKE_BUILD_TYPE=Release /source && \
+    make DESTDIR=/install install
 
 FROM greenbone/gvm-libs:${VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Install Runtime dependencies
+# Runtime dependencies
 
 # PDF Report
 # texlive-fonts-recommended
@@ -67,6 +71,7 @@ RUN apt-get update && \
     gosu \
     gnupg \
     gpgsm \
+    libbsd0 \
     libgpgme11 \
     libical3 \
     libpq5 \
@@ -75,6 +80,7 @@ RUN apt-get update && \
     postgresql-client-common \
     python3 \
     rpm \
+    rsync \
     socat \
     smbclient \
     snmp \
@@ -88,17 +94,23 @@ RUN apt-get update && \
     zip && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /install/ /
+COPY --from=builder /install/ /
+
 COPY .docker/start-gvmd.sh /usr/local/bin/start-gvmd
 COPY .docker/entrypoint.sh /usr/local/bin/entrypoint
 
-RUN addgroup --gid 1001 --system gvmd \
-    && adduser --no-create-home --shell /bin/false --disabled-password \
-    --uid 1001 --system --group gvmd
+RUN addgroup --gid 1001 --system gvmd && \
+    adduser --no-create-home --shell /bin/false --disabled-password --uid 1001 --system --group gvmd
 
-RUN mkdir -p /run/gvmd /var/lib/gvm /var/log/gvm \
-    && chown -R gvmd:gvmd /etc/gvm /run/gvmd /var/lib/gvm /var/log/gvm \
-    && chmod 755 /usr/local/bin/entrypoint /usr/local/bin/start-gvmd
+RUN mkdir -p /run/gvmd && \
+    mkdir -p /var/lib/gvm && \
+    mkdir -p /var/log/gvm && \
+    chown -R gvmd:gvmd /etc/gvm && \
+    chown -R gvmd:gvmd /run/gvmd && \
+    chown -R gvmd:gvmd /var/lib/gvm && \
+    chown -R gvmd:gvmd /var/log/gvm && \
+    chmod 755 /usr/local/bin/entrypoint && \
+    chmod 755 /usr/local/bin/start-gvmd
 
 ENTRYPOINT [ "/usr/local/bin/entrypoint" ]
 

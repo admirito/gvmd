@@ -1,4 +1,4 @@
-/* Copyright (C) 2010-2021 Greenbone Networks GmbH
+/* Copyright (C) 2010-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -117,35 +117,6 @@
    { "cve_refs", "cves", KEYWORD_TYPE_INTEGER },                \
    { "nvd_id", NULL, KEYWORD_TYPE_INTEGER },                    \
    { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                         \
- }
-
-/**
- * @brief Filter columns for OVALDEF iterator.
- */
-#define OVALDEF_INFO_ITERATOR_FILTER_COLUMNS                \
- { GET_ITERATOR_FILTER_COLUMNS, "version", "deprecated",    \
-   "class", "title", "description", "file",                 \
-   "status", "cves", "severity",                            \
-   NULL }
-
-/**
- * @brief OVALDEF iterator columns.
- */
-#define OVALDEF_INFO_ITERATOR_COLUMNS                            \
- {                                                               \
-   GET_ITERATOR_COLUMNS_PREFIX (""),                             \
-   { "''", "_owner", KEYWORD_TYPE_STRING },                      \
-   { "0", NULL, KEYWORD_TYPE_INTEGER },                          \
-   { "version", NULL, KEYWORD_TYPE_INTEGER },                    \
-   { "deprecated", NULL, KEYWORD_TYPE_INTEGER },                 \
-   { "def_class", "class", KEYWORD_TYPE_STRING },                \
-   { "title", NULL, KEYWORD_TYPE_STRING },                       \
-   { "description", NULL, KEYWORD_TYPE_STRING },                 \
-   { "xml_file", "file", KEYWORD_TYPE_STRING },                  \
-   { "status", NULL, KEYWORD_TYPE_STRING },                      \
-   { "severity", NULL, KEYWORD_TYPE_DOUBLE },                    \
-   { "cve_refs", "cves", KEYWORD_TYPE_INTEGER },                 \
-   { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                          \
  }
 
 /**

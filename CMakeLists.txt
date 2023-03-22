@@ -1,4 +1,4 @@
-# Copyright (C) 2009-2021 Greenbone Networks GmbH
+# Copyright (C) 2009-2022 Greenbone Networks GmbH
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -20,7 +20,7 @@ cmake_minimum_required (VERSION 3.0)
 message ("-- Configuring Greenbone Vulnerability Manager...")
 
 project (gvm
-         VERSION 21.4.5
+         VERSION 22.4.2
          LANGUAGES C)
 
 if (POLICY CMP0005)
@@ -96,14 +96,14 @@ include (CPack)
 
 ## Variables
 
-set (GVMD_DATABASE_VERSION 242)
+set (GVMD_DATABASE_VERSION 250)
 
-set (GVMD_SCAP_DATABASE_VERSION 18)
+set (GVMD_SCAP_DATABASE_VERSION 19)
 
 set (GVMD_CERT_DATABASE_VERSION 8)
 
-set (GMP_VERSION "21.4")
-set (GMP_VERSION_FEED "21.04")
+set (GMP_VERSION "22.4")
+set (GMP_VERSION_FEED "22.04")
 
 if (SYSCONF_INSTALL_DIR)
   set (SYSCONFDIR "${SYSCONF_INSTALL_DIR}")
@@ -210,7 +210,7 @@ if (NOT DATA_OBJECTS_FEED_DIR)
 endif (NOT DATA_OBJECTS_FEED_DIR)
 
 if (NOT GVMD_FEED_DIR)
-  set (GVMD_FEED_DIR "${DATA_OBJECTS_FEED_DIR}/gvmd")
+  set (GVMD_FEED_DIR "${DATA_OBJECTS_FEED_DIR}/gvmd/${GMP_VERSION_FEED}")
 endif (NOT GVMD_FEED_DIR)
 
 if (NOT GVM_ACCESS_KEY_DIR)
@@ -293,8 +293,6 @@ add_subdirectory (doc)
 ## Install
 
 install (DIRECTORY DESTINATION ${GVMD_STATE_DIR})
-
-install (DIRECTORY DESTINATION ${GVMD_RUN_DIR})
 
 install (FILES ${CMAKE_BINARY_DIR}/src/gvmd_log.conf
          DESTINATION ${GVM_SYSCONF_DIR})
@@ -389,7 +387,6 @@ install (FILES src/wizards/quick_first_scan.xml
          PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
 
 install (FILES tools/cpe_getbyname.xsl tools/cve_getbyname.xsl
-         tools/ovaldef_getbyname.xsl
          DESTINATION ${GVM_SCAP_RES_DIR}
          PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
 

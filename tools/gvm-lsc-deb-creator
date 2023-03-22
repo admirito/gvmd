@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (C) 2018-2020 Greenbone Networks GmbH
+# Copyright (C) 2018-2022 Greenbone Networks GmbH
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
@@ -161,7 +161,7 @@ COPYRIGHT_FILE="${DOC_DATA_DIR}/copyright"
 
 # Create data archive
 cd "${DATA_DIR}"
-tar -C "${DATA_DIR}" -acf "../data.tar.xz" "${HOME_SUBDIR}" "${DOC_SUBDIR}"
+tar -C "${DATA_DIR}" -acfz "../data.tar.gz" "${HOME_SUBDIR}" "${DOC_SUBDIR}"
 
 
 #

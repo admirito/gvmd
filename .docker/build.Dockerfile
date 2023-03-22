@@ -7,6 +7,9 @@ FROM greenbone/gvm-libs:$VERSION
 # This will make apt-get install without question
 ARG DEBIAN_FRONTEND=noninteractive
 
+# Redefine ARG we use through the build
+ARG VERSION
+
 WORKDIR /usr/local/src
 
 # Install Debian core dependencies required for building gvm with PostgreSQL
@@ -15,16 +18,18 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
+    gcc \
     libglib2.0-dev \
     libgnutls28-dev \
     libpq-dev \
-    libcgreen1-dev \
-    libical-dev \
-    lcov \
-    libgpgme-dev \
     postgresql-server-dev-13 \
     pkg-config \
+    libical-dev \
     xsltproc \
-    && rm -rf /var/lib/apt/lists/*
+    libcgreen1-dev \
+    lcov \
+    libbsd-dev \
+    libgpgme-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN ldconfig

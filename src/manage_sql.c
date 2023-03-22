@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2021 Greenbone Networks GmbH
+/* Copyright (C) 2009-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -26,6 +26,7 @@
  */
 #define _GNU_SOURCE
 
+#include "debug_utils.h"
 #include "manage_sql.h"
 #include "manage_port_lists.h"
 #include "manage_report_formats.h"
@@ -66,10 +67,11 @@
 #include <grp.h>
 #include <gpgme.h>
 
+#include <gvm/base/gvm_sentry.h>
 #include <gvm/base/hosts.h>
 #include <gvm/base/pwpolicy.h>
 #include <gvm/base/logging.h>
-#include <gvm/base/proctitle.h>
+#include <bsd/unistd.h>
 #include <gvm/util/fileutils.h>
 #include <gvm/util/gpgmeutils.h>
 #include <gvm/util/serverutils.h>
@@ -324,9 +326,6 @@ setting_value_int (const char *, int *);
 static int
 setting_auto_cache_rebuild_int ();
 
-static double
-setting_default_severity_dbl ();
-
 static int
 setting_dynamic_severity_int ();
 
@@ -503,6 +502,7 @@ command_t gmp_commands[]
     {"GET_FILTERS", "Get all filters."},
     {"GET_GROUPS", "Get all groups."},
     {"GET_INFO", "Get raw information for a given item."},
+    {"GET_LICENSE", "Get license information." },
     {"GET_NOTES", "Get all notes."},
     {"GET_NVTS", "Get one or all available NVTs."},
     {"GET_NVT_FAMILIES", "Get a list of all NVT families."},
@@ -534,6 +534,7 @@ command_t gmp_commands[]
     {"MODIFY_CREDENTIAL", "Modify an existing credential."},
     {"MODIFY_FILTER", "Modify an existing filter."},
     {"MODIFY_GROUP", "Modify an existing group."},
+    {"MODIFY_LICENSE", "Modify the existing license."},
     {"MODIFY_NOTE", "Modify an existing note."},
     {"MODIFY_OVERRIDE", "Modify an existing override."},
     {"MODIFY_PERMISSION", "Modify an existing permission."},
@@ -2977,7 +2978,7 @@ filter_clause (const char* type, const char* filter,
                   "             FROM (SELECT report_progress (id) AS temp"
                   "                   FROM reports"
                   "                   WHERE task = tasks.id"
-                  "                   ORDER BY date DESC LIMIT 1)"
+                  "                   ORDER BY creation_time DESC LIMIT 1)"
                   "                  AS temp_sub)"
                   "    END)"
                   " ASC");
@@ -3170,7 +3171,7 @@ filter_clause (const char* type, const char* filter,
                   "             FROM (SELECT report_progress (id) AS temp"
                   "                   FROM reports"
                   "                   WHERE task = tasks.id"
-                  "                   ORDER BY date DESC LIMIT 1)"
+                  "                   ORDER BY creation_time DESC LIMIT 1)"
                   "                  AS temp_sub)"
                   "    END)"
                   " DESC");
@@ -4015,7 +4016,6 @@ type_is_info_subtype (const char *type)
   return (strcasecmp (type, "nvt")
           && strcasecmp (type, "cve")
           && strcasecmp (type, "cpe")
-          && strcasecmp (type, "ovaldef")
           && strcasecmp (type, "cert_bund_adv")
           && strcasecmp (type, "dfn_cert_adv"))
          == 0;
@@ -5175,8 +5175,7 @@ init_aggregate_iterator (iterator_t* iterator, const char *type,
 
   if ((manage_scap_loaded () == FALSE
        && (strcmp (type, "cve") == 0
-           || strcmp (type, "cpe") == 0
-           || strcmp (type, "ovaldef") == 0))
+           || strcmp (type, "cpe") == 0))
       || (manage_cert_loaded () == FALSE
           && (strcmp (type, "cert_bund_adv") == 0
               || strcmp (type, "dfn_cert_adv") == 0)))
@@ -6348,10 +6347,8 @@ check_alerts ()
        = sql_int ("SELECT %s"
                   "        ((SELECT max (modification_time) FROM scap.cves),"
                   "         (SELECT max (modification_time) FROM scap.cpes),"
-                  "         (SELECT max (modification_time) FROM scap.ovaldefs),"
                   "         (SELECT max (creation_time) FROM scap.cves),"
-                  "         (SELECT max (creation_time) FROM scap.cpes),"
-                  "         (SELECT max (creation_time) FROM scap.ovaldefs));",
+                  "         (SELECT max (creation_time) FROM scap.cpes));",
                   sql_greatest ());
 
       if (sql_int ("SELECT NOT EXISTS (SELECT * FROM meta"
@@ -6671,8 +6668,7 @@ validate_alert_event_data (gchar *name, gchar* data, event_t event)
           && strcasecmp (data, "cve")
           && strcasecmp (data, "cpe")
           && strcasecmp (data, "cert_bund_adv")
-          && strcasecmp (data, "dfn_cert_adv")
-          && strcasecmp (data, "ovaldef"))
+          && strcasecmp (data, "dfn_cert_adv"))
         return 2;
     }
   return 0;
@@ -7001,7 +6997,7 @@ validate_tippingpoint_data (alert_method_t method, const gchar *name,
 
       if (strcmp (name, "tp_sms_hostname") == 0)
         {
-          if (g_regex_match_simple ("^[0-9A-Za-z][0-9A-Za-z.-]*$",
+          if (g_regex_match_simple ("^[0-9A-Za-z][0-9A-Za-z.\\-]*$",
                                     *data, 0, 0)
               == FALSE)
             {
@@ -8051,7 +8047,7 @@ alert_condition (alert_t alert)
  *
  * @return Method.
  */
-static alert_method_t
+alert_method_t
 alert_method (alert_t alert)
 {
   return sql_int ("SELECT method FROM alerts WHERE id = %llu;",
@@ -9399,15 +9395,16 @@ alert_script_exec (const char *alert_id, const char *command_args,
             case 0:
               {
                 /* Child.  Drop privileges, run command, exit. */
-
+                init_sentry ();
                 cleanup_manage_process (FALSE);
 
-                proctitle_set ("gvmd: Running alert script");
+                setproctitle ("gvmd: Running alert script");
 
                 if (setgroups (0,NULL))
                   {
                     g_warning ("%s (child): setgroups: %s",
                                __func__, strerror (errno));
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
                 if (setgid (nobody->pw_gid))
@@ -9415,6 +9412,7 @@ alert_script_exec (const char *alert_id, const char *command_args,
                     g_warning ("%s (child): setgid: %s",
                                __func__,
                                strerror (errno));
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
                 if (setuid (nobody->pw_uid))
@@ -9422,6 +9420,7 @@ alert_script_exec (const char *alert_id, const char *command_args,
                     g_warning ("%s (child): setuid: %s",
                                __func__,
                                strerror (errno));
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
 
@@ -9437,6 +9436,7 @@ alert_script_exec (const char *alert_id, const char *command_args,
                                ret,
                                WEXITSTATUS (ret),
                                command);
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
                 else if (ret != 0)
@@ -9451,6 +9451,7 @@ alert_script_exec (const char *alert_id, const char *command_args,
                         g_error_free (error);
                         if (message)
                           g_free (*message);
+                        gvm_close_sentry ();
                         exit (EXIT_FAILURE);
                       }
 
@@ -9472,11 +9473,13 @@ alert_script_exec (const char *alert_id, const char *command_args,
                                         __func__, error->message);
                             g_error_free (error);
                             g_free (*message);
+                            gvm_close_sentry ();
                             exit (EXIT_FAILURE);
                           }
                       }
 
                     g_free (*message);
+                    gvm_close_sentry ();
                     exit (2);
                   }
 
@@ -10195,14 +10198,16 @@ send_to_sourcefire (const char *ip, const char *port, const char *pkcs12_64,
           case 0:
               {
                 /* Child.  Drop privileges, run command, exit. */
+                init_sentry ();
                 cleanup_manage_process (FALSE);
 
-                proctitle_set ("gvmd: Sending to Sourcefire");
+                setproctitle ("gvmd: Sending to Sourcefire");
 
                 if (setgroups (0,NULL))
                   {
                     g_warning ("%s (child): setgroups: %s",
                                __func__, strerror (errno));
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
                 if (setgid (nobody->pw_gid))
@@ -10210,6 +10215,7 @@ send_to_sourcefire (const char *ip, const char *port, const char *pkcs12_64,
                     g_warning ("%s (child): setgid: %s",
                                __func__,
                                strerror (errno));
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
                 if (setuid (nobody->pw_uid))
@@ -10217,6 +10223,7 @@ send_to_sourcefire (const char *ip, const char *port, const char *pkcs12_64,
                     g_warning ("%s (child): setuid: %s",
                                __func__,
                                strerror (errno));
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
 
@@ -10231,9 +10238,11 @@ send_to_sourcefire (const char *ip, const char *port, const char *pkcs12_64,
                                ret,
                                WEXITSTATUS (ret),
                                command);
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
 
+                gvm_close_sentry ();
                 exit (EXIT_SUCCESS);
               }
 
@@ -10520,8 +10529,8 @@ send_to_verinice (const char *url, const char *username, const char *password,
           case 0:
               {
                 /* Child.  Drop privileges, run command, exit. */
-
-                proctitle_set ("gvmd: Sending to Verinice");
+                init_sentry ();
+                setproctitle ("gvmd: Sending to Verinice");
 
                 cleanup_manage_process (FALSE);
 
@@ -10529,6 +10538,7 @@ send_to_verinice (const char *url, const char *username, const char *password,
                   {
                     g_warning ("%s (child): setgroups: %s",
                                __func__, strerror (errno));
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
                 if (setgid (nobody->pw_gid))
@@ -10536,6 +10546,7 @@ send_to_verinice (const char *url, const char *username, const char *password,
                     g_warning ("%s (child): setgid: %s",
                                __func__,
                                strerror (errno));
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
                 if (setuid (nobody->pw_uid))
@@ -10543,6 +10554,7 @@ send_to_verinice (const char *url, const char *username, const char *password,
                     g_warning ("%s (child): setuid: %s",
                                __func__,
                                strerror (errno));
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
 
@@ -10557,9 +10569,11 @@ send_to_verinice (const char *url, const char *username, const char *password,
                                ret,
                                WEXITSTATUS (ret),
                                log_command);
+                    gvm_close_sentry ();
                     exit (EXIT_FAILURE);
                   }
 
+                gvm_close_sentry ();
                 exit (EXIT_SUCCESS);
               }
 
@@ -12096,13 +12110,13 @@ generate_report_filename (report_t report, report_format_t report_format,
   report_id = report_uuid (report);
 
   creation_time
-    = sql_string ("SELECT iso_time (start_time)"
+    = sql_string ("SELECT iso_time (creation_time)"
                   " FROM reports"
                   " WHERE id = %llu",
                   report);
 
   modification_time
-    = sql_string ("SELECT iso_time (end_time)"
+    = sql_string ("SELECT iso_time (modification_time)"
                   " FROM reports"
                   " WHERE id = %llu",
                   report);
@@ -12566,7 +12580,7 @@ escalate_2 (alert_t alert, task_t task, report_t report, event_t event,
                    * anyway, to make it easier for the compiler to see. */
                   filter = 0;
                   ret = report_content_for_alert
-                          (alert, 0, task, get,
+                          (alert, report, task, get,
                            "notice_report_format",
                            NULL,
                            /* TXT fallback */
@@ -12646,7 +12660,7 @@ escalate_2 (alert_t alert, task_t task, report_t report, event_t event,
                    * anyway, to make it easier for the compiler to see. */
                   filter = 0;
                   ret = report_content_for_alert
-                          (alert, 0, task, get,
+                          (alert, report, task, get,
                            "notice_attach_format",
                            NULL,
                            /* TXT fallback */
@@ -13690,6 +13704,7 @@ escalate_2 (alert_t alert, task_t task, report_t report, event_t event,
               free (owner_id);
               free (owner_name);
               gvm_connection_free (&connection);
+              gvm_close_sentry ();
               exit (EXIT_FAILURE);
             }
           if (gmp_start_task_report_c (&connection, task_id, &report_id))
@@ -13698,6 +13713,7 @@ escalate_2 (alert_t alert, task_t task, report_t report, event_t event,
               free (owner_id);
               free (owner_name);
               gvm_connection_free (&connection);
+              gvm_close_sentry ();
               exit (EXIT_FAILURE);
             }
 
@@ -13706,6 +13722,7 @@ escalate_2 (alert_t alert, task_t task, report_t report, event_t event,
           free (owner_id);
           free (owner_name);
           gvm_connection_free (&connection);
+          gvm_close_sentry ();
           exit (EXIT_SUCCESS);
         }
       case ALERT_METHOD_ERROR:
@@ -13857,14 +13874,6 @@ manage_alert (const char *alert_id, const char *task_id, event_t event,
 #define NEW_DFN_CERTS_HEADER                                                   \
 /* DFN-CERT-2008-1100  Denial of Service Schwachstelle in der... */            \
   "Name                Title\n"                                                \
-  "------------------------------------------------------------------------------------------\n"
-
-/**
- * @brief Header for "New CERT-Bund Advisories" alert message.
- */
-#define NEW_OVAL_DEFS_HEADER                                                   \
-/* oval:org.mitre.oval:def:100116  libtiff Malloc Error Denial of Service */   \
-  "OVAL ID                         Title\n"                                    \
   "------------------------------------------------------------------------------------------\n"
 
 /**
@@ -14601,7 +14610,8 @@ append_to_task_string (task_t task, const char* field, const char* value)
    "last_report", "threat", "trend", "severity", "schedule", "next_due",      \
    "first", "last", "false_positive", "log", "low", "medium", "high",         \
    "hosts", "result_hosts", "fp_per_host", "log_per_host", "low_per_host",    \
-   "medium_per_host", "high_per_host", "target", "usage_type", NULL }
+   "medium_per_host", "high_per_host", "target", "usage_type",                \
+   "first_report_created", "last_report_created", NULL }
 
 /**
  * @brief Task iterator columns.
@@ -14618,7 +14628,7 @@ append_to_task_string (task_t task, const char* field, const char* value)
      "(SELECT uuid FROM reports WHERE task = tasks.id"                      \
      /* TODO 1 == TASK_STATUS_DONE */                                       \
      " AND scan_run_status = 1"                                             \
-     " ORDER BY date ASC LIMIT 1)",                                         \
+     " ORDER BY creation_time ASC LIMIT 1)",                                \
      "first_report",                                                        \
      KEYWORD_TYPE_STRING                                                    \
    },                                                                       \
@@ -14627,7 +14637,7 @@ append_to_task_string (task_t task, const char* field, const char* value)
      "(SELECT uuid FROM reports WHERE task = tasks.id"                      \
      /* TODO 1 == TASK_STATUS_DONE */                                       \
      " AND scan_run_status = 1"                                             \
-     " ORDER BY date DESC LIMIT 1)",                                        \
+     " ORDER BY creation_time DESC LIMIT 1)",                               \
      "last_report",                                                         \
      KEYWORD_TYPE_STRING                                                    \
    },                                                                       \
@@ -14680,18 +14690,18 @@ append_to_task_string (task_t task, const char* field, const char* value)
      KEYWORD_TYPE_INTEGER                                                    \
    },                                                                        \
    {                                                                         \
-     "(SELECT date FROM reports WHERE task = tasks.id"                       \
+     "(SELECT creation_time FROM reports WHERE task = tasks.id"              \
      /* TODO 1 == TASK_STATUS_DONE */                                        \
      " AND scan_run_status = 1"                                              \
-     " ORDER BY date ASC LIMIT 1)",                                          \
+     " ORDER BY creation_time ASC LIMIT 1)",                                 \
      "first",                                                                \
      KEYWORD_TYPE_INTEGER                                                    \
    },                                                                        \
    {                                                                         \
-     "(SELECT date FROM reports WHERE task = tasks.id"                       \
+     "(SELECT creation_time FROM reports WHERE task = tasks.id"              \
      /* TODO 1 == TASK_STATUS_DONE */                                        \
      " AND scan_run_status = 1"                                              \
-     " ORDER BY date DESC LIMIT 1)",                                         \
+     " ORDER BY creation_time DESC LIMIT 1)",                                \
      "last",                                                                 \
      KEYWORD_TYPE_INTEGER                                                    \
    },                                                                        \
@@ -14814,7 +14824,23 @@ append_to_task_string (task_t task, const char* field, const char* value)
      "(SELECT name FROM targets WHERE id = target)",                         \
      "target",                                                               \
      KEYWORD_TYPE_STRING                                                     \
-   }
+   },                                                                        \
+   {                                                                         \
+     "(SELECT creation_time FROM reports WHERE task = tasks.id"              \
+     /* TODO 1 == TASK_STATUS_DONE */                                        \
+     " AND scan_run_status = 1"                                              \
+     " ORDER BY creation_time ASC LIMIT 1)",                                 \
+     "first_report_created",                                                 \
+     KEYWORD_TYPE_INTEGER                                                    \
+   },                                                                        \
+   {                                                                         \
+     "(SELECT creation_time FROM reports WHERE task = tasks.id"              \
+     /* TODO 1 == TASK_STATUS_DONE */                                        \
+     " AND scan_run_status = 1"                                              \
+     " ORDER BY creation_time DESC LIMIT 1)",                                \
+     "last_report_created",                                                  \
+     KEYWORD_TYPE_INTEGER                                                    \
+   }                                                                         \
 
 /**
  * @brief Task iterator WHERE columns.
@@ -15945,6 +15971,7 @@ check_db_permissions ()
     {
       if (strstr (command[0].name, "DESCRIBE_AUTH") == NULL
           && strcmp (command[0].name, "GET_VERSION")
+          && strcmp (command[0].name, "MODIFY_LICENSE")
           && strstr (command[0].name, "GROUP") == NULL
           && strstr (command[0].name, "ROLE") == NULL
           && strstr (command[0].name, "SYNC") == NULL
@@ -16785,11 +16812,11 @@ user_ensure_in_db (const gchar *name, const gchar *method)
 
   sql ("INSERT INTO users"
        " (uuid, owner, name, comment, password, timezone, method, hosts,"
-       "  hosts_allow, ifaces, ifaces_allow, creation_time, modification_time)"
+       "  hosts_allow, creation_time, modification_time)"
        " VALUES"
        " (make_uuid (),"
        "  (SELECT id FROM users WHERE users.uuid = '%s'),"
-       "  '%s', '', NULL, NULL, '%s', '', 2, '', 2, m_now (), m_now ());",
+       "  '%s', '', NULL, NULL, '%s', '', 2, m_now (), m_now ());",
        current_credentials.uuid,
        quoted_name,
        quoted_method);
@@ -17883,9 +17910,9 @@ task_report_previous (task_t task, report_t report, report_t *previous)
                      "SELECT id FROM reports"
                      " WHERE task = %llu"
                      " AND scan_run_status = %u"
-                     " AND date < (SELECT date FROM reports"
-                     "             WHERE id = %llu)"
-                     " ORDER BY date DESC LIMIT 1;",
+                     " AND creation_time < (SELECT creation_time FROM reports"
+                     "                      WHERE id = %llu)"
+                     " ORDER BY creation_time DESC LIMIT 1;",
                      task,
                      TASK_STATUS_DONE,
                      report))
@@ -17919,7 +17946,7 @@ task_last_report (task_t task, report_t *report)
   switch (sql_int64 (report,
                      "SELECT id FROM reports WHERE task = %llu"
                      " AND scan_run_status = %u"
-                     " ORDER BY date DESC LIMIT 1;",
+                     " ORDER BY creation_time DESC LIMIT 1;",
                      task,
                      TASK_STATUS_DONE))
     {
@@ -17951,7 +17978,7 @@ task_last_report_any_status (task_t task, report_t *report)
 {
   switch (sql_int64 (report,
                      "SELECT id FROM reports WHERE task = %llu"
-                     " ORDER BY date DESC LIMIT 1;",
+                     " ORDER BY creation_time DESC LIMIT 1;",
                      task))
     {
       case 0:
@@ -17983,7 +18010,7 @@ task_second_last_report (task_t task, report_t *report)
   switch (sql_int64 (report,
                      "SELECT id FROM reports WHERE task = %llu"
                      " AND scan_run_status = %u"
-                     " ORDER BY date DESC LIMIT 1 OFFSET 1;",
+                     " ORDER BY creation_time DESC LIMIT 1 OFFSET 1;",
                      task,
                      TASK_STATUS_DONE))
     {
@@ -18017,7 +18044,7 @@ task_last_resumable_report (task_t task, report_t *report)
                      "SELECT id FROM reports WHERE task = %llu"
                      " AND (scan_run_status = %u"
                      "      OR scan_run_status = %u)"
-                     " ORDER BY date DESC LIMIT 1;",
+                     " ORDER BY creation_time DESC LIMIT 1;",
                      task,
                      TASK_STATUS_STOPPED,
                      TASK_STATUS_INTERRUPTED))
@@ -18049,7 +18076,7 @@ task_second_last_report_id (task_t task)
 {
   return sql_string ("SELECT uuid FROM reports WHERE task = %llu"
                      " AND scan_run_status = %u"
-                     " ORDER BY date DESC LIMIT 1 OFFSET 1;",
+                     " ORDER BY creation_time DESC LIMIT 1 OFFSET 1;",
                      task,
                      TASK_STATUS_DONE);
 }
@@ -18218,7 +18245,9 @@ set_task_schedule (task_t task, schedule_t schedule, int periods)
   sql ("UPDATE tasks"
        " SET schedule = %llu,"
        " schedule_periods = %i,"
-       " schedule_next_time = (SELECT next_time_ical (icalendar, timezone)"
+       " schedule_next_time = (SELECT next_time_ical (icalendar,"
+       "                                              m_now()::bigint,"
+       "                                              timezone)"
        "                       FROM schedules"
        "                       WHERE id = %llu),"
        " modification_time = m_now ()"
@@ -18252,7 +18281,9 @@ set_task_schedule_uuid (const gchar *task_id, schedule_t schedule, int periods)
   sql ("UPDATE tasks"
        " SET schedule = %llu,"
        "%s"
-       " schedule_next_time = (SELECT next_time_ical (icalendar, timezone)"
+       " schedule_next_time = (SELECT next_time_ical (icalendar,"
+       "                                              m_now()::bigint,"
+       "                                              timezone)"
        "                       FROM schedules"
        "                       WHERE id = %llu),"
        " modification_time = m_now ()"
@@ -18515,7 +18546,7 @@ task_severity_double (task_t task, int overrides, int min_qod, int offset)
              "SELECT id FROM reports"
              "           WHERE reports.task = %llu"
              "           AND reports.scan_run_status = %u"
-             "           ORDER BY reports.date DESC"
+             "           ORDER BY reports.creation_time DESC"
              "           LIMIT 1 OFFSET %d",
              task, TASK_STATUS_DONE, offset);
 
@@ -18730,7 +18761,7 @@ update_duration_schedule_periods (task_t task)
   duration_expired_element
    = /* The task has started, so assume that the start time was the last
       * most recent start of the period. */
-     " AND (SELECT next_time_ical (icalendar, timezone, -1)"
+     " AND (SELECT next_time_ical (icalendar, m_now()::bigint, timezone, -1)"
      "             + duration"
      "      FROM schedules"
      "      WHERE schedules.id = schedule)"
@@ -18958,8 +18989,7 @@ result_nvt_notice (const gchar *nvt)
  * @param[in]  task         The task associated with the result.
  * @param[in]  host         Target host of result.
  * @param[in]  hostname     Hostname of the result.
- * @param[in]  nvt          The uuid of oval definition that produced the
- *                          result, a title for the result otherwise.
+ * @param[in]  nvt          A title for the result.
  * @param[in]  type         Type of result.  "Alarm", etc.
  * @param[in]  description  Description of the result.
  * @param[in]  port         Result port.
@@ -18993,12 +19023,6 @@ make_osp_result (task_t task, const char *host, const char *hostname,
         nvt_revision = sql_string ("SELECT iso_time (modification_time)"
                                    " FROM nvts WHERE oid='%s'",
                                    quoted_nvt);
-      else if (g_str_has_prefix (nvt, "oval:"))
-        nvt_revision = ovaldef_version (nvt);
-      else if (g_str_has_prefix (nvt, "CVE-"))
-        nvt_revision = sql_string ("SELECT iso_time (modification_time)"
-                                   " FROM scap.cves WHERE uuid='%s'",
-                                   quoted_nvt);
     }
   
   if (!severity || !strcmp (severity, ""))
@@ -19007,30 +19031,14 @@ make_osp_result (task_t task, const char *host, const char *hostname,
         result_severity = g_strdup (G_STRINGIFY (SEVERITY_ERROR));
       else
         {
-          if (nvt && g_str_has_prefix (nvt, "CVE-"))
-            {
-              result_severity = cve_cvss_base (nvt);
-              if (result_severity == NULL || strcmp (result_severity, "") == 0)
-                {
-                  g_free (result_severity);
-                  result_severity
-                    = g_strdup_printf ("%0.1f",
-                                       setting_default_severity_dbl ());
-                  g_debug ("%s: OSP CVE result without severity for '%s'",
-                           __func__, nvt);
-                }
-            }
-          else
-            {
-              /*
-              result_severity
-                = g_strdup_printf ("%0.1f",
-                                   setting_default_severity_dbl ());
-              */
-              g_warning ("%s: Non-CVE OSP result without severity for test %s",
-                         __func__, nvt ? nvt : "(unknown)");
-              return 0;
-            }
+          /*
+            result_severity
+              = g_strdup_printf ("%0.1f",
+                                 setting_default_severity_dbl ());
+          */
+          g_warning ("%s: Result without severity for test %s",
+                     __func__, nvt ? nvt : "(unknown)");
+          return 0;
         }
     }
   else
@@ -19090,6 +19098,8 @@ qod_from_type (const char *qod_type)
     return 70;
   else if (strcmp (qod_type, "remote_probe") == 0)
     return 50;
+  else if (strcmp (qod_type, "package_unreliable") == 0)
+    return 30;
   else if (strcmp (qod_type, "remote_banner_unreliable") == 0)
     return 30;
   else if (strcmp (qod_type, "executable_version_unreliable") == 0)
@@ -19377,8 +19387,6 @@ make_result (task_t task, const char* host, const char *hostname,
         nvt_revision = sql_string ("SELECT iso_time (modification_time)"
                                    " FROM nvts WHERE oid='%s'",
                                    quoted_nvt);
-      else if (g_str_has_prefix (nvt, "oval:"))
-        nvt_revision = ovaldef_version (nvt);
       else if (g_str_has_prefix (nvt, "CVE-"))
         nvt_revision = sql_string ("SELECT iso_time (modification_time)"
                                    " FROM scap.cves WHERE uuid='%s'",
@@ -20201,12 +20209,12 @@ report_clear_count_cache (report_t report,
 report_t
 make_report (task_t task, const char* uuid, task_status_t status)
 {
-  sql ("INSERT into reports (uuid, owner, task, date, comment,"
-       " scan_run_status, slave_progress)"
+  sql ("INSERT into reports (uuid, owner, task, creation_time,"
+       " modification_time, comment, scan_run_status, slave_progress)"
        " VALUES ('%s',"
        " (SELECT owner FROM tasks WHERE tasks.id = %llu),"
-       " %llu, %i, '', %u, 0);",
-       uuid, task, task, time (NULL), status);
+       " %llu, %i, %i, '', %u, 0);",
+       uuid, task, task, time (NULL), time (NULL), status);
   return sql_last_insert_id ();
 }
 
@@ -20432,6 +20440,7 @@ create_report (array_t *results, const char *task_id, const char *in_assets,
            *
            * Fork again so the parent can wait on the child, to prevent
            * zombies. */
+          init_sentry ();
           cleanup_manage_process (FALSE);
           pid = fork ();
           switch (pid)
@@ -20439,16 +20448,19 @@ create_report (array_t *results, const char *task_id, const char *in_assets,
               case 0:
                 /* Grandchild.  Reopen the database (required after fork) and carry on
                  * to import the reports, . */
+                init_sentry ();
                 reinit_manage_process ();
                 break;
               case -1:
                 /* Grandchild's parent when error. */
                 g_warning ("%s: fork: %s", __func__, strerror (errno));
+                gvm_close_sentry ();
                 exit (EXIT_FAILURE);
                 break;
               default:
                 /* Grandchild's parent.  Exit, to close parent's wait. */
                 g_debug ("%s: %i forked %i", __func__, getpid (), pid);
+                gvm_close_sentry ();
                 exit (EXIT_SUCCESS);
                 break;
             }
@@ -20490,7 +20502,7 @@ create_report (array_t *results, const char *task_id, const char *in_assets,
         }
     }
 
-  proctitle_set ("gvmd: Importing results");
+  setproctitle ("gvmd: Importing results");
 
   /* Add the results. */
 
@@ -20754,6 +20766,7 @@ create_report (array_t *results, const char *task_id, const char *in_assets,
       create_asset_report (*report_id, "");
     }
 
+  gvm_close_sentry ();
   exit (EXIT_SUCCESS);
   return 0;
 }
@@ -20849,20 +20862,6 @@ report_compliance_by_uuid (const char *report_id,
     }
 
   g_free (quoted_uuid);
-}
-
-/**
- * @brief Return the source interface of a report.
- *
- * @param[in]  report  Report.
- *
- * @return Source interface.
- */
-static char*
-report_source_iface (report_t report)
-{
-  return sql_string ("SELECT source_iface FROM reports WHERE id = %llu;",
-                     report);
 }
 
 /**
@@ -21084,10 +21083,11 @@ report_add_results_array (report_t report, GArray *results)
  * @brief Filter columns for report iterator.
  */
 #define REPORT_ITERATOR_FILTER_COLUMNS                                         \
- { ANON_GET_ITERATOR_FILTER_COLUMNS, "task_id", "name", "date", "status",      \
-   "task", "severity", "false_positive", "log", "low", "medium", "high",       \
-   "hosts", "result_hosts", "fp_per_host", "log_per_host", "low_per_host",     \
-   "medium_per_host", "high_per_host", "duration", "duration_per_host",        \
+ { ANON_GET_ITERATOR_FILTER_COLUMNS, "task_id", "name", "creation_time",       \
+   "date", "status", "task", "severity", "false_positive", "log", "low",       \
+   "medium", "high", "hosts", "result_hosts", "fp_per_host", "log_per_host",   \
+   "low_per_host", "medium_per_host", "high_per_host", "duration",             \
+   "duration_per_host", "start_time", "end_time", "scan_start", "scan_end",    \
    NULL }
 
 /**
@@ -21097,16 +21097,18 @@ report_add_results_array (report_t report, GArray *results)
  {                                                                           \
    { "id", NULL, KEYWORD_TYPE_INTEGER },                                     \
    { "uuid", NULL, KEYWORD_TYPE_STRING },                                    \
-   { "iso_time (start_time)", "name", KEYWORD_TYPE_STRING },                 \
+   { "iso_time (creation_time)", "name", KEYWORD_TYPE_STRING },              \
    { "''", NULL, KEYWORD_TYPE_STRING },                                      \
-   { "iso_time (start_time)", NULL, KEYWORD_TYPE_STRING },                   \
-   { "iso_time (end_time)", NULL, KEYWORD_TYPE_STRING },                     \
-   { "start_time", "created", KEYWORD_TYPE_INTEGER },                        \
-   { "end_time", "modified", KEYWORD_TYPE_INTEGER },                         \
+   { "iso_time (creation_time)", NULL, KEYWORD_TYPE_STRING },                \
+   { "iso_time (modification_time)", NULL, KEYWORD_TYPE_STRING },            \
+   { "creation_time", "created", KEYWORD_TYPE_INTEGER },                     \
+   { "modification_time", "modified", KEYWORD_TYPE_INTEGER },                \
    { "(SELECT name FROM users WHERE users.id = reports.owner)",              \
      "_owner",                                                               \
      KEYWORD_TYPE_STRING },                                                  \
    { "owner", NULL, KEYWORD_TYPE_INTEGER },                                  \
+   { "start_time", "scan_start", KEYWORD_TYPE_INTEGER },                     \
+   { "end_time", "scan_end", KEYWORD_TYPE_INTEGER },                         \
    { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                                      \
  }
 
@@ -21121,7 +21123,7 @@ report_add_results_array (report_t report, GArray *results)
      "task_id",                                                              \
      KEYWORD_TYPE_STRING                                                     \
    },                                                                        \
-   { "date", NULL, KEYWORD_TYPE_INTEGER },                                   \
+   { "creation_time", "date", KEYWORD_TYPE_INTEGER },                        \
    { "(SELECT name FROM tasks WHERE tasks.id = task)", "task" },             \
    {                                                                         \
      "report_severity (id, opts.override, opts.min_qod)",                    \
@@ -23783,7 +23785,7 @@ int
 report_timestamp (const char* report_id, gchar** timestamp)
 {
   const char* stamp;
-  time_t time = sql_int ("SELECT date FROM reports where uuid = '%s';",
+  time_t time = sql_int ("SELECT creation_time FROM reports where uuid = '%s';",
                          report_id);
   stamp = iso_time (&time);
   if (stamp == NULL) return -1;
@@ -23819,11 +23821,28 @@ report_scan_run_status (report_t report, task_status_t* status)
 int
 set_report_scan_run_status (report_t report, task_status_t status)
 {
-  sql ("UPDATE reports SET scan_run_status = %u WHERE id = %llu;",
+  sql ("UPDATE reports SET scan_run_status = %u,"
+       " modification_time = m_now() WHERE id = %llu;",
        status,
        report);
   if (setting_auto_cache_rebuild_int ())
     report_cache_counts (report, 0, 0, NULL);
+  return 0;
+}
+
+/**
+ * @brief Update modification_time of a report to current time.
+ *
+ * @param[in]   report  Report.
+ *
+ * @return 0.
+ */
+int
+update_report_modification_time (report_t report)
+{
+  sql("UPDATE reports SET modification_time = m_now() WHERE id = %llu;",
+      report);
+
   return 0;
 }
 
@@ -27760,36 +27779,6 @@ print_report_xml_start (report_t report, report_t delta, task_t task,
       PRINT (out,
              "</task>");
 
-      {
-        char *source_iface;
-
-        /* Info about the situation at the time of scan. */
-
-        PRINT (out,
-               "<scan>"
-               "<task>");
-
-        source_iface = report_source_iface (report);
-
-        if (source_iface)
-          /* VALUE "" means preference was not set.  Missing PREFERENCE means
-           * we don't know. */
-          PRINT (out,
-                 "<preferences>"
-                 "<preference>"
-                 "<name>Network Source Interface</name>"
-                 "<scanner_name>source_iface</scanner_name>"
-                 "<value>%s</value>"
-                 "</preference>"
-                 "</preferences>",
-                 source_iface);
-
-        free (source_iface);
-
-        PRINT (out,
-               "</task>"
-               "</scan>");
-      }
     }
 
   uuid = report_uuid (report);
@@ -28943,11 +28932,6 @@ parse_osp_report (task_t task, report_t report, const char *report_xml)
           severity_str = nvt_severity (test_id, type);
           desc = g_strdup (entity_text (r_entity));
         }
-      else if (g_str_has_prefix (test_id, "oval:"))
-        {
-          nvt_id = ovaldef_uuid (test_id, defs_file);
-          severity_str = ovaldef_severity (nvt_id);
-        }
       else
         {
           nvt_id = g_strdup (name);
@@ -28999,9 +28983,12 @@ parse_osp_report (task_t task, report_t report, const char *report_xml)
 
   if (has_results)
     {
+      sql ("UPDATE reports SET modification_time = m_now() WHERE id = %llu;", 
+           report);
       report_add_results_array (report, results_array);
     }
   
+
  end_parse_osp_report:
   sql_commit ();
   g_array_free (results_array, TRUE);
@@ -29740,16 +29727,18 @@ cleanup_schedule_times ()
 {
   sql ("UPDATE tasks"
         " SET schedule_next_time"
-        "   = (SELECT next_time_ical (icalendar, timezone)"
+        "   = (SELECT next_time_ical (icalendar, m_now()::bigint, timezone)"
         "      FROM schedules"
         "      WHERE schedules.id = tasks.schedule)"
         " WHERE schedule_next_time != 0"
         "   AND schedule_next_time"
-        "         = (SELECT next_time_ical (icalendar, timezone)"
+        "         = (SELECT next_time_ical (icalendar, m_now()::bigint,"
+        "                                   timezone)"
         "              FROM schedules"
         "             WHERE schedules.id = tasks.schedule)"
         "   AND schedule_next_time"
-        "         != (SELECT next_time_ical (icalendar, timezone)"
+        "         != (SELECT next_time_ical (icalendar, m_now()::bigint,"
+        "                                    timezone)"
         "              FROM schedules"
         "             WHERE schedules.id = tasks.schedule);");
 
@@ -32804,16 +32793,6 @@ check_for_new_scap ()
                    "                          AS INTEGER),"
                    "                    0));"))
         event (EVENT_NEW_SECINFO, "cpe", 0, 0);
-
-      if (sql_int ("SELECT EXISTS"
-                   " (SELECT * FROM scap.ovaldefs"
-                   "  WHERE creation_time"
-                   "        > coalesce (CAST ((SELECT value FROM meta"
-                   "                           WHERE name"
-                   "                                 = 'scap_check_time')"
-                   "                          AS INTEGER),"
-                   "                    0));"))
-        event (EVENT_NEW_SECINFO, "ovaldef", 0, 0);
     }
 }
 
@@ -33343,93 +33322,6 @@ new_dfn_certs_list (event_t event, const void* event_data, alert_t alert,
 }
 
 /**
- * @brief Create list for "New OVAL Definitions" event.
- *
- * @param[in]  event         Event.
- * @param[in]  event_data    Event type specific details.
- * @param[in]  alert         Alert.
- * @param[in]  example       Whether the message is an example only.
- * @param[out] count_return  NULL, or address for row count.
- *
- * @return Freshly allocated list.
- */
-static gchar *
-new_oval_defs_list (event_t event, const void* event_data, alert_t alert,
-                    int example, int *count_return)
-{
-  iterator_t rows;
-  GString *buffer;
-  int count;
-  char *details_url;
-  const gchar *type;
-
-  details_url = alert_data (alert, "method", "details_url");
-  type = (gchar*) event_data;
-
-  buffer = g_string_new (NEW_OVAL_DEFS_HEADER);
-
-  count = 0;
-  if (example)
-    init_iterator (&rows,
-                   "SELECT uuid, name, title FROM ovaldefs"
-                   " LIMIT 4;");
-  else if (event == EVENT_NEW_SECINFO)
-    init_iterator (&rows,
-                   "SELECT uuid, name, title FROM ovaldefs"
-                   " WHERE creation_time"
-                   "       > coalesce (CAST ((SELECT value FROM meta"
-                   "                          WHERE name"
-                   "                                = 'scap_check_time')"
-                   "                         AS INTEGER),"
-                   "                   0)"
-                   " ORDER BY creation_time DESC;");
-  else
-    init_iterator (&rows,
-                   "SELECT uuid, name, title FROM ovaldefs"
-                   " WHERE modification_time"
-                   "       > coalesce (CAST ((SELECT value FROM meta"
-                   "                          WHERE name"
-                   "                                = 'scap_check_time')"
-                   "                         AS INTEGER),"
-                   "                   0)"
-                   " AND creation_time"
-                   "     <= coalesce (CAST ((SELECT value FROM meta"
-                   "                         WHERE name"
-                   "                               = 'scap_check_time')"
-                   "                        AS INTEGER),"
-                   "                  0)"
-                   " ORDER BY modification_time DESC;");
-
-  while (next (&rows))
-    {
-      gchar *url;
-      const char *name, *title;
-
-      name = iterator_string (&rows, 1);
-      title = iterator_string (&rows, 2);
-      if (details_url && strlen (details_url))
-        url = alert_url_print (details_url, iterator_string (&rows, 0), type);
-      else
-        url = NULL;
-      g_string_append_printf (buffer,
-                              "%-30s  %-s%s%s%s",
-                              name,
-                              title,
-                              url ? "\n  " : "",
-                              url ? url : "",
-                              url ? "\n\n" : "\n");
-      g_free (url);
-      count++;
-    }
-  cleanup_iterator (&rows);
-
-  if (count_return)
-    *count_return = count;
-
-  return g_string_free (buffer, FALSE);
-}
-
-/**
  * @brief Create message for New NVTs event.
  *
  * @param[in]  event       Event.
@@ -33469,11 +33361,6 @@ new_secinfo_list (event_t event, const void* event_data, alert_t alert,
     return new_dfn_certs_list (event, "dfn_cert_adv", alert, 1, count_return);
   if (strcasecmp (event_data, "dfn_cert_adv") == 0)
     return new_dfn_certs_list (event, "dfn_cert_adv", alert, 0, count_return);
-
-  if (strcasecmp (event_data, "ovaldef_example") == 0)
-    return new_oval_defs_list (event, "ovaldef", alert, 1, count_return);
-  if (strcasecmp (event_data, "ovaldef") == 0)
-    return new_oval_defs_list (event, "ovaldef", alert, 0, count_return);
 
   if (count_return)
     {
@@ -33576,22 +33463,6 @@ check_for_updated_scap ()
                    "                         AS INTEGER),"
                    "                   0));"))
         event (EVENT_UPDATED_SECINFO, "cpe", 0, 0);
-
-      if (sql_int ("SELECT EXISTS"
-                   " (SELECT * FROM scap.ovaldefs"
-                   "  WHERE modification_time"
-                   "        > coalesce (CAST ((SELECT value FROM meta"
-                   "                           WHERE name"
-                   "                                 = 'scap_check_time')"
-                   "                          AS INTEGER),"
-                   "                    0)"
-                   "  AND creation_time"
-                   "      <= coalesce (CAST ((SELECT value FROM meta"
-                   "                          WHERE name"
-                   "                                = 'scap_check_time')"
-                   "                         AS INTEGER),"
-                   "                   0));"))
-        event (EVENT_UPDATED_SECINFO, "ovaldef", 0, 0);
     }
 }
 
@@ -34611,7 +34482,7 @@ modify_credential (const char *credential_id,
         {
           if (key_private_to_use || password)
             {
-              if (check_private_key (key_private_truncated
+              if (check_private_key (key_private_to_use
                                       ? key_private_to_use
                                       : credential_iterator_private_key
                                          (&iterator),
@@ -34627,7 +34498,7 @@ modify_credential (const char *credential_id,
 
               set_credential_private_key
                 (credential,
-                 key_private_truncated
+                 key_private_to_use
                   ? key_private_to_use
                   : credential_iterator_private_key (&iterator),
                  password
@@ -37060,9 +36931,6 @@ note_iterator_nvt_type (iterator_t *iterator)
   if (g_str_has_prefix (oid, "CVE-"))
     return "cve";
 
-  if (g_str_has_prefix (oid, "oval:"))
-    return "ovaldef";
-
   return "nvt";
 }
 
@@ -37197,7 +37065,7 @@ create_override (const char* active, const char* nvt, const char* text,
               && new_severity_dbl != SEVERITY_FP))
         {
           g_free (quoted_severity);
-          return 2;
+          return 3;
         }
     }
   else if (new_threat != NULL && strcmp (new_threat, ""))
@@ -38352,9 +38220,6 @@ override_iterator_nvt_type (iterator_t *iterator)
   if (g_str_has_prefix (oid, "CVE-"))
     return "cve";
 
-  if (g_str_has_prefix (oid, "oval:"))
-    return "ovaldef";
-
   return "nvt";
 }
 
@@ -39352,12 +39217,7 @@ delete_scanner (const char *scanner_id, int ultimate)
       if (sql_int ("SELECT count(*) FROM tasks"
                    " WHERE scanner = %llu"
                    " AND scanner_location = " G_STRINGIFY (LOCATION_TRASH) ";",
-                   scanner)
-          || sql_int ("SELECT count(*) FROM configs_trash"
-                      " WHERE scanner = %llu"
-                      " AND scanner_location"
-                      "      = " G_STRINGIFY (LOCATION_TRASH) ";",
-                      scanner))
+                   scanner))
         {
           sql_rollback ();
           return 1;
@@ -39379,10 +39239,7 @@ delete_scanner (const char *scanner_id, int ultimate)
                    " WHERE scanner = %llu"
                    " AND scanner_location = " G_STRINGIFY (LOCATION_TABLE)
                    " AND hidden = 0;",
-                   scanner)
-          || sql_int ("SELECT count(*) FROM configs"
-                      " WHERE scanner = %llu;",
-                      scanner))
+                   scanner))
         {
           sql_rollback ();
           return 1;
@@ -39398,14 +39255,6 @@ delete_scanner (const char *scanner_id, int ultimate)
            " FROM scanners WHERE id = %llu;", scanner);
 
       trash_scanner = sql_last_insert_id ();
-
-      /* Update the location of the scanner in any trashcan configs & tasks. */
-      sql ("UPDATE configs_trash"
-           " SET scanner = %llu,"
-           "     scanner_location = " G_STRINGIFY (LOCATION_TRASH)
-           " WHERE scanner = %llu;",
-           trash_scanner,
-           scanner);
 
       sql ("UPDATE tasks"
            " SET scanner = %llu,"
@@ -39666,59 +39515,6 @@ scanner_iterator_key_priv (iterator_t* iterator)
 DEF_ACCESS (scanner_iterator_credential_type, GET_ITERATOR_COLUMN_COUNT + 10);
 
 /**
- * @brief Initialise a scanner config iterator.
- *
- * @param[in]  iterator  Iterator.
- * @param[in]  scanner   Scanner.
- */
-void
-init_scanner_config_iterator (iterator_t* iterator, scanner_t scanner)
-{
-  gchar *available, *with_clause;
-  get_data_t get;
-  array_t *permissions;
-
-  assert (scanner);
-
-  get.trash = 0;
-  permissions = make_array ();
-  array_add (permissions, g_strdup ("get_configs"));
-  available = acl_where_owned ("config", &get, 1, "any", 0, permissions, 0,
-                               &with_clause);
-  array_free (permissions);
-
-  init_iterator (iterator,
-                 "%s"
-                 " SELECT id, uuid, name, %s FROM configs"
-                 " WHERE scanner = %llu"
-                 " ORDER BY name ASC;",
-                 with_clause ? with_clause : "",
-                 available,
-                 scanner);
-
-  g_free (with_clause);
-  g_free (available);
-}
-
-/**
- * @brief Get the UUID from a scanner config iterator.
- *
- * @param[in]  iterator  Iterator.
- *
- * @return UUID, or NULL if iteration is complete. Freed by cleanup_iterator.
- */
-DEF_ACCESS (scanner_config_iterator_uuid, 1);
-
-/**
- * @brief Get the name from a scanner config iterator.
- *
- * @param[in]  iterator  Iterator.
- *
- * @return Name, or NULL if iteration is complete. Freed by cleanup_iterator.
- */
-DEF_ACCESS (scanner_config_iterator_name, 2);
-
-/**
  * @brief Get the read permission status from a GET iterator.
  *
  * @param[in]  iterator  Iterator.
@@ -39810,9 +39606,7 @@ int
 scanner_in_use (scanner_t scanner)
 {
   return !!(sql_int ("SELECT count(*) FROM tasks WHERE scanner = %llu"
-                     " AND hidden = 0;", scanner)
-            || sql_int ("SELECT count(*) FROM configs WHERE scanner = %llu",
-                        scanner));
+                     " AND hidden = 0;", scanner));
 }
 
 /**
@@ -39828,10 +39622,6 @@ trash_scanner_in_use (scanner_t scanner)
   return !!(sql_int ("SELECT count(*) FROM tasks"
                      " WHERE scanner = %llu"
                      " AND scanner_location = " G_STRINGIFY (LOCATION_TRASH),
-                     scanner)
-            || sql_int ("SELECT count(*) FROM configs_trash"
-                        " WHERE scanner = %llu"
-                        " AND scanner_location = " G_STRINGIFY (LOCATION_TRASH),
                      scanner));
 }
 
@@ -40403,8 +40193,7 @@ verify_scanner (const char *scanner_id, char **version)
       return 1;
     }
   g_free (get.id);
-  if (scanner_iterator_type (&scanner) == SCANNER_TYPE_OSP
-      || scanner_iterator_type (&scanner) == SCANNER_TYPE_OPENVAS
+  if (scanner_iterator_type (&scanner) == SCANNER_TYPE_OPENVAS
       || scanner_iterator_type (&scanner) == SCANNER_TYPE_OSP_SENSOR)
     {
       int ret = osp_get_version_from_iterator (&scanner, NULL, version, NULL,
@@ -40462,9 +40251,6 @@ manage_get_scanners (GSList *log_config, const db_conn_info_t *database)
 
       switch (scanner_type)
         {
-          case SCANNER_TYPE_OSP:
-            scanner_type_str = "OSP";
-            break;
           case SCANNER_TYPE_OPENVAS:
             scanner_type_str = "OpenVAS";
             break;
@@ -41002,7 +40788,7 @@ schedule_info (schedule_t schedule, int trash, gchar **icalendar, gchar **zone)
    { "duration", NULL, KEYWORD_TYPE_INTEGER },                             \
    { "timezone", NULL, KEYWORD_TYPE_STRING },                              \
    { "icalendar", NULL, KEYWORD_TYPE_STRING },                             \
-   { "next_time_ical (icalendar, timezone)",                               \
+   { "next_time_ical (icalendar, m_now()::bigint, timezone)",              \
      "next_run",                                                           \
      KEYWORD_TYPE_INTEGER },                                               \
    { "first_time", "first_run", KEYWORD_TYPE_INTEGER },                    \
@@ -41298,7 +41084,8 @@ task_schedule_iterator_stop_due (iterator_t* iterator)
 
           now = time (NULL);
 
-          start = icalendar_next_time_from_string (icalendar, zone, -1);
+          start = icalendar_next_time_from_string (icalendar, time(NULL), zone,
+                                                   -1);
           if ((start + duration) < now)
             return TRUE;
         }
@@ -41568,6 +41355,7 @@ modify_schedule (const char *schedule_id, const char *name, const char *comment,
   // Update scheduled next times for tasks
 
   new_next_time = icalendar_next_time_from_vcalendar (ical_component,
+                                                      time(NULL),
                                                       real_timezone, 0);
 
   sql ("UPDATE tasks SET schedule_next_time = %ld"
@@ -46187,10 +45975,10 @@ manage_restore (const char *id)
 
       sql ("INSERT INTO configs"
            " (uuid, owner, name, nvt_selector, comment, family_count,"
-           "  nvt_count, families_growing, nvts_growing, type, scanner,"
+           "  nvt_count, families_growing, nvts_growing,"
            "  predefined, creation_time, modification_time, usage_type)"
            " SELECT uuid, owner, name, nvt_selector, comment, family_count,"
-           "        nvt_count, families_growing, nvts_growing, type, scanner,"
+           "        nvt_count, families_growing, nvts_growing,"
            "        predefined, creation_time, modification_time, usage_type"
            " FROM configs_trash WHERE id = %llu;",
            resource);
@@ -46198,8 +45986,8 @@ manage_restore (const char *id)
       config = sql_last_insert_id ();
 
       sql ("INSERT INTO config_preferences"
-           " (config, type, name, value, default_value, hr_name)"
-           " SELECT %llu, type, name, value, default_value, hr_name"
+           " (config, type, name, value, default_value)"
+           " SELECT %llu, type, name, value, default_value"
            " FROM config_preferences_trash WHERE config = %llu;",
            config,
            resource);
@@ -46788,13 +46576,6 @@ manage_restore (const char *id)
 
       /* Update the scanner in any trashcan configs and tasks. */
       scanner = sql_last_insert_id ();
-
-      sql ("UPDATE configs_trash"
-           " SET scanner = %llu,"
-           "     scanner_location = " G_STRINGIFY (LOCATION_TABLE)
-           " WHERE scanner = %llu"
-           " AND scanner_location = " G_STRINGIFY (LOCATION_TRASH),
-           scanner, resource);
 
       sql ("UPDATE tasks"
            " SET scanner = %llu,"
@@ -49567,17 +49348,6 @@ setting_filter (const char *resource)
 }
 
 /**
- * @brief Return the Default Severity user setting as a double.
- *
- * @return The user's Default Severity.
- */
-static double
-setting_default_severity_dbl ()
-{
-  return current_credentials.default_severity;
-}
-
-/**
  * @brief Return the Dynamic Severity user setting as an int.
  *
  * @return 1 if user's Dynamic Severity is "Yes", 0 if it is "No",
@@ -49987,8 +49757,8 @@ modify_setting (const gchar *uuid, const gchar *name,
            */
           languages_regex
             = g_regex_new ("^(Browser Language|"
-                           "([a-z]{2,3})(_[A-Z]{2})?(@[[:alnum:]_-]+)?"
-                           "(:([a-z]{2,3})(_[A-Z]{2})?(@[[:alnum:]_-]+)?)*)$",
+                           "([a-z]{2,3})(_[A-Z]{2})?(@[[:alnum:]_\\-]+)?"
+                           "(:([a-z]{2,3})(_[A-Z]{2})?(@[[:alnum:]_\\-]+)?)*)$",
                            0, 0, NULL);
           match = g_regex_match (languages_regex, value, 0, NULL);
           g_regex_unref (languages_regex);
@@ -50234,8 +50004,6 @@ modify_setting (const gchar *uuid, const gchar *name,
         setting_name = g_strdup ("CVE Filter");
       else if (strcmp (uuid, "bef08b33-075c-4f8c-84f5-51f6137e40a3") == 0)
         setting_name = g_strdup ("NVT Filter");
-      else if (strcmp (uuid, "adb6ffc8-e50e-4aab-9c31-13c741eb8a16") == 0)
-        setting_name = g_strdup ("OVAL Filter");
       else if (strcmp (uuid, "e4cf514a-17e2-4ab9-9c90-336f15e24750") == 0)
         setting_name = g_strdup ("CERT-Bund Filter");
       else if (strcmp (uuid, "312350ed-bc06-44f3-8b3f-ab9eb828b80b") == 0)
@@ -50356,10 +50124,6 @@ modify_setting (const gchar *uuid, const gchar *name,
       else if (strcmp (uuid, "9cff9b4d-b164-43ce-8687-f2360afc7500") == 0)
         setting_name = g_strdup ("CPEs Top Dashboard Configuration");
 
-      /* OVAL Definitions dashboard settings */
-      else if (strcmp (uuid, "9563efc0-9f4e-4d1f-8f8d-0205e32b90a4") == 0)
-        setting_name = g_strdup ("OVAL Definitions Top Dashboard Configuration");
-
       /* CERT-Bund Advisories dashboard settings */
       else if (strcmp (uuid, "a6946f44-480f-4f37-8a73-28a4cd5310c4") == 0)
         setting_name = g_strdup ("CERT-Bund Advisories Top Dashboard"
@@ -50381,16 +50145,6 @@ modify_setting (const gchar *uuid, const gchar *name,
       /* Tickets */
       else if (strcmp (uuid, "70b0626f-a835-478e-8194-e09f97887a15") == 0)
         setting_name = g_strdup ("Tickets Top Dashboard Configuration");
-
-      /* Business Process Model (BPM) */
-      else if (strcmp (uuid, "3232d608-e5bb-415e-99aa-019f16eede8d") == 0)
-        setting_name = g_strdup ("BPM Dashboard Configuration");
-
-      /*
-       * Client data for Business Process Modeling (BPM)
-       */
-      else if (strcmp (uuid, "3ce2d136-bb52-448a-93f0-20069566f877") == 0)
-        setting_name = g_strdup ("BPM Data");
     }
 
   if (setting_name)
@@ -50572,7 +50326,7 @@ setting_verify (const gchar *uuid, const gchar *value, const gchar *user)
   if (strcmp (uuid, SETTING_UUID_LSC_DEB_MAINTAINER) == 0)
     {
       if (g_regex_match_simple
-            ("^([[:alnum:]-_]*@[[:alnum:]-_][[:alnum:]-_.]*)?$",
+            ("^([[:alnum:]\\-_]*@[[:alnum:]\\-_][[:alnum:]\\-_.]*)?$",
             value, 0, 0) == FALSE)
         return 1;
     }
@@ -50899,7 +50653,7 @@ manage_create_user (GSList *log_config, const db_conn_info_t *database,
   /* Setup a dummy user, so that create_user will work. */
   current_credentials.uuid = "";
 
-  ret = create_user (name, password ? password : uuid, "", NULL, 0, NULL, 0,
+  ret = create_user (name, password ? password : uuid, "", NULL, 0,
                      NULL, NULL, NULL, roles, NULL, &rejection_msg, NULL, 0);
 
   switch (ret)
@@ -51229,8 +50983,6 @@ find_user_by_name (const char* name, user_t *user)
  * @param[in]  comment      Comment for the new user or NULL.
  * @param[in]  hosts        The host the user is allowed/forbidden to scan.
  * @param[in]  hosts_allow  Whether hosts is allow or forbid.
- * @param[in]  ifaces       Interfaces the user is allowed/forbidden to scan.
- * @param[in]  ifaces_allow     Whether ifaces is allow or forbid.
  * @param[in]  allowed_methods  Allowed login methods.
  * @param[in]  groups       Groups.
  * @param[out] group_id_return  ID of group on "failed to find" error.
@@ -51249,13 +51001,12 @@ find_user_by_name (const char* name, user_t *user)
 int
 create_user (const gchar * name, const gchar * password, const gchar *comment,
              const gchar * hosts, int hosts_allow,
-             const gchar *ifaces, int ifaces_allow,
              const array_t * allowed_methods, array_t *groups,
              gchar **group_id_return, array_t *roles, gchar **role_id_return,
              gchar **r_errdesc, user_t *new_user, int forbid_super_admin)
 {
   char *errstr, *uuid;
-  gchar *quoted_hosts, *quoted_ifaces, *quoted_method, *quoted_name, *hash;
+  gchar *quoted_hosts, *quoted_method, *quoted_name, *hash;
   gchar *quoted_comment, *clean, *generated;
   int index, max, ret;
   user_t user;
@@ -51349,7 +51100,6 @@ create_user (const gchar * name, const gchar * password, const gchar *comment,
 
   clean = clean_hosts (hosts ? hosts : "", &max);
   quoted_hosts = sql_quote (clean);
-  quoted_ifaces = sql_quote (ifaces ? ifaces : "");
   g_free (clean);
   quoted_method = sql_quote (allowed_methods
                               ? g_ptr_array_index (allowed_methods, 0)
@@ -51358,28 +51108,23 @@ create_user (const gchar * name, const gchar * password, const gchar *comment,
   ret
     = sql_error ("INSERT INTO users"
                  " (uuid, owner, name, password, comment, hosts, hosts_allow,"
-                 "  ifaces, ifaces_allow, method, creation_time,"
-                 "  modification_time)"
+                 "  method, creation_time, modification_time)"
                  " VALUES"
                  " (make_uuid (),"
                  "  (SELECT id FROM users WHERE uuid = '%s'),"
                  "  '%s', '%s', '%s', '%s', %i,"
-                 "  '%s', %i, '%s', m_now (),"
-                 "  m_now ());",
+                 "  '%s', m_now (), m_now ());",
                  current_credentials.uuid,
                  quoted_name,
                  hash,
                  quoted_comment,
                  quoted_hosts,
                  hosts_allow,
-                 quoted_ifaces,
-                 ifaces_allow,
                  quoted_method);
   g_free (generated);
   g_free (hash);
   g_free (quoted_comment);
   g_free (quoted_hosts);
-  g_free (quoted_ifaces);
   g_free (quoted_method);
   g_free (quoted_name);
 
@@ -51534,8 +51279,7 @@ copy_user (const char* name, const char* comment, const char *user_id,
   sql_begin_immediate ();
 
   ret = copy_resource_lock ("user", name, comment, user_id,
-                            "password, timezone, hosts, hosts_allow,"
-                            " ifaces, ifaces_allow, method",
+                            "password, timezone, hosts, hosts_allow, method",
                             1, &user, NULL);
   if (ret)
     {
@@ -52288,8 +52032,6 @@ delete_user (const char *user_id_arg, const char *name_arg, int ultimate,
  * @param[in]  hosts        The host the user is allowed/forbidden to scan.
  *                          NULL to leave as is.
  * @param[in]  hosts_allow  Whether hosts is allow or forbid.
- * @param[in]  ifaces       Interfaces the user is allowed/forbidden to scan.
- * @param[in]  ifaces_allow     Whether ifaces is allow or forbid.
  * @param[in]  allowed_methods  Allowed login methods.
  * @param[in]  groups           Groups.
  * @param[out] group_id_return  ID of group on "failed to find" error.
@@ -52309,13 +52051,12 @@ int
 modify_user (const gchar * user_id, gchar **name, const gchar *new_name,
              const gchar * password, const gchar * comment,
              const gchar * hosts, int hosts_allow,
-             const gchar *ifaces, int ifaces_allow,
              const array_t * allowed_methods, array_t *groups,
              gchar **group_id_return, array_t *roles, gchar **role_id_return,
              gchar **r_errdesc)
 {
   char *errstr;
-  gchar *hash, *quoted_hosts, *quoted_ifaces, *quoted_method, *clean, *uuid;
+  gchar *hash, *quoted_hosts, *quoted_method, *clean, *uuid;
   gchar *quoted_new_name, *quoted_comment;
   user_t user;
   int max, was_admin, is_admin;
@@ -52461,7 +52202,6 @@ modify_user (const gchar * user_id, gchar **name, const gchar *new_name,
   if ((hosts_allow == 0) && (max == 0))
     /* Convert "Deny none" to "Allow All". */
     hosts_allow = 2;
-  quoted_ifaces = sql_quote (ifaces ? ifaces : "");
   quoted_hosts = sql_quote (clean);
   g_free (clean);
   quoted_method = sql_quote (allowed_methods
@@ -52472,8 +52212,6 @@ modify_user (const gchar * user_id, gchar **name, const gchar *new_name,
        "     comment = %s%s%s,"
        "     hosts = '%s',"
        "     hosts_allow = '%i',"
-       "     ifaces = '%s',"
-       "     ifaces_allow = %i,"
        "     method = %s%s%s,"
        "     modification_time = m_now ()"
        " WHERE id = %llu;",
@@ -52485,15 +52223,12 @@ modify_user (const gchar * user_id, gchar **name, const gchar *new_name,
        quoted_comment ? "'" : "",
        quoted_hosts,
        hosts_allow,
-       quoted_ifaces,
-       ifaces_allow,
        allowed_methods ? "'" : "",
        allowed_methods ? quoted_method : "method",
        allowed_methods ? "'" : "",
        user);
   g_free (quoted_new_name);
   g_free (quoted_hosts);
-  g_free (quoted_ifaces);
   g_free (quoted_method);
   if (hash)
     sql ("UPDATE users"
@@ -52716,45 +52451,6 @@ trash_user_writable (user_t user)
 }
 
 /**
- * @brief Return the ifaces of a user.
- *
- * @param[in]  uuid  UUID of user.
- *
- * @return Newly allocated ifaces value if available, else NULL.
- */
-gchar*
-user_ifaces (const char *uuid)
-{
-  gchar *name, *quoted_uuid;
-
-  quoted_uuid = sql_quote (uuid);
-  name = sql_string ("SELECT ifaces FROM users WHERE uuid = '%s';",
-                     quoted_uuid);
-  g_free (quoted_uuid);
-  return name;
-}
-
-/**
- * @brief Return whether ifaces value of a user denotes allowed.
- *
- * @param[in]  uuid  UUID of user.
- *
- * @return 1 if allow, else 0.
- */
-int
-user_ifaces_allow (const char *uuid)
-{
-  gchar *quoted_uuid;
-  int allow;
-
-  quoted_uuid = sql_quote (uuid);
-  allow = sql_int ("SELECT ifaces_allow FROM users WHERE uuid = '%s';",
-                   quoted_uuid);
-  g_free (quoted_uuid);
-  return allow;
-}
-
-/**
  * @brief Return the hosts of a user.
  *
  * @param[in]  uuid  UUID of user.
@@ -52798,7 +52494,7 @@ user_hosts_allow (const char *uuid)
  */
 #define USER_ITERATOR_FILTER_COLUMNS                                  \
  { GET_ITERATOR_FILTER_COLUMNS, "method", "roles", "groups", "hosts", \
-   "ifaces", NULL }
+   NULL }
 
 /**
  * @brief User iterator columns.
@@ -52832,8 +52528,6 @@ user_hosts_allow (const char *uuid)
      "groups",                                                             \
      KEYWORD_TYPE_STRING                                                   \
    },                                                                      \
-   { "ifaces", NULL, KEYWORD_TYPE_STRING },                                \
-   { "ifaces_allow", NULL, KEYWORD_TYPE_INTEGER },                         \
    { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                                    \
  }
 
@@ -52846,8 +52540,6 @@ user_hosts_allow (const char *uuid)
    { "method", NULL, KEYWORD_TYPE_STRING },                                \
    { "hosts", NULL, KEYWORD_TYPE_STRING },                                 \
    { "hosts_allow", NULL, KEYWORD_TYPE_INTEGER },                          \
-   { "ifaces", NULL, KEYWORD_TYPE_STRING },                                \
-   { "ifaces_allow", NULL, KEYWORD_TYPE_INTEGER },                         \
    { NULL, NULL, KEYWORD_TYPE_UNKNOWN }                                    \
  }
 
@@ -52925,29 +52617,6 @@ user_iterator_hosts_allow (iterator_t* iterator)
 {
   if (iterator->done) return -1;
   return iterator_int (iterator, GET_ITERATOR_COLUMN_COUNT + 2);
-}
-
-/**
- * @brief Get the ifaces from a user iterator.
- *
- * @param[in]  iterator  Iterator.
- *
- * @return Interfaces or NULL if iteration is complete.
- */
-DEF_ACCESS (user_iterator_ifaces, GET_ITERATOR_COLUMN_COUNT + 5);
-
-/**
- * @brief Get the ifaces allow value from a user iterator.
- *
- * @param[in]  iterator  Iterator.
- *
- * @return Interfaces allow.
- */
-int
-user_iterator_ifaces_allow (iterator_t* iterator)
-{
-  if (iterator->done) return -1;
-  return iterator_int (iterator, GET_ITERATOR_COLUMN_COUNT + 6);
 }
 
 /**
@@ -54976,7 +54645,6 @@ type_select_columns (const char *type)
   static column_t note_columns[] = NOTE_ITERATOR_COLUMNS;
   static column_t nvt_columns[] = NVT_ITERATOR_COLUMNS;
   static column_t os_columns[] = OS_ITERATOR_COLUMNS;
-  static column_t ovaldef_columns[] = OVALDEF_INFO_ITERATOR_COLUMNS;
   static column_t override_columns[] = OVERRIDE_ITERATOR_COLUMNS;
   static column_t permission_columns[] = PERMISSION_ITERATOR_COLUMNS;
   static column_t report_columns[] = REPORT_ITERATOR_COLUMNS;
@@ -55019,8 +54687,6 @@ type_select_columns (const char *type)
     return nvt_columns;
   if (strcasecmp (type, "OS") == 0)
     return os_columns;
-  if (strcasecmp (type, "OVALDEF") == 0)
-    return ovaldef_columns;
   if (strcasecmp (type, "OVERRIDE") == 0)
     return override_columns;
   if (strcasecmp (type, "PERMISSION") == 0)
@@ -55163,11 +54829,6 @@ type_filter_columns (const char *type)
   if (strcasecmp (type, "OS") == 0)
     {
       static const char *ret[] = OS_ITERATOR_FILTER_COLUMNS;
-      return ret;
-    }
-  if (strcasecmp (type, "OVALDEF") == 0)
-    {
-      static const char *ret[] = OVALDEF_INFO_ITERATOR_FILTER_COLUMNS;
       return ret;
     }
   if (strcasecmp (type, "OVERRIDE") == 0)
@@ -56164,6 +55825,31 @@ manage_optimize (GSList *log_config, const db_conn_info_t *database,
                                       " Due date updated for %d tasks.",
                                       changes);
     }
+  else if (strcasecmp (name, "cleanup-sequences") == 0)
+    {
+      success_text = NULL;
+
+      if (cleanup_config_sequences ())
+        {
+          fprintf (stderr, "Failed to clean up config related sequences.\n");
+          ret = -1;
+        }
+      else if (cleanup_nvt_sequences ())
+        {
+          fprintf (stderr, "Failed to clean up NVT related sequences.\n");
+          ret = -1;
+        }
+      else if (cleanup_port_list_sequences ())
+        {
+          fprintf (stderr, "Failed to clean up port list related sequences.\n");
+          ret = -1;
+        }
+      else
+        {
+          success_text = g_strdup_printf ("Optimized: cleanup-sequences."
+                                          " Cleaned up id sequences.");
+        }
+    }
   else if (strcasecmp (name, "migrate-relay-sensors") == 0)
     {
       if (get_relay_mapper_path ())
@@ -56285,4 +55971,64 @@ set_vt_verification_collation (const char *new_collation)
     vt_verification_collation = g_strdup(new_collation);
   else
     vt_verification_collation = NULL;
+}
+
+/**
+ * @brief Resets the id sequence for a table and assigns new ids to all rows.
+ *
+ * This ensures the id column has the lowest possible value, closing any gaps
+ * while preserving the original order.
+ *
+ * @param[in]  table  The table to assign new ids to.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+cleanup_ids_for_table (const char *table)
+{
+  char *sequence_name;
+  iterator_t ids;
+
+  g_info ("Cleaning up id sequence for table \"%s\"", table);
+
+  if (sql_int ("SELECT try_exclusive_lock ('%s')", table) == 0)
+    {
+      g_warning ("%s: Failed to acquire lock on table \"%s\"",
+                 __func__, table);
+      return -1;
+    }
+
+  sequence_name = sql_string ("SELECT pg_get_serial_sequence('%s', 'id')",
+                              table);
+  if (sequence_name == NULL)
+    {
+      g_warning ("%s: Failed to get sequence name for %s id",
+                 __func__, table);
+      return -1;
+    }
+
+  sql ("SET ROLE \"%s\";", DB_SUPERUSER_ROLE);
+  sql ("ALTER SEQUENCE %s RESTART;", sequence_name);
+  sql ("RESET ROLE;");
+
+  init_iterator (&ids,
+                 "SELECT id AS old_id, nextval('%s'::regclass) AS new_id"
+                 "   FROM %s"
+                 "   ORDER BY old_id ASC"
+                 "   FOR UPDATE",
+                 sequence_name,
+                 table);
+
+  while (next (&ids))
+    {
+      resource_t old_id, new_id;
+      old_id = iterator_int64 (&ids, 0);
+      new_id = iterator_int64 (&ids, 1);
+
+      sql ("UPDATE %s SET id = %llu WHERE id = %llu", table, new_id, old_id);
+    }
+  cleanup_iterator(&ids);
+
+  free (sequence_name);
+  return 0;
 }

@@ -1,4 +1,4 @@
-/* Copyright (C) 2020-2021 Greenbone Networks GmbH
+/* Copyright (C) 2020-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -2615,4 +2615,24 @@ check_db_port_lists ()
                  " These will be excluded from the sync.",
                  __func__);
     }
+}
+
+/**
+ * @brief Cleans up port list related id sequences likely to run out.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+cleanup_port_list_sequences () {
+  g_info ("Cleaning up port list related id sequences...");
+  sql_begin_immediate ();
+
+  if (cleanup_ids_for_table ("port_ranges"))
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  sql_commit ();
+  return 0;
 }

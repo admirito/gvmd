@@ -37,6 +37,13 @@
       
     
     
+      <p><b>--broker-address=<em>ADDRESS</em></b></p>
+      
+        <p>Sets the address for the publish-subscribe message (MQTT) broker.
+          Defaults to localhost:9138. Set to empty to disable.</p>
+      
+    
+    
       <p><b>--check-alerts</b></p>
       
         <p>Check SecInfo alerts.</p>
@@ -248,7 +255,7 @@
         <p>Run an optimization: vacuum, analyze, add-feed-permissions,
            cleanup-config-prefs, cleanup-feed-permissions,
            cleanup-port-names, cleanup-report-formats, cleanup-result-nvts,
-           cleanup-result-severities, cleanup-schedule-times,
+           cleanup-result-severities, cleanup-schedule-times, cleanup-sequences,
            migrate-relay-sensors, rebuild-report-cache
            or update-report-cache.</p>
       
@@ -276,8 +283,6 @@
       
         <p>Use port number NUMBER for address 2.</p>
       
-    
-    
       
       <p><b>--rebuild-gvmd-data=<em>TYPES</em></b></p>
       
@@ -292,11 +297,10 @@
         </p>
 
 
-      <p><b>--rebuild-scap=<em>TYPE</em></b></p>
+      <p><b>--rebuild-scap</b></p>
       
         <p>
-          Rebuild SCAP data of type <em>TYPE</em>
-          (currently only supports 'ovaldefs').
+          Rebuild all SCAP data.
         </p>
       
     
@@ -365,7 +369,7 @@
       <p><b>--scanner-type=<em>SCANNER-TYPE</em></b></p>
       
         <p>Scanner type for --create-scanner and --modify-scanner.</p>
-        <p>Either 'OpenVAS', 'OSP', 'GMP', 'OSP-Sensor' or a number
+        <p>Either 'OpenVAS', 'GMP', 'OSP-Sensor' or a number
            as used in GMP.</p>
       
     

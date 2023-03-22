@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2021 Greenbone Networks GmbH
+/* Copyright (C) 2009-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -303,7 +303,7 @@ typedef enum
 typedef enum scanner_type
 {
   SCANNER_TYPE_NONE = 0,
-  SCANNER_TYPE_OSP = 1,
+  /* 1 was removed (SCANNER_TYPE_OSP). */
   SCANNER_TYPE_OPENVAS = 2,
   SCANNER_TYPE_CVE = 3,
   /* 4 was removed (SCANNER_TYPE_GMP). */
@@ -637,6 +637,9 @@ event_name (event_t);
 
 gchar*
 event_description (event_t, const void *, const char *);
+
+alert_method_t
+alert_method (alert_t alert);
 
 const char*
 alert_method_name (alert_method_t);
@@ -1754,11 +1757,8 @@ target_login_port (target_t, const char*);
  *
  * These are here because they need definitions that are still in manage.h. */
 
-scanner_t
-config_iterator_scanner (iterator_t*);
-
 int
-create_task_check_config_scanner (config_t, scanner_t);
+create_task_check_scanner_type (scanner_t);
 
 int
 modify_task_check_config_scanner (task_t, const char *, const char *);
@@ -2585,15 +2585,6 @@ scanner_iterator_key_pub (iterator_t *);
 const char*
 scanner_iterator_credential_type (iterator_t *);
 
-void
-init_scanner_config_iterator (iterator_t*, scanner_t);
-
-const char*
-scanner_config_iterator_uuid (iterator_t *);
-
-const char*
-scanner_config_iterator_name (iterator_t *);
-
 int
 scanner_config_iterator_readable (iterator_t *);
 
@@ -3196,52 +3187,6 @@ cve_info_count (const get_data_t *get);
 gchar *
 cve_cvss_base (const gchar *);
 
-/* OVAL definitions */
-int
-init_ovaldef_info_iterator (iterator_t*, get_data_t*, const char*);
-
-int
-ovaldef_info_count (const get_data_t *get);
-
-const char*
-ovaldef_info_iterator_version (iterator_t*);
-
-const char*
-ovaldef_info_iterator_deprecated (iterator_t*);
-
-const char*
-ovaldef_info_iterator_class (iterator_t*);
-
-const char*
-ovaldef_info_iterator_title (iterator_t*);
-
-const char*
-ovaldef_info_iterator_description (iterator_t*);
-
-const char*
-ovaldef_info_iterator_file (iterator_t*);
-
-const char*
-ovaldef_info_iterator_status (iterator_t*);
-
-const char*
-ovaldef_info_iterator_severity (iterator_t*);
-
-const char*
-ovaldef_info_iterator_cve_refs (iterator_t*);
-
-char *
-ovaldef_severity (const char *);
-
-char *
-ovaldef_version (const char *);
-
-char *
-ovaldef_uuid (const char *, const char *);
-
-char *
-ovaldef_cves (const char *);
-
 /* CERT data */
 int
 manage_cert_loaded ();
@@ -3308,12 +3253,6 @@ nvt_dfn_cert_adv_iterator_name (iterator_t*);
 
 int
 secinfo_count_after (const get_data_t *, const char *, time_t, gboolean);
-
-void
-init_ovaldi_file_iterator (iterator_t*);
-
-const char*
-ovaldi_file_iterator_name (iterator_t*);
 
 
 /* Settings. */
@@ -3419,12 +3358,6 @@ user_iterator_hosts (iterator_t*);
 int
 user_iterator_hosts_allow (iterator_t*);
 
-const char*
-user_iterator_ifaces (iterator_t*);
-
-int
-user_iterator_ifaces_allow (iterator_t*);
-
 void
 init_user_group_iterator (iterator_t *, user_t);
 
@@ -3451,7 +3384,7 @@ user_role_iterator_readable (iterator_t*);
 
 int
 create_user (const gchar *, const gchar *, const gchar *, const gchar *,
-             int, const gchar *, int, const array_t *, array_t *, gchar **,
+             int, const array_t *, array_t *, gchar **,
              array_t *, gchar **, gchar **, user_t *, int);
 
 int
@@ -3459,7 +3392,7 @@ delete_user (const char *, const char *, int, int, const char*, const char*);
 
 int
 modify_user (const gchar *, gchar **, const gchar *, const gchar *,
-             const gchar*, const gchar *, int, const gchar *, int,
+             const gchar*, const gchar *, int,
              const array_t *, array_t *, gchar **, array_t *, gchar **,
              gchar **);
 
@@ -3483,12 +3416,6 @@ user_name (const char *);
 
 char*
 user_uuid (user_t);
-
-gchar*
-user_ifaces (const char *);
-
-int
-user_ifaces_allow (const char *);
 
 gchar*
 user_hosts (const char *);
@@ -3688,6 +3615,12 @@ gboolean
 manage_gvmd_data_feed_dirs_exist ();
 
 const gchar *
+get_broker_address ();
+
+void
+set_broker_address (const char *);
+
+const gchar *
 get_feed_lock_path ();
 
 void
@@ -3725,6 +3658,12 @@ gvm_get_sync_script_description (const gchar *, gchar **);
 
 gboolean
 gvm_get_sync_script_feed_version (const gchar *, gchar **);
+
+int
+nvts_feed_info (gchar **, gchar **, gchar **, gchar **);
+
+int
+nvts_check_feed (int *, int *, gchar **);
 
 int
 manage_update_nvts_osp (const gchar *);

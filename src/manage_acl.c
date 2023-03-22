@@ -1,4 +1,4 @@
-/* Copyright (C) 2013-2021 Greenbone Networks GmbH
+/* Copyright (C) 2013-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -656,7 +656,6 @@ acl_user_owns_uuid (const char *type, const char *uuid, int trash)
   if ((strcmp (type, "nvt") == 0)
       || (strcmp (type, "cve") == 0)
       || (strcmp (type, "cpe") == 0)
-      || (strcmp (type, "ovaldef") == 0)
       || (strcmp (type, "cert_bund_adv") == 0)
       || (strcmp (type, "dfn_cert_adv") == 0))
     return 1;
@@ -729,7 +728,6 @@ acl_user_owns (const char *type, resource_t resource, int trash)
   if ((strcmp (type, "nvt") == 0)
       || (strcmp (type, "cve") == 0)
       || (strcmp (type, "cpe") == 0)
-      || (strcmp (type, "ovaldef") == 0)
       || (strcmp (type, "cert_bund_adv") == 0)
       || (strcmp (type, "dfn_cert_adv") == 0))
     return 1;

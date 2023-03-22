@@ -1,4 +1,4 @@
-/* Copyright (C) 2019-2021 Greenbone Networks GmbH
+/* Copyright (C) 2019-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -77,8 +77,7 @@ feed_dir_configs ()
   static gchar *path = NULL;
   if (path == NULL)
     path = g_build_filename (GVMD_FEED_DIR,
-                             GMP_VERSION_FEED,
-                             "configs",
+                             "scan-configs",
                              NULL);
   return path;
 }
@@ -142,7 +141,7 @@ update_config_from_file (config_t config, const gchar *path)
 {
   entity_t entity;
   array_t *nvt_selectors, *preferences;
-  char *comment, *name, *type, *usage_type;
+  char *comment, *name, *usage_type;
   const char *config_id;
   int all_selector;
 
@@ -155,7 +154,7 @@ update_config_from_file (config_t config, const gchar *path)
 
   /* Parse the data out of the entity. */
 
-  switch (parse_config_entity (entity, &config_id, &name, &comment, &type,
+  switch (parse_config_entity (entity, &config_id, &name, &comment,
                                &usage_type, &all_selector, &nvt_selectors,
                                &preferences))
     {
@@ -174,7 +173,7 @@ update_config_from_file (config_t config, const gchar *path)
 
   /* Update the config. */
 
-  update_config (config, type, name, comment, usage_type, all_selector,
+  update_config (config, name, comment, usage_type, all_selector,
                  nvt_selectors, preferences);
 
   /* Cleanup. */
@@ -198,7 +197,7 @@ create_config_from_file (const gchar *path)
 {
   entity_t config;
   array_t *nvt_selectors, *preferences;
-  char *created_name, *comment, *name, *type, *usage_type;
+  char *created_name, *comment, *name, *usage_type;
   const char *config_id;
   config_t new_config;
   int all_selector;
@@ -212,7 +211,7 @@ create_config_from_file (const gchar *path)
 
   /* Parse the data out of the entity. */
 
-  switch (parse_config_entity (config, &config_id, &name, &comment, &type,
+  switch (parse_config_entity (config, &config_id, &name, &comment,
                                &usage_type, &all_selector, &nvt_selectors,
                                &preferences))
     {
@@ -238,7 +237,6 @@ create_config_from_file (const gchar *path)
                                 all_selector,
                                 nvt_selectors,
                                 preferences,
-                                type,
                                 usage_type,
                                 &new_config,
                                 &created_name))
@@ -318,7 +316,7 @@ should_sync_config_from_path (const char *path, gboolean rebuild,
 
   split = g_regex_split_simple
            (/* Full-and-Fast--daba56c8-73ec-11df-a475-002264764cea.xml */
-            "^.*([0-9a-f]{8})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{4})-([0-9a-f]{12}).xml$",
+            "^.*([0-9a-f]{8})\\-([0-9a-f]{4})\\-([0-9a-f]{4})\\-([0-9a-f]{4})\\-([0-9a-f]{12}).xml$",
             path, 0, 0);
 
   if (split == NULL || g_strv_length (split) != 7)

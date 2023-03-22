@@ -3,7 +3,7 @@
 # Greenbone Vulnerability Manager
 
 [![GitHub releases](https://img.shields.io/github/release/greenbone/gvmd.svg)](https://github.com/greenbone/gvmd/releases)
-[![codecov](https://codecov.io/gh/greenbone/gvmd/branch/stable/graph/badge.svg?token=y8cY3Pfn7P)](https://codecov.io/gh/greenbone/gvmd)
+[![codecov](https://codecov.io/gh/greenbone/gvmd/branch/main/graph/badge.svg?token=y8cY3Pfn7P)](https://codecov.io/gh/greenbone/gvmd)
 [![Build and Test](https://github.com/greenbone/gvmd/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/greenbone/gvmd/actions/workflows/build-and-test.yml)
 [![Docker Pulls](https://img.shields.io/docker/pulls/greenbone/gvmd.svg)](https://hub.docker.com/r/greenbone/gvmd/)
 [![Docker Image Size](https://img.shields.io/docker/image-size/greenbone/gvmd.svg?maxAge=2592000)](https://hub.docker.com/r/greenbone/gvmd/)
@@ -52,14 +52,14 @@ gvmd --help
 ```
 
 If you are not familiar or comfortable building from source code, we recommend
-that you use the Greenbone Security Manager TRIAL (GSM TRIAL), a prepared virtual
+that you use the Greenbone Enterprise TRIAL, a prepared virtual
 machine with a readily available setup. Information regarding the virtual machine
 is available at <https://www.greenbone.net/en/testnow>.
 
 ## Support
 
 For any question on the usage of `gvmd` please use the [Greenbone Community
-Portal](https://community.greenbone.net/c/gse). If you found a problem with the
+Portal](https://community.greenbone.net/). If you found a problem with the
 software, please [create an issue](https://github.com/greenbone/gvmd/issues) on
 GitHub. If you are a Greenbone customer you may alternatively or additionally
 forward your issue to the Greenbone Support Portal.
@@ -77,6 +77,6 @@ GitHub](https://github.com/greenbone/gvmd/issues) first.
 
 ## License
 
-Copyright (C) 2009-2021 [Greenbone Networks GmbH](https://www.greenbone.net/)
+Copyright (C) 2009-2022 [Greenbone Networks GmbH](https://www.greenbone.net/)
 
 Licensed under the [GNU Affero General Public License v3.0 or later](COPYING).

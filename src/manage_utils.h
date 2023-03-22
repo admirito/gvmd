@@ -1,4 +1,4 @@
-/* Copyright (C) 2014-2020 Greenbone Networks GmbH
+/* Copyright (C) 2014-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -87,10 +87,10 @@ icalendar_approximate_rrule_from_vcalendar (icalcomponent *, time_t *, time_t *,
                                             int *);
 
 time_t
-icalendar_next_time_from_vcalendar (icalcomponent *, const char *, int);
+icalendar_next_time_from_vcalendar (icalcomponent *, time_t, const char *, int);
 
 time_t
-icalendar_next_time_from_string (const char *, const char *, int);
+icalendar_next_time_from_string (const char *, time_t, const char *, int);
 
 int
 icalendar_duration_from_vcalendar (icalcomponent *);

@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2021 Greenbone Networks GmbH
+/* Copyright (C) 2009-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -88,6 +88,7 @@
 #include "gmp_delete.h"
 #include "gmp_get.h"
 #include "gmp_configs.h"
+#include "gmp_license.h"
 #include "gmp_port_lists.h"
 #include "gmp_report_formats.h"
 #include "gmp_tickets.h"
@@ -1084,8 +1085,6 @@ typedef struct
   array_t *groups;        ///< IDs of groups.
   char *hosts;            ///< Hosts.
   int hosts_allow;        ///< Whether hosts are allowed.
-  char *ifaces;           ///< Interfaces.
-  int ifaces_allow;       ///< Whether interfaces are allowed.
   char *name;             ///< User name.
   char *password;         ///< Password.
   char *comment;          ///< Comment.
@@ -1108,7 +1107,6 @@ create_user_data_reset (create_user_data_t * data)
   g_free (data->password);
   g_free (data->comment);
   g_free (data->hosts);
-  g_free (data->ifaces);
   array_free (data->roles);
   if (data->sources)
     {
@@ -2266,7 +2264,6 @@ typedef struct
   int family_selection_growing;        ///< Whether families in selection grow.
   char *family_selection_growing_text; ///< Text version of above.
   char *name;                          ///< New name for config.
-  char *scanner_id;                    ///< New scanner UUID for config.
   array_t *nvt_selection;              ///< OID array. New NVT set for config.
   char *nvt_selection_family;          ///< Family of NVT selection.
   char *nvt_selection_nvt_oid;         ///< OID during NVT_selection/NVT.
@@ -3021,8 +3018,6 @@ typedef struct
   array_t *groups;           ///< IDs of groups.
   gchar *hosts;              ///< Hosts.
   int hosts_allow;           ///< Whether hosts are allowed.
-  char *ifaces;              ///< Interfaces.
-  int ifaces_allow;          ///< Whether interfaces are allowed.
   gboolean modify_password;  ///< Whether to modify password.
   gchar *name;               ///< User name.
   gchar *new_name;           ///< New user name.
@@ -3049,7 +3044,6 @@ modify_user_data_reset (modify_user_data_t * data)
   g_free (data->password);
   g_free (data->comment);
   g_free (data->hosts);
-  g_free (data->ifaces);
   array_free (data->roles);
   if (data->sources)
     {
@@ -3164,27 +3158,6 @@ stop_task_data_reset (stop_task_data_t *data)
   free (data->task_id);
 
   memset (data, 0, sizeof (stop_task_data_t));
-}
-
-/**
- * @brief Command data for the sync_config command.
- */
-typedef struct
-{
-  char *config_id;               ///< Config UUID.
-} sync_config_data_t;
-
-/**
- * @brief Reset command data.
- *
- * @param[in]  data  Command data.
- */
-static void
-sync_config_data_reset (sync_config_data_t *data)
-{
-  g_free (data->config_id);
-
-  memset (data, 0, sizeof (sync_config_data_t));
 }
 
 /**
@@ -3387,7 +3360,6 @@ typedef union
   resume_task_data_t resume_task;                     ///< resume_task
   start_task_data_t start_task;                       ///< start_task
   stop_task_data_t stop_task;                         ///< stop_task
-  sync_config_data_t sync_config;                     ///< sync_config
   test_alert_data_t test_alert;                       ///< test_alert
   verify_report_format_data_t verify_report_format;   ///< verify_report_format
   verify_scanner_data_t verify_scanner;               ///< verify_scanner
@@ -3958,12 +3930,6 @@ static stop_task_data_t *stop_task_data
  = (stop_task_data_t*) &(command_data.stop_task);
 
 /**
- * @brief Parser callback data for SYNC_CONFIG.
- */
-static sync_config_data_t *sync_config_data
- = (sync_config_data_t*) &(command_data.sync_config);
-
-/**
  * @brief Parser callback data for TEST_ALERT.
  */
 static test_alert_data_t *test_alert_data
@@ -4011,11 +3977,6 @@ xml_context = NULL;
  * @brief Client input parser.
  */
 static GMarkupParser xml_parser;
-
-/**
- * @brief The nvt synchronization script for this daemon.
- */
-static const gchar *nvt_sync_script = BINDIR "/greenbone-nvt-sync";
 
 
 /* Client state. */
@@ -4294,7 +4255,6 @@ typedef enum
   CLIENT_CREATE_USER_GROUPS,
   CLIENT_CREATE_USER_GROUPS_GROUP,
   CLIENT_CREATE_USER_HOSTS,
-  CLIENT_CREATE_USER_IFACES,
   CLIENT_CREATE_USER_NAME,
   CLIENT_CREATE_USER_PASSWORD,
   CLIENT_CREATE_USER_ROLE,
@@ -4336,6 +4296,7 @@ typedef enum
   CLIENT_GET_FILTERS,
   CLIENT_GET_GROUPS,
   CLIENT_GET_INFO,
+  CLIENT_GET_LICENSE,
   CLIENT_GET_NOTES,
   CLIENT_GET_NVTS,
   CLIENT_GET_NVT_FAMILIES,
@@ -4408,6 +4369,7 @@ typedef enum
   CLIENT_MODIFY_GROUP_COMMENT,
   CLIENT_MODIFY_GROUP_NAME,
   CLIENT_MODIFY_GROUP_USERS,
+  CLIENT_MODIFY_LICENSE,
   CLIENT_MODIFY_NOTE,
   CLIENT_MODIFY_NOTE_ACTIVE,
   CLIENT_MODIFY_NOTE_HOSTS,
@@ -4520,7 +4482,6 @@ typedef enum
   CLIENT_MODIFY_USER_GROUPS,
   CLIENT_MODIFY_USER_GROUPS_GROUP,
   CLIENT_MODIFY_USER_HOSTS,
-  CLIENT_MODIFY_USER_IFACES,
   CLIENT_MODIFY_USER_NAME,
   CLIENT_MODIFY_USER_NEW_NAME,
   CLIENT_MODIFY_USER_PASSWORD,
@@ -4539,7 +4500,6 @@ typedef enum
   CLIENT_RUN_WIZARD_PARAMS_PARAM_VALUE,
   CLIENT_START_TASK,
   CLIENT_STOP_TASK,
-  CLIENT_SYNC_CONFIG,
   CLIENT_TEST_ALERT,
   CLIENT_VERIFY_REPORT_FORMAT,
   CLIENT_VERIFY_SCANNER,
@@ -4826,7 +4786,6 @@ gmp_xml_handle_start_element (/* unused */ GMarkupParseContext* context,
             create_user_data->groups = make_array ();
             create_user_data->roles = make_array ();
             create_user_data->hosts_allow = 0;
-            create_user_data->ifaces_allow = 0;
           }
         else if (strcasecmp ("DELETE_ASSET", element_name) == 0)
           {
@@ -5290,6 +5249,13 @@ gmp_xml_handle_start_element (/* unused */ GMarkupParseContext* context,
                                        attribute_names,
                                        attribute_values);
             set_client_state (CLIENT_GET_GROUPS);
+          }
+        else if (strcasecmp ("GET_LICENSE", element_name) == 0)
+          {
+            get_license_start (gmp_parser,
+                               attribute_names,
+                               attribute_values);
+            set_client_state (CLIENT_GET_LICENSE);
           }
         else if (strcasecmp ("GET_NOTES", element_name) == 0)
           {
@@ -5786,6 +5752,13 @@ gmp_xml_handle_start_element (/* unused */ GMarkupParseContext* context,
                               &modify_port_list_data->port_list_id);
             set_client_state (CLIENT_MODIFY_PORT_LIST);
           }
+        else if (strcasecmp ("MODIFY_LICENSE", element_name) == 0)
+          {
+            modify_license_start (gmp_parser,
+                                  attribute_names,
+                                  attribute_values);
+            set_client_state (CLIENT_MODIFY_LICENSE);
+          }
         else if (strcasecmp ("MODIFY_NOTE", element_name) == 0)
           {
             append_attribute (attribute_names, attribute_values, "note_id",
@@ -5915,12 +5888,6 @@ gmp_xml_handle_start_element (/* unused */ GMarkupParseContext* context,
             append_attribute (attribute_names, attribute_values, "task_id",
                               &stop_task_data->task_id);
             set_client_state (CLIENT_STOP_TASK);
-          }
-        else if (strcasecmp ("SYNC_CONFIG", element_name) == 0)
-          {
-            append_attribute (attribute_names, attribute_values, "config_id",
-                              &sync_config_data->config_id);
-            set_client_state (CLIENT_SYNC_CONFIG);
           }
         else if (strcasecmp ("TEST_ALERT", element_name) == 0)
           {
@@ -6698,17 +6665,6 @@ gmp_xml_handle_start_element (/* unused */ GMarkupParseContext* context,
             /* Init, so that modify_user clears hosts if HOSTS is empty. */
             gvm_append_string (&modify_user_data->hosts, "");
             set_client_state (CLIENT_MODIFY_USER_HOSTS);
-          }
-        else if (strcasecmp ("IFACES", element_name) == 0)
-          {
-            const gchar *attribute;
-            if (find_attribute
-                (attribute_names, attribute_values, "allow", &attribute))
-              modify_user_data->ifaces_allow = strcmp (attribute, "0");
-            else
-              modify_user_data->ifaces_allow = 1;
-            gvm_append_string (&modify_user_data->ifaces, "");
-            set_client_state (CLIENT_MODIFY_USER_IFACES);
           }
         else if (strcasecmp ("NAME", element_name) == 0)
           set_client_state (CLIENT_MODIFY_USER_NAME);
@@ -7689,16 +7645,6 @@ gmp_xml_handle_start_element (/* unused */ GMarkupParseContext* context,
               create_user_data->hosts_allow = 1;
             set_client_state (CLIENT_CREATE_USER_HOSTS);
           }
-        else if (strcasecmp ("IFACES", element_name) == 0)
-          {
-            const gchar *attribute;
-            if (find_attribute
-                (attribute_names, attribute_values, "allow", &attribute))
-              create_user_data->ifaces_allow = strcmp (attribute, "0");
-            else
-              create_user_data->ifaces_allow = 1;
-            set_client_state (CLIENT_CREATE_USER_IFACES);
-          }
         else if (strcasecmp ("NAME", element_name) == 0)
           set_client_state (CLIENT_CREATE_USER_NAME);
         else if (strcasecmp ("PASSWORD", element_name) == 0)
@@ -7736,6 +7682,11 @@ gmp_xml_handle_start_element (/* unused */ GMarkupParseContext* context,
           set_client_state (CLIENT_CREATE_USER_SOURCES_SOURCE);
         else
           set_read_over (gmp_parser);
+        break;
+
+      case CLIENT_MODIFY_LICENSE:
+        modify_license_element_start (gmp_parser, element_name,
+                                      attribute_names, attribute_values);
         break;
 
       case CLIENT_MODIFY_NOTE:
@@ -8999,220 +8950,151 @@ results_xml_append_nvt (iterator_t *results, GString *buffer, int cert_loaded)
           return;
         }
 
-      if (g_str_has_prefix (oid, "oval:"))
-        {
-          int ret, first;
-          char *cves;
-          gchar **split, **item;
-          get_data_t get;
-          iterator_t iterator;
-          const char *severity;
+      {
+        const char *cvss_base = result_iterator_nvt_cvss_base (results);
+        GString *tags = g_string_new (result_iterator_nvt_tag (results));
+        int first;
+        iterator_t severities;
 
-          memset (&get, '\0', sizeof (get));
-          get.id = g_strdup (oid);
-          ret = init_ovaldef_info_iterator (&iterator, &get, NULL);
-          if (ret)
-            assert (0);
-          if (!next (&iterator))
-            abort ();
-          severity = ovaldef_info_iterator_severity (&iterator);
-          buffer_xml_append_printf (buffer,
-                                    "<nvt oid=\"%s\">"
-                                    "<type>ovaldef</type>"
-                                    "<name>%s</name>"
-                                    "<cvss_base>%s</cvss_base>"
-                                    "<severities score=\"%s\">"
-                                    "</severities>"
-                                    "<tags>summary=%s</tags>",
-                                    oid,
-                                    ovaldef_info_iterator_title (&iterator),
-                                    severity ? severity : "",
-                                    severity ? severity : "",
-                                    ovaldef_info_iterator_description (&iterator));
-          g_free (get.id);
-          cleanup_iterator (&iterator);
+        if (!cvss_base && !strcmp (oid, "0"))
+          cvss_base = "0.0";
 
-          first = 1;
-          cves = ovaldef_cves (oid);
-          split = g_strsplit (cves, ",", 0);
-          item = split;
-          while (*item)
-            {
-              gchar *id;
-
-              id = *item;
-              g_strstrip (id);
-
-              if (strcmp (id, "") == 0)
-                {
-                  item++;
-                  continue;
-                }
-
-              if (first)
-                {
-                  buffer_xml_append_printf (buffer, "<refs>");
-                  first = 0;
-                }
-              buffer_xml_append_printf (buffer, "<ref type=\"cve\" id=\"%s\"/>", id);
-
-              item++;
-            }
-          g_strfreev (split);
-          g_free (cves);
-
-          results_xml_append_cert (buffer, results, oid, cert_loaded, &first);
-
-          if (first == 0)
-            buffer_xml_append_printf (buffer, "</refs>");
-        }
-      else
-        {
-          const char *cvss_base = result_iterator_nvt_cvss_base (results);
-          GString *tags = g_string_new (result_iterator_nvt_tag (results));
-          int first;
-          iterator_t severities;
-
-          if (!cvss_base && !strcmp (oid, "0"))
-            cvss_base = "0.0";
-
-          /* Add the elements that are expected as part of the pipe-separated
-           * tag list via API although internally already explicitly stored.
-           * Once the API is extended to have these elements explicitly, they
-           * do not need to be added to this tag string anymore. */
-          if (result_iterator_nvt_summary (results))
-            {
-              if (tags->str)
-                g_string_append_printf (tags, "|summary=%s",
-                                        result_iterator_nvt_summary (results));
-              else
-                g_string_append_printf (tags, "summary=%s",
-                                        result_iterator_nvt_summary (results));
-            }
-          if (result_iterator_nvt_insight (results))
-            {
-              if (tags->str)
-                g_string_append_printf (tags, "|insight=%s",
+        /* Add the elements that are expected as part of the pipe-separated
+         * tag list via API although internally already explicitly stored.
+         * Once the API is extended to have these elements explicitly, they
+         * do not need to be added to this tag string anymore. */
+        if (result_iterator_nvt_summary (results))
+          {
+            if (tags->str)
+              g_string_append_printf (tags, "|summary=%s",
+                                      result_iterator_nvt_summary (results));
+            else
+              g_string_append_printf (tags, "summary=%s",
+                                      result_iterator_nvt_summary (results));
+          }
+        if (result_iterator_nvt_insight (results))
+          {
+            if (tags->str)
+              g_string_append_printf (tags, "|insight=%s",
+                                      result_iterator_nvt_insight (results));
+            else
+              g_string_append_printf (tags, "insight=%s",
                                         result_iterator_nvt_insight (results));
-              else
-                g_string_append_printf (tags, "insight=%s",
-                                        result_iterator_nvt_insight (results));
-            }
-          if (result_iterator_nvt_affected (results))
-            {
-              if (tags->str)
-                g_string_append_printf (tags, "|affected=%s",
-                                        result_iterator_nvt_affected (results));
-              else
-                g_string_append_printf (tags, "affected=%s",
-                                        result_iterator_nvt_affected (results));
-            }
-          if (result_iterator_nvt_impact (results))
-            {
-              if (tags->str)
-                g_string_append_printf (tags, "|impact=%s",
-                                        result_iterator_nvt_impact (results));
-              else
-                g_string_append_printf (tags, "impact=%s",
-                                        result_iterator_nvt_impact (results));
-            }
-          if (result_iterator_nvt_solution (results))
-            {
-              if (tags->str)
-                g_string_append_printf (tags, "|solution=%s",
+          }
+        if (result_iterator_nvt_affected (results))
+          {
+            if (tags->str)
+              g_string_append_printf (tags, "|affected=%s",
+                                      result_iterator_nvt_affected (results));
+            else
+              g_string_append_printf (tags, "affected=%s",
+                                      result_iterator_nvt_affected (results));
+          }
+        if (result_iterator_nvt_impact (results))
+          {
+            if (tags->str)
+              g_string_append_printf (tags, "|impact=%s",
+                                      result_iterator_nvt_impact (results));
+            else
+              g_string_append_printf (tags, "impact=%s",
+                                      result_iterator_nvt_impact (results));
+          }
+        if (result_iterator_nvt_solution (results))
+          {
+            if (tags->str)
+              g_string_append_printf (tags, "|solution=%s",
+                                      result_iterator_nvt_solution (results));
+            else
+              g_string_append_printf (tags, "solution=%s",
+                                      result_iterator_nvt_solution (results));
+          }
+        if (result_iterator_nvt_detection (results))
+          {
+            if (tags->str)
+              g_string_append_printf (tags, "|vuldetect=%s",
+                                      result_iterator_nvt_detection (results));
+            else
+              g_string_append_printf (tags, "vuldetect=%s",
+                                      result_iterator_nvt_detection (results));
+          }
+        if (result_iterator_nvt_solution_type (results))
+          {
+            if (tags->str)
+              g_string_append_printf (tags, "|solution_type=%s",
+                                      result_iterator_nvt_solution_type (results));
+            else
+              g_string_append_printf (tags, "solution_type=%s",
+                                      result_iterator_nvt_solution_type (results));
+          }
+
+        buffer_xml_append_printf (buffer,
+                                  "<nvt oid=\"%s\">"
+                                  "<type>nvt</type>"
+                                  "<name>%s</name>"
+                                  "<family>%s</family>"
+                                  "<cvss_base>%s</cvss_base>"
+                                  "<severities score=\"%s\">",
+                                  oid,
+                                  result_iterator_nvt_name (results) ?: oid,
+                                  result_iterator_nvt_family (results) ?: "",
+                                  cvss_base ?: "",
+                                  cvss_base ?: "");
+
+        init_nvt_severity_iterator (&severities, oid);
+        while (next (&severities))
+          {
+            buffer_xml_append_printf
+                (buffer,
+                 "<severity type=\"%s\">"
+                 "<origin>%s</origin>"
+                 "<date>%s</date>"
+                 "<score>%0.1f</score>"
+                 "<value>%s</value>"
+                 "</severity>",
+                 nvt_severity_iterator_type (&severities),
+                 nvt_severity_iterator_origin (&severities),
+                 nvt_severity_iterator_date (&severities),
+                 nvt_severity_iterator_score (&severities),
+                 nvt_severity_iterator_value (&severities));
+          }
+        cleanup_iterator (&severities);
+
+        buffer_xml_append_printf (buffer,
+                                  "</severities>"
+                                  "<tags>%s</tags>",
+                                  tags->str ?: "");
+
+        if (result_iterator_nvt_solution (results)
+            || result_iterator_nvt_solution_type (results)
+            || result_iterator_nvt_solution_method (results))
+          {
+            buffer_xml_append_printf (buffer, "<solution");
+
+            if (result_iterator_nvt_solution_type (results))
+              buffer_xml_append_printf (buffer, " type='%s'",
+                result_iterator_nvt_solution_type (results));
+
+            if (result_iterator_nvt_solution_method (results))
+              buffer_xml_append_printf (buffer, " method='%s'",
+                result_iterator_nvt_solution_method (results));
+
+            if (result_iterator_nvt_solution (results))
+              buffer_xml_append_printf (buffer, ">%s</solution>",
                                         result_iterator_nvt_solution (results));
-              else
-                g_string_append_printf (tags, "solution=%s",
-                                        result_iterator_nvt_solution (results));
-            }
-          if (result_iterator_nvt_detection (results))
-            {
-              if (tags->str)
-                g_string_append_printf (tags, "|vuldetect=%s",
-                                        result_iterator_nvt_detection (results));
-              else
-                g_string_append_printf (tags, "vuldetect=%s",
-                                        result_iterator_nvt_detection (results));
-            }
-          if (result_iterator_nvt_solution_type (results))
-            {
-              if (tags->str)
-                g_string_append_printf (tags, "|solution_type=%s",
-                                        result_iterator_nvt_solution_type (results));
-              else
-                g_string_append_printf (tags, "solution_type=%s",
-                                        result_iterator_nvt_solution_type (results));
-            }
+            else
+              buffer_xml_append_printf (buffer, "/>");
+          }
 
-          buffer_xml_append_printf (buffer,
-                                    "<nvt oid=\"%s\">"
-                                    "<type>nvt</type>"
-                                    "<name>%s</name>"
-                                    "<family>%s</family>"
-                                    "<cvss_base>%s</cvss_base>"
-                                    "<severities score=\"%s\">",
-                                    oid,
-                                    result_iterator_nvt_name (results) ?: oid,
-                                    result_iterator_nvt_family (results) ?: "",
-                                    cvss_base ?: "",
-                                    cvss_base ?: "");
+        first = 1;
+        xml_append_nvt_refs (buffer, result_iterator_nvt_oid (results),
+                             &first);
 
-          init_nvt_severity_iterator (&severities, oid);
-          while (next (&severities))
-            {
-              buffer_xml_append_printf
-                  (buffer,
-                   "<severity type=\"%s\">"
-                   "<origin>%s</origin>"
-                   "<date>%s</date>"
-                   "<score>%0.1f</score>"
-                   "<value>%s</value>"
-                   "</severity>",
-                   nvt_severity_iterator_type (&severities),
-                   nvt_severity_iterator_origin (&severities),
-                   nvt_severity_iterator_date (&severities),
-                   nvt_severity_iterator_score (&severities),
-                   nvt_severity_iterator_value (&severities));
-            }
-          cleanup_iterator (&severities);
+        results_xml_append_cert (buffer, results, oid, cert_loaded, &first);
+        if (first == 0)
+          buffer_xml_append_printf (buffer, "</refs>");
 
-          buffer_xml_append_printf (buffer,
-                                    "</severities>"
-                                    "<tags>%s</tags>",
-                                    tags->str ?: "");
-
-          if (result_iterator_nvt_solution (results)
-              || result_iterator_nvt_solution_type (results)
-              || result_iterator_nvt_solution_method (results))
-            {
-              buffer_xml_append_printf (buffer, "<solution");
-
-              if (result_iterator_nvt_solution_type (results))
-                buffer_xml_append_printf (buffer, " type='%s'",
-                  result_iterator_nvt_solution_type (results));
-
-              if (result_iterator_nvt_solution_method (results))
-                buffer_xml_append_printf (buffer, " method='%s'",
-                  result_iterator_nvt_solution_method (results));
-
-              if (result_iterator_nvt_solution (results))
-                buffer_xml_append_printf (buffer, ">%s</solution>",
-                                          result_iterator_nvt_solution (results));
-              else
-                buffer_xml_append_printf (buffer, "/>");
-            }
-
-          first = 1;
-          xml_append_nvt_refs (buffer, result_iterator_nvt_oid (results),
-                               &first);
-
-          results_xml_append_cert (buffer, results, oid, cert_loaded, &first);
-          if (first == 0)
-            buffer_xml_append_printf (buffer, "</refs>");
-
-          g_string_free (tags, TRUE);
-        }
-
+        g_string_free (tags, TRUE);
+      }
     }
 
   buffer_xml_append_printf (buffer, "</nvt>");
@@ -10231,7 +10113,7 @@ buffer_aggregate_xml (GString *xml, iterator_t* aggregate, const gchar* type,
                 = g_tree_lookup (subgroup_c_counts, subgroup_value);
               if (subgroup_c_count == NULL)
                 {
-                  subgroup_c_count = g_malloc0 (sizeof (long int*));
+                  subgroup_c_count = g_malloc0 (sizeof (long int));
                   g_tree_insert (subgroup_c_counts,
                                  g_strdup (subgroup_value),
                                  subgroup_c_count);
@@ -10415,7 +10297,7 @@ buffer_aggregate_xml (GString *xml, iterator_t* aggregate, const gchar* type,
 
               if (subgroup_c_sum == NULL)
                 {
-                  subgroup_c_sum = g_malloc (sizeof (double *));
+                  subgroup_c_sum = g_malloc (sizeof (double));
                   *subgroup_c_sum = 0;
 
                   g_tree_insert (c_sum_tree,
@@ -10790,33 +10672,6 @@ buffer_aggregate_xml (GString *xml, iterator_t* aggregate, const gchar* type,
     delete_ ## type ## _data_reset (delete_ ## type ## _data);              \
     set_client_state (CLIENT_AUTHENTIC);                                    \
     break
-
-/**
- * @brief Get list of ovaldi definitions files from the SCAP ovaldefs table.
- *
- * @return String of |-concatenated file names. Free with g_free().
- */
-static char *
-get_ovaldi_files ()
-{
-  iterator_t iterator;
-  char *result = NULL;
-
-  init_ovaldi_file_iterator (&iterator);
-  while (next (&iterator))
-    {
-      char *tmp;
-      const char *fname = ovaldi_file_iterator_name (&iterator);
-
-      if (!fname)
-        continue;
-      tmp = g_strconcat (fname, result ? "|" : "", result, NULL);
-      g_free (result);
-      result = tmp;
-    }
-  cleanup_iterator (&iterator);
-  return result;
-}
 
 /**
  * @brief Handle end of GET_AGGREGATES element.
@@ -11686,7 +11541,7 @@ handle_get_configs (gmp_parser_t *gmp_parser, GError **error)
   SEND_GET_START ("config");
   while (1)
     {
-      int config_nvts_growing, config_families_growing, config_type;
+      int config_nvts_growing, config_families_growing;
       const char *selector, *usage_type;
       config_t config;
 
@@ -11705,7 +11560,6 @@ handle_get_configs (gmp_parser_t *gmp_parser, GError **error)
       selector = config_iterator_nvt_selector (&configs);
       config = get_iterator_resource (&configs);
       config_nvts_growing = config_iterator_nvts_growing (&configs);
-      config_type = config_iterator_type (&configs);
       usage_type = config_iterator_usage_type (&configs);
       config_families_growing = config_iterator_families_growing
                                  (&configs);
@@ -11718,19 +11572,17 @@ handle_get_configs (gmp_parser_t *gmp_parser, GError **error)
                                "<nvt_count>"
                                "%i<growing>%i</growing>"
                                "</nvt_count>"
-                               "<type>%i</type>"
+                               "<type>0</type>"
                                "<usage_type>%s</usage_type>"
                                "<predefined>%i</predefined>",
                                config_iterator_family_count (&configs),
                                config_families_growing,
                                config_iterator_nvt_count (&configs),
                                config_nvts_growing,
-                               config_type,
                                usage_type,
                                config_iterator_predefined (&configs));
 
-      if (config_type == 0 && (get_configs_data->families
-                               || get_configs_data->get.details))
+      if (get_configs_data->families || get_configs_data->get.details)
         {
           iterator_t families;
           int max_nvt_count = 0, known_nvt_count = 0;
@@ -11796,68 +11648,7 @@ handle_get_configs (gmp_parser_t *gmp_parser, GError **error)
             known_nvt_count);
         }
 
-      if (config_type > 0)
-        {
-          iterator_t prefs;
-          scanner_t scanner;
-          char *s_uuid, *s_name;
-
-          assert (config);
-          scanner = config_iterator_scanner (&configs);
-
-          if (config_iterator_scanner_trash (&configs))
-            {
-              s_uuid = trash_scanner_uuid (scanner);
-              s_name = trash_scanner_name (scanner);
-            }
-          else
-            {
-              s_uuid = scanner_uuid (scanner);
-              s_name = scanner_name (scanner);
-            }
-
-          SENDF_TO_CLIENT_OR_FAIL ("<scanner id='%s'>"
-                                   "%s"
-                                   "<trash>%d</trash>"
-                                   "</scanner>",
-                                   s_uuid, s_name,
-                                   config_iterator_scanner_trash (&configs));
-
-          g_free (s_uuid);
-          g_free (s_name);
-          SEND_TO_CLIENT_OR_FAIL ("<preferences>");
-
-          init_config_preference_iterator (&prefs, config);
-          while (next (&prefs))
-            {
-              const char *name, *hr_name, *value, *type, *def;
-              char *ovaldi_files = NULL;
-
-              hr_name = config_preference_iterator_hr_name (&prefs);
-              name = config_preference_iterator_name (&prefs);
-              value = config_preference_iterator_value (&prefs);
-              def = config_preference_iterator_default (&prefs);
-              if (!strcmp (name, "definitions_file"))
-                ovaldi_files = get_ovaldi_files ();
-              type = config_preference_iterator_type (&prefs);
-              SENDF_TO_CLIENT_OR_FAIL
-               ("<preference>"
-                "<nvt oid=\"\"><name/></nvt>"
-                "<hr_name>%s</hr_name>"
-                "<id/>"
-                "<name>%s</name>"
-                "<type>osp_%s</type>"
-                "<value>%s</value>"
-                "<default>%s</default>"
-                "</preference>",
-                hr_name, name, type, value ?: "", ovaldi_files ?: def);
-              g_free (ovaldi_files);
-            }
-          cleanup_iterator (&prefs);
-          SEND_TO_CLIENT_OR_FAIL ("</preferences>");
-        }
-      else if (get_configs_data->preferences
-               || get_configs_data->get.details)
+      if (get_configs_data->preferences || get_configs_data->get.details)
         {
           iterator_t prefs;
 
@@ -11904,7 +11695,7 @@ handle_get_configs (gmp_parser_t *gmp_parser, GError **error)
           SEND_TO_CLIENT_OR_FAIL ("</preferences>");
         }
 
-      if (config_type == 0 && get_configs_data->get.details)
+      if (get_configs_data->get.details)
         {
           iterator_t selectors;
 
@@ -12378,6 +12169,33 @@ get_feed_lock_status (const char *lockfile_name, gchar **timestamp)
 }
 
 /**
+ * @brief Template string for feed descriptions.
+ *
+ * The first and second placeholders are replaced with the name,
+ * the third one with the vendor and the last one with the home URL.
+ */
+#define FEED_DESCRIPTION_TEMPLATE \
+"This script synchronizes an NVT collection with the '%s'.\n" \
+"The '%s' is provided by '%s'.\n"                             \
+"Online information about this feed: '%s'.\n"
+
+/**
+ * @brief Template string for get_nvt_feed error messages.
+ *
+ * The placeholder is to be replaced by the actual message.
+ */
+#define GET_NVT_FEED_ERROR \
+"<feed>"                      \
+"<type>NVT</type>"            \
+"<name></name>"               \
+"<version></version>"         \
+"<description></description>" \
+"<sync_not_available>"        \
+"<error>%s</error>"           \
+"</sync_not_available>"       \
+"</feed>"
+
+/**
  * @brief Get NVT feed.
  *
  * @param[in]  gmp_parser   GMP parser.
@@ -12386,73 +12204,95 @@ get_feed_lock_status (const char *lockfile_name, gchar **timestamp)
 static void
 get_nvt_feed (gmp_parser_t *gmp_parser, GError **error)
 {
-  gchar *feed_description, *feed_identification, *feed_version;
+  gchar *vts_version, *feed_name, *feed_vendor, *feed_home;
 
-  feed_description = NULL;
-  feed_identification = NULL;
-  feed_version = NULL;
+  vts_version = feed_name = feed_vendor = feed_home = NULL;
 
-  if (gvm_get_sync_script_description (nvt_sync_script, &feed_description)
-      && gvm_get_sync_script_identification (nvt_sync_script,
-                                             &feed_identification,
-                                             NVT_FEED)
-      && gvm_get_sync_script_feed_version (nvt_sync_script,
-                                           &feed_version))
+  switch (nvts_feed_info (&vts_version, &feed_name, &feed_vendor, &feed_home))
     {
-      gchar **ident = g_strsplit (feed_identification, "|", 6);
-      gchar *selftest_result = NULL;
-      const char *lockfile_name;
-      gchar *timestamp;
+      case 0:
+        {
+          gchar *feed_description;
+          gchar *self_test_error_msg;
+          int ret, lockfile_in_use, self_test_exit_error;
 
-      if (ident[0] == NULL || ident[1] == NULL
-          || ident[2] == NULL || ident[3] == NULL)
-        {
-          g_strfreev (ident);
-          SEND_TO_CLIENT_OR_FAIL (XML_INTERNAL_ERROR ("get_feeds"));
-        }
-      else
-        {
+          feed_description = g_strdup_printf (FEED_DESCRIPTION_TEMPLATE,
+                                              feed_name,
+                                              feed_name,
+                                              feed_vendor,
+                                              feed_home);
           SENDF_TO_CLIENT_OR_FAIL
            ("<feed>"
             "<type>NVT</type>"
             "<name>%s</name>"
             "<version>%s</version>"
             "<description>%s</description>",
-            ident[3],
-            feed_version,
+            feed_name,
+            vts_version,
             feed_description);
-          g_strfreev (ident);
-          if (gvm_sync_script_perform_selftest (nvt_sync_script,
-                                                &selftest_result)
-              == FALSE)
+
+          self_test_error_msg = NULL;
+          lockfile_in_use = self_test_exit_error = 0;
+          ret = nvts_check_feed (&lockfile_in_use,
+                                 &self_test_exit_error, &self_test_error_msg);
+          if (ret == 1)
             {
               SENDF_TO_CLIENT_OR_FAIL ("<sync_not_available>"
-                                       "<error>%s</error>"
-                                       "</sync_not_available>",
-                                       selftest_result ? selftest_result : "");
-              g_free (selftest_result);
+                                       "<error>"
+                                       "Could not connect to scanner for"
+                                       " sync lock status and self test."
+                                       "</error>"
+                                       "</sync_not_available>");
             }
-
-          /* Note: Checking the feed lockfile assumes that the default scanner
-           *  is running locally.
-           */
-          lockfile_name = get_feed_lock_path ();
-          if (get_feed_lock_status (lockfile_name, &timestamp))
+          else if (ret)
             {
-              SENDF_TO_CLIENT_OR_FAIL ("<currently_syncing>"
-                                       "<timestamp>%s</timestamp>"
-                                       "</currently_syncing>",
-                                       timestamp);
-              g_free (timestamp);
+              SENDF_TO_CLIENT_OR_FAIL ("<sync_not_available>"
+                                       "<error>"
+                                       "Error getting sync lock status"
+                                       " and self test."
+                                       "</error>"
+                                       "</sync_not_available>");
             }
+          else
+            {
+              if (self_test_exit_error > 0 || self_test_exit_error < -1)
+                SENDF_TO_CLIENT_OR_FAIL ("<sync_not_available>"
+                                         "<error>%s</error>"
+                                         "</sync_not_available>",
+                                         self_test_error_msg
+                                           ? self_test_error_msg : "");
+
+              if (lockfile_in_use > 0 || lockfile_in_use < -1)
+                SENDF_TO_CLIENT_OR_FAIL ("<currently_syncing>"
+                                         "<timestamp></timestamp>"
+                                         "</currently_syncing>");
+            }
+          g_free (self_test_error_msg);
+          g_free (feed_description);
 
           SEND_TO_CLIENT_OR_FAIL ("</feed>");
         }
-
-      g_free (feed_version);
+        break;
+      case 1:
+        SENDF_TO_CLIENT_OR_FAIL
+           (GET_NVT_FEED_ERROR,
+            "Could not connect to scanner to get feed info");
+        break;
+      case 2:
+        SENDF_TO_CLIENT_OR_FAIL
+           (GET_NVT_FEED_ERROR,
+            "Scanner is still starting");
+        break;
+      default:
+        SENDF_TO_CLIENT_OR_FAIL
+           (GET_NVT_FEED_ERROR,
+            "Error getting feed info from scanner");
     }
-  g_free (feed_identification);
-  g_free (feed_description);
+
+  g_free (vts_version);
+  g_free (feed_name);
+  g_free (feed_vendor);
+  g_free (feed_home);
 }
 
 /**
@@ -12953,8 +12793,6 @@ handle_get_info (gmp_parser_t *gmp_parser, GError **error)
         name = g_strdup ("CPE");
       else if (strcmp (get_info_data->type, "cve") == 0)
         name = g_strdup ("CVE");
-      else if (strcmp (get_info_data->type, "ovaldef") == 0)
-        name = g_strdup ("OVAL");
       else if (strcmp (get_info_data->type, "cert_bund_adv") == 0)
         name = g_strdup ("CERT-Bund");
       else if (strcmp (get_info_data->type, "dfn_cert_adv") == 0)
@@ -13005,12 +12843,6 @@ handle_get_info (gmp_parser_t *gmp_parser, GError **error)
       init_info_iterator = init_nvt_info_iterator;
       info_count = nvt_info_count;
       get_info_data->get.subtype = g_strdup ("nvt");
-    }
-  else if (g_strcmp0 ("ovaldef", get_info_data->type) == 0)
-    {
-      init_info_iterator = init_ovaldef_info_iterator;
-      info_count = ovaldef_info_count;
-      get_info_data->get.subtype = g_strdup ("ovaldef");
     }
   else if (g_strcmp0 ("cert_bund_adv", get_info_data->type) == 0)
     {
@@ -13229,35 +13061,6 @@ handle_get_info (gmp_parser_t *gmp_parser, GError **error)
               g_string_append (result, "</cert>");
             }
         }
-      else if (g_strcmp0 ("ovaldef", get_info_data->type) == 0)
-        {
-          const char *description;
-          xml_string_append (result,
-                             "<ovaldef>"
-                             "<version>%s</version>"
-                             "<deprecated>%s</deprecated>"
-                             "<status>%s</status>"
-                             "<class>%s</class>"
-                             "<title>%s</title>"
-                             "<severity>%s</severity>"
-                             "<cve_refs>%s</cve_refs>"
-                             "<file>%s</file>",
-                             ovaldef_info_iterator_version (&info),
-                             ovaldef_info_iterator_deprecated (&info),
-                             ovaldef_info_iterator_status (&info),
-                             ovaldef_info_iterator_class (&info),
-                             ovaldef_info_iterator_title (&info),
-                             ovaldef_info_iterator_severity (&info)
-                              ? ovaldef_info_iterator_severity (&info)
-                              : "",
-                             ovaldef_info_iterator_cve_refs (&info),
-                             ovaldef_info_iterator_file (&info));
-          description = ovaldef_info_iterator_description (&info);
-          if (get_info_data->details == 1)
-            xml_string_append (result,
-                               "<description>%s</description>",
-                               description);
-        }
       else if (g_strcmp0 ("cert_bund_adv", get_info_data->type) == 0)
         xml_string_append (result,
                            "<cert_bund_adv>"
@@ -13317,6 +13120,7 @@ handle_get_info (gmp_parser_t *gmp_parser, GError **error)
       count++;
       g_string_free (result, TRUE);
     }
+
   cleanup_iterator (&info);
 
   if (get_info_data->details == 1)
@@ -14174,6 +13978,41 @@ handle_get_preferences (gmp_parser_t *gmp_parser, GError **error)
 }
 
 /**
+ * @brief Init some data of the get_data_t structure of an alert.
+ *
+ * @param[in]  alert_id   Id of the alert the get_data_t structure
+ *                        belongs to.
+ * @param[in]  get        The get_data_t structure where some components
+ *                        are to be initialized
+ */
+static void
+init_alert_get_data(const char *alert_id, get_data_t *get)
+{
+  alert_t alert = 0;
+  alert_method_t method;
+  char *to_free;
+
+  /* Always enable details when using a report to test an alert. */
+  get->details = 1;
+  get->ignore_pagination = 0;
+
+  if (get->filter == NULL)
+    return;
+  if (strstr(get->filter, " rows="))
+    return;
+  if (find_alert_with_permission (alert_id, &alert, "get_alerts"))
+    return;
+  if (alert == 0)
+    return;
+
+  method = alert_method (alert);
+  to_free = get->filter;
+  get->filter = g_strdup_printf ("%s rows=%d", get->filter,
+                                 method == ALERT_METHOD_EMAIL ? 1000 : -1);
+  g_free(to_free);
+}
+
+/**
  * @brief Handle end of GET_REPORTS element.
  *
  * @param[in]  gmp_parser   GMP parser.
@@ -14573,9 +14412,8 @@ handle_get_reports (gmp_parser_t *gmp_parser, GError **error)
       if (request_report)
         cleanup_iterator (&reports);
 
-      /* Always enable details when using a report to test an alert. */
       if (get_reports_data->alert_id)
-        get_reports_data->get.details = 1;
+        init_alert_get_data(get_reports_data->alert_id, &get_reports_data->get);
 
       ret = manage_send_report (report,
                                 delta_report,
@@ -15533,31 +15371,7 @@ handle_get_scanners (gmp_parser_t *gmp_parser, GError **error)
       count++;
       if (get_scanners_data->get.details)
         {
-          iterator_t configs, tasks;
-
-          SEND_TO_CLIENT_OR_FAIL ("<configs>");
-          init_scanner_config_iterator (&configs,
-                                        get_iterator_resource (&scanners));
-          while (next (&configs))
-            {
-              if (scanner_task_iterator_readable (&configs) == 0)
-                /* Only show configs the user may see. */
-                continue;
-
-              SENDF_TO_CLIENT_OR_FAIL
-               ("<config id=\"%s\">"
-                "<name>%s</name>",
-                scanner_config_iterator_uuid (&configs),
-                scanner_config_iterator_name (&configs));
-
-              if (scanner_config_iterator_readable (&configs))
-                SEND_TO_CLIENT_OR_FAIL ("</config>");
-              else
-                SEND_TO_CLIENT_OR_FAIL ("<permissions/>"
-                                        "</config>");
-            }
-          cleanup_iterator (&configs);
-          SEND_TO_CLIENT_OR_FAIL ("</configs>");
+          iterator_t tasks;
 
           SEND_TO_CLIENT_OR_FAIL ("<tasks>");
           init_scanner_task_iterator (&tasks,
@@ -15583,8 +15397,7 @@ handle_get_scanners (gmp_parser_t *gmp_parser, GError **error)
           cleanup_iterator (&tasks);
           SEND_TO_CLIENT_OR_FAIL ("</tasks>");
         }
-      if ((scanner_iterator_type (&scanners) == SCANNER_TYPE_OSP
-           || scanner_iterator_type (&scanners) == SCANNER_TYPE_OPENVAS)
+      if ((scanner_iterator_type (&scanners) == SCANNER_TYPE_OPENVAS)
           && get_scanners_data->get.details)
         {
           char *s_name = NULL, *s_ver = NULL;
@@ -16171,7 +15984,6 @@ handle_get_system_reports (gmp_parser_t *gmp_parser, GError **error)
          (&types,
           get_system_reports_data->name,
           get_system_reports_data->slave_id);
-
   switch (ret)
     {
       case 1:
@@ -17008,7 +16820,7 @@ handle_get_tasks (gmp_parser_t *gmp_parser, GError **error)
       double severity = 0, severity_2 = 0;
       gchar *response;
       iterator_t alerts, groups, roles;
-      gchar *in_assets, *max_checks, *max_hosts, *source_iface;
+      gchar *in_assets, *max_checks, *max_hosts;
       gchar *auto_delete, *auto_delete_data, *assets_apply_overrides;
       gchar *assets_min_qod;
 
@@ -17365,7 +17177,6 @@ handle_get_tasks (gmp_parser_t *gmp_parser, GError **error)
                        "<usage_type>%s</usage_type>"
                        "<config id=\"%s\">"
                        "<name>%s</name>"
-                       "<type>%i</type>"
                        "<trash>%i</trash>"
                        "%s"
                        "</config>"
@@ -17395,7 +17206,6 @@ handle_get_tasks (gmp_parser_t *gmp_parser, GError **error)
                        task_iterator_usage_type (&tasks),
                        config_uuid ?: "",
                        config_name_escaped ?: "",
-                       config_type (task_config (index)),
                        task_config_in_trash (index),
                        config_available ? "" : "<permissions/>",
                        task_target_uuid ?: "",
@@ -17529,7 +17339,6 @@ handle_get_tasks (gmp_parser_t *gmp_parser, GError **error)
           assets_min_qod = task_preference_value (index, "assets_min_qod");
           max_checks = task_preference_value (index, "max_checks");
           max_hosts = task_preference_value (index, "max_hosts");
-          source_iface = task_preference_value (index, "source_iface");
           auto_delete = task_preference_value (index, "auto_delete");
           auto_delete_data = task_preference_value (index, "auto_delete_data");
 
@@ -17547,13 +17356,6 @@ handle_get_tasks (gmp_parser_t *gmp_parser, GError **error)
             "Maximum concurrently scanned hosts"
             "</name>"
             "<scanner_name>max_hosts</scanner_name>"
-            "<value>%s</value>"
-            "</preference>"
-            "<preference>"
-            "<name>"
-            "Network Source Interface"
-            "</name>"
-            "<scanner_name>source_iface</scanner_name>"
             "<value>%s</value>"
             "</preference>"
             "<preference>"
@@ -17595,7 +17397,6 @@ handle_get_tasks (gmp_parser_t *gmp_parser, GError **error)
             "</task>",
             max_checks ? max_checks : "4",
             max_hosts ? max_hosts : "20",
-            source_iface ? source_iface : "",
             in_assets ? in_assets : "yes",
             assets_apply_overrides ? assets_apply_overrides : "yes",
             assets_min_qod
@@ -17607,7 +17408,6 @@ handle_get_tasks (gmp_parser_t *gmp_parser, GError **error)
           g_free (in_assets);
           g_free (max_checks);
           g_free (max_hosts);
-          g_free (source_iface);
         }
 
       count++;
@@ -17674,8 +17474,8 @@ handle_get_users (gmp_parser_t *gmp_parser, GError **error)
   while (1)
     {
       iterator_t groups, roles;
-      const char *hosts, *ifaces;
-      int hosts_allow, ifaces_allow;
+      const char *hosts;
+      int hosts_allow;
 
       ret = get_next (&users, &get_users_data->get, &first, &count,
                       init_user_iterator);
@@ -17699,13 +17499,6 @@ handle_get_users (gmp_parser_t *gmp_parser, GError **error)
                                user_iterator_method (&users)
                                 ? user_iterator_method (&users)
                                 : "file");
-
-      /* Interfaces Access */
-      ifaces = user_iterator_ifaces (&users);
-      ifaces_allow = user_iterator_ifaces_allow (&users);
-      SENDF_TO_CLIENT_OR_FAIL ("<ifaces allow=\"%i\">%s</ifaces>",
-                               ifaces_allow,
-                               ifaces ? ifaces : "");
 
       /* User Roles */
       init_user_role_iterator (&roles,
@@ -17881,81 +17674,6 @@ handle_get_vulns (gmp_parser_t *gmp_parser, GError **error)
   SEND_GET_END ("vuln", &get_vulns_data->get, count, filtered);
 
   get_vulns_data_reset (get_vulns_data);
-  set_client_state (CLIENT_AUTHENTIC);
-}
-
-/**
- * @brief Handle end of SYNC_CONFIG element.
- *
- * @param[in]  gmp_parser   GMP parser.
- * @param[in]  error        Error parameter.
- */
-static void
-handle_sync_config (gmp_parser_t *gmp_parser, GError **error)
-{
-  assert (current_credentials.username);
-  if (!sync_config_data->config_id)
-    {
-      SEND_TO_CLIENT_OR_FAIL
-       (XML_ERROR_SYNTAX ("sync_config",
-                          "SYNC_CONFIG requires a config_id attribute"));
-      sync_config_data_reset (sync_config_data);
-      set_client_state (CLIENT_AUTHENTIC);
-      return;
-    }
-  switch (sync_config (sync_config_data->config_id))
-    {
-      case 0:
-        log_event ("config", "config", sync_config_data->config_id,
-                   "synchronized");
-        SEND_TO_CLIENT_OR_FAIL (XML_OK ("sync_config"));
-        break;
-      case 1:
-        if (send_find_error_to_client
-             ("sync_config", "config", sync_config_data->config_id, gmp_parser))
-          {
-            error_send_to_client (error);
-            return;
-          }
-        log_event_fail ("config", "Config", sync_config_data->config_id,
-                        "synchronized");
-        break;
-      case 2:
-        SEND_TO_CLIENT_OR_FAIL (XML_ERROR_SYNTAX
-                                 ("sync_config", "Config not of type OSP"));
-        log_event_fail ("config", "Config", sync_config_data->config_id,
-                        "synchronized");
-        break;
-      case 3:
-        SEND_TO_CLIENT_OR_FAIL (XML_ERROR_SYNTAX
-                                 ("sync_config", "Config has no scanner"));
-        log_event_fail ("config", "Config", sync_config_data->config_id,
-                        "synchronized");
-        break;
-      case 4:
-        SEND_TO_CLIENT_OR_FAIL (XML_ERROR_SYNTAX
-                                 ("sync_config",
-                                  "Couldn't get parameters from scanner"));
-        log_event_fail ("config", "Config", sync_config_data->config_id,
-                        "synchronized");
-        break;
-      case 99:
-        SEND_TO_CLIENT_OR_FAIL
-         (XML_ERROR_SYNTAX ("sync_config", "Permission denied"));
-        log_event_fail ("config", "Config", sync_config_data->config_id,
-                        "synchronized");
-        break;
-      case -1:
-        SEND_TO_CLIENT_OR_FAIL (XML_INTERNAL_ERROR ("sync_config"));
-        log_event_fail ("config", "Config", sync_config_data->config_id,
-                        "synchronized");
-        break;
-      default:
-        abort ();
-        break;
-    }
-
-  sync_config_data_reset (sync_config_data);
   set_client_state (CLIENT_AUTHENTIC);
 }
 
@@ -18996,6 +18714,15 @@ gmp_xml_handle_end_element (/* unused */ GMarkupParseContext* context,
       case CLIENT_GET_INFO:
         handle_get_info (gmp_parser, error);
         break;
+
+      case CLIENT_GET_LICENSE:
+        {
+          if (get_license_element_end (gmp_parser,
+                                       error,
+                                       element_name))
+            set_client_state (CLIENT_AUTHENTIC);
+          break;
+        }
 
       case CLIENT_GET_NOTES:
         handle_get_notes (gmp_parser, error);
@@ -22167,7 +21894,7 @@ gmp_xml_handle_end_element (/* unused */ GMarkupParseContext* context,
                   goto create_task_fail;
                 }
 
-              if (!create_task_check_config_scanner (config, scanner))
+              if (!create_task_check_scanner_type (scanner))
                 {
                   SEND_TO_CLIENT_OR_FAIL
                    (XML_ERROR_SYNTAX ("create_task",
@@ -22345,8 +22072,6 @@ gmp_xml_handle_end_element (/* unused */ GMarkupParseContext* context,
                         ? create_user_data->comment : "",
                       create_user_data->hosts,
                       create_user_data->hosts_allow,
-                      create_user_data->ifaces,
-                      create_user_data->ifaces_allow,
                       create_user_data->sources,
                       create_user_data->groups,
                       &fail_group_id,
@@ -22430,7 +22155,6 @@ gmp_xml_handle_end_element (/* unused */ GMarkupParseContext* context,
       CLOSE (CLIENT_CREATE_USER, GROUPS);
       CLOSE (CLIENT_CREATE_USER_GROUPS, GROUP);
       CLOSE (CLIENT_CREATE_USER, HOSTS);
-      CLOSE (CLIENT_CREATE_USER, IFACES);
       CLOSE (CLIENT_CREATE_USER, NAME);
       CLOSE (CLIENT_CREATE_USER, PASSWORD);
       CLOSE (CLIENT_CREATE_USER, ROLE);
@@ -23383,6 +23107,15 @@ gmp_xml_handle_end_element (/* unused */ GMarkupParseContext* context,
       CLOSE (CLIENT_MODIFY_GROUP, COMMENT);
       CLOSE (CLIENT_MODIFY_GROUP, NAME);
       CLOSE (CLIENT_MODIFY_GROUP, USERS);
+
+      case CLIENT_MODIFY_LICENSE:
+        {
+          if (modify_license_element_end (gmp_parser,
+                                          error,
+                                          element_name))
+            set_client_state (CLIENT_AUTHENTIC);
+          break;
+        }
 
       case CLIENT_MODIFY_NOTE:
         {
@@ -24908,8 +24641,6 @@ gmp_xml_handle_end_element (/* unused */ GMarkupParseContext* context,
                        modify_user_data->comment,
                        modify_user_data->hosts,
                        modify_user_data->hosts_allow,
-                       modify_user_data->ifaces,
-                       modify_user_data->ifaces_allow,
                        modify_user_data->sources,
                        modify_user_data->groups, &fail_group_id,
                        modify_user_data->roles, &fail_role_id,
@@ -25008,7 +24739,6 @@ gmp_xml_handle_end_element (/* unused */ GMarkupParseContext* context,
       CLOSE (CLIENT_MODIFY_USER, GROUPS);
       CLOSE (CLIENT_MODIFY_USER_GROUPS, GROUP);
       CLOSE (CLIENT_MODIFY_USER, HOSTS);
-      CLOSE (CLIENT_MODIFY_USER, IFACES);
       CLOSE (CLIENT_MODIFY_USER, NAME);
       CLOSE (CLIENT_MODIFY_USER, NEW_NAME);
       CLOSE (CLIENT_MODIFY_USER, PASSWORD);
@@ -25696,10 +25426,6 @@ gmp_xml_handle_end_element (/* unused */ GMarkupParseContext* context,
         set_client_state (CLIENT_AUTHENTIC);
         break;
 
-      case CLIENT_SYNC_CONFIG:
-        handle_sync_config (gmp_parser, error);
-        break;
-
       case CLIENT_VERIFY_REPORT_FORMAT:
         if (verify_report_format_data->report_format_id)
           {
@@ -25946,9 +25672,6 @@ gmp_xml_handle_text (/* unused */ GMarkupParseContext* context,
 
       APPEND (CLIENT_MODIFY_USER_HOSTS,
               &modify_user_data->hosts);
-
-      APPEND (CLIENT_MODIFY_USER_IFACES,
-              &modify_user_data->ifaces);
 
       APPEND (CLIENT_MODIFY_USER_NAME,
               &modify_user_data->name);
@@ -26484,9 +26207,6 @@ gmp_xml_handle_text (/* unused */ GMarkupParseContext* context,
       APPEND (CLIENT_CREATE_USER_HOSTS,
               &create_user_data->hosts);
 
-      APPEND (CLIENT_CREATE_USER_IFACES,
-              &create_user_data->ifaces);
-
       APPEND (CLIENT_CREATE_USER_NAME,
               &create_user_data->name);
 
@@ -26514,6 +26234,11 @@ gmp_xml_handle_text (/* unused */ GMarkupParseContext* context,
           last->data = text_column;
           break;
         }
+
+
+      case CLIENT_GET_LICENSE:
+        get_license_element_text (text, text_len);
+        break;
 
 
       APPEND (CLIENT_MODIFY_ALERT_NAME,
@@ -26587,6 +26312,11 @@ gmp_xml_handle_text (/* unused */ GMarkupParseContext* context,
 
       APPEND (CLIENT_MODIFY_GROUP_USERS,
               &modify_group_data->users);
+
+
+      case CLIENT_MODIFY_LICENSE:
+        modify_license_element_text (text, text_len);
+        break;
 
 
       APPEND (CLIENT_MODIFY_NOTE_ACTIVE,
@@ -26922,7 +26652,7 @@ process_gmp_client_input ()
             g_debug ("   client error: G_MARKUP_ERROR_UNKNOWN_ATTRIBUTE");
           else
             err = -1;
-          g_info ("   Failed to parse client XML: %s", error->message);
+          g_debug ("   Failed to parse client XML: %s", error->message);
           g_error_free (error);
         }
       else
@@ -27037,7 +26767,7 @@ process_gmp (gmp_parser_t *parser, const gchar *command, gchar **response)
             g_debug ("   client error: G_MARKUP_ERROR_UNKNOWN_ATTRIBUTE");
           else
             err = -1;
-          g_info ("   Failed to parse client XML: %s", error->message);
+          g_debug ("   Failed to parse client XML: %s", error->message);
           g_error_free (error);
         }
       else

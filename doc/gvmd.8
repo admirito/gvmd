@@ -13,6 +13,9 @@ It manages the storage of any vulnerability management configurations and of the
 \fB-h, --help\f1
 Show help options.
 .TP
+\fB--broker-address=\fIADDRESS\fB\f1
+Sets the address for the publish-subscribe message (MQTT) broker. Defaults to localhost:9138. Set to empty to disable. 
+.TP
 \fB--check-alerts\f1
 Check SecInfo alerts.
 .TP
@@ -125,7 +128,7 @@ Modify user's password and exit.
 Modify user's password and exit.
 .TP
 \fB--optimize=\fINAME\fB\f1
-Run an optimization: vacuum, add-feed-permissions, analyze, cleanup-config-prefs, cleanup-feed-permissions, cleanup-port-names, cleanup-report-formats, cleanup-result-nvts, cleanup-result-severities, cleanup-schedule-times, migrate-relay-sensors, rebuild-report-cache or update-report-cache.
+Run an optimization: vacuum, add-feed-permissions, analyze, cleanup-config-prefs, cleanup-feed-permissions, cleanup-port-names, cleanup-report-formats, cleanup-result-nvts, cleanup-result-severities, cleanup-schedule-times, cleanup-sequences, migrate-relay-sensors, rebuild-report-cache or update-report-cache.
 .TP
 \fB--osp-vt-update=\fISCANNER-SOCKET\fB\f1
 Unix socket for OSP NVT update. Defaults to the path of the 'OpenVAS Default' scanner if it is an absolute path.
@@ -144,8 +147,8 @@ Reload all gvmd data objects of a given types from feed.
 
 The types must be "all" or a comma-separated of the following: "configs", "port_lists" and "report_formats". 
 .TP
-\fB--rebuild-scap=\fITYPE\fB\f1
-Rebuild SCAP data of type \fITYPE\f1 (currently only supports 'ovaldefs'). 
+\fB--rebuild-scap\f1
+Rebuild all SCAP data. 
 .TP
 \fB--relay-mapper=\fIFILE\fB\f1
 Executable for mapping scanner hosts to relays. Use an empty string to explicitly disable. If the option is not given, $PATH is checked for gvm-relay-mapper. 
@@ -179,7 +182,7 @@ Scanner port for --create-scanner and --modify-scanner.
 \fB--scanner-type=\fISCANNER-TYPE\fB\f1
 Scanner type for --create-scanner and --modify-scanner.
 
-Either 'OpenVAS', 'OSP', 'GMP', 'OSP-Sensor' or a number as used in GMP.
+Either 'OpenVAS', 'GMP', 'OSP-Sensor' or a number as used in GMP.
 .TP
 \fB--scanner-connection-retry=\fINUMBER\fB\f1
 Number of auto retries if scanner connection is lost in a running task.

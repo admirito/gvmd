@@ -3,7 +3,7 @@
 <?xml-stylesheet type="text/xsl" href="/usr/share/xmltoman/xmltoman.xsl" ?>
 
 <!--
-Copyright (C) 2009-2021 Greenbone Networks GmbH
+Copyright (C) 2009-2022 Greenbone Networks GmbH
 
 SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -50,6 +50,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       <p><opt>-h, --help</opt></p>
       <optdesc>
         <p>Show help options.</p>
+      </optdesc>
+    </option>
+    <option>
+      <p><opt>--broker-address=<arg>ADDRESS</arg></opt></p>
+      <optdesc>
+        <p>
+          Sets the address for the publish-subscribe message (MQTT) broker.
+          Defaults to localhost:9138. Set to empty to disable.
+        </p>
       </optdesc>
     </option>
     <option>
@@ -286,7 +295,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
         <p>Run an optimization: vacuum, add-feed-permissions, analyze,
            cleanup-config-prefs, cleanup-feed-permissions,
            cleanup-port-names, cleanup-report-formats, cleanup-result-nvts,
-           cleanup-result-severities, cleanup-schedule-times,
+           cleanup-result-severities, cleanup-schedule-times, cleanup-sequences,
            migrate-relay-sensors, rebuild-report-cache
            or update-report-cache.</p>
       </optdesc>
@@ -329,11 +338,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       </optdesc>
     </option>
     <option>
-      <p><opt>--rebuild-scap=<arg>TYPE</arg></opt></p>
+      <p><opt>--rebuild-scap</opt></p>
       <optdesc>
         <p>
-          Rebuild SCAP data of type <arg>TYPE</arg>
-          (currently only supports 'ovaldefs').
+          Rebuild all SCAP data.
         </p>
       </optdesc>
     </option>
@@ -402,7 +410,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       <p><opt>--scanner-type=<arg>SCANNER-TYPE</arg></opt></p>
       <optdesc>
         <p>Scanner type for --create-scanner and --modify-scanner.</p>
-        <p>Either 'OpenVAS', 'OSP', 'GMP', 'OSP-Sensor' or a number
+        <p>Either 'OpenVAS', 'GMP', 'OSP-Sensor' or a number
            as used in GMP.</p>
       </optdesc>
     </option>

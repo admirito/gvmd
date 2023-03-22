@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2020 Greenbone Networks GmbH
+/* Copyright (C) 2009-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -34,7 +34,7 @@
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on failure.
  */
 int
-main (int argc, char **argv)
+main (int argc, char **argv, char *env[])
 {
-  return gvmd (argc, argv);
+  return gvmd (argc, argv, env);
 }

@@ -1,4 +1,4 @@
-/* Copyright (C) 2014-2021 Greenbone Networks GmbH
+/* Copyright (C) 2014-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -37,11 +37,6 @@
  * @brief GLib log domain.
  */
 #define G_LOG_DOMAIN "md manage"
-
-/**
- * @brief Database superuser role
- */
-#define DB_SUPERUSER_ROLE "dba"
 
 
 /* Headers */
@@ -199,22 +194,23 @@ manage_create_sql_functions ()
   if (check_db_extensions ())
     return -1;
 
-  /* Functions in C. */
+  /* Functions in C have been moved to the "pg-gvm" extension. */
+  
+  /* Operators */
 
   sql ("SET ROLE \"%s\";", DB_SUPERUSER_ROLE);
 
-  sql ("CREATE OR REPLACE FUNCTION hosts_contains (text, text)"
-       " RETURNS boolean"
-       " AS '%s/libgvm-pg-server', 'sql_hosts_contains'"
-       " LANGUAGE C"
-       " IMMUTABLE;",
-       GVM_LIB_INSTALL_DIR);
+  if (sql_int ("SELECT count(*) FROM pg_operator"
+               " WHERE oprname = '?~#';")
+      == 0)
+    {
+      sql ("CREATE OPERATOR ?~#"
+          " (PROCEDURE = regexp, LEFTARG = text, RIGHTARG = text);");
+    }
 
-  sql ("CREATE OR REPLACE FUNCTION max_hosts (text, text)"
-       " RETURNS integer"
-       " AS '%s/libgvm-pg-server', 'sql_max_hosts'"
-       " LANGUAGE C;",
-       GVM_LIB_INSTALL_DIR);
+  sql ("RESET role;");
+
+  /* Functions in pl/pgsql. */
 
   /*
    * This database function is a duplicate of 'level_max_severity' from manage_utils.c
@@ -280,18 +276,6 @@ manage_create_sql_functions ()
        "END;"
        "$$ LANGUAGE plpgsql;");
 
-  sql ("CREATE OR REPLACE FUNCTION next_time_ical (text, text)"
-       " RETURNS integer"
-       " AS '%s/libgvm-pg-server', 'sql_next_time_ical'"
-       " LANGUAGE C;",
-       GVM_LIB_INSTALL_DIR);
-
-  sql ("CREATE OR REPLACE FUNCTION next_time_ical (text, text, integer)"
-       " RETURNS integer"
-       " AS '%s/libgvm-pg-server', 'sql_next_time_ical'"
-       " LANGUAGE C;",
-       GVM_LIB_INSTALL_DIR);
-
   sql ("CREATE OR REPLACE FUNCTION severity_matches_ov (a double precision,"
        "                                                b double precision)"
        "RETURNS BOOLEAN AS $$"
@@ -304,24 +288,6 @@ manage_create_sql_functions ()
        " END;"
        "END;"
        "$$ LANGUAGE plpgsql IMMUTABLE;");
-
-  sql ("CREATE OR REPLACE FUNCTION regexp (text, text)"
-       " RETURNS boolean"
-       " AS '%s/libgvm-pg-server', 'sql_regexp'"
-       " LANGUAGE C;",
-       GVM_LIB_INSTALL_DIR);
-
-  if (sql_int ("SELECT count(*) FROM pg_operator"
-               " WHERE oprname = '?~#';")
-      == 0)
-    {
-      sql ("CREATE OPERATOR ?~#"
-          " (PROCEDURE = regexp, LEFTARG = text, RIGHTARG = text);");
-    }
-
-  sql ("RESET role;");
-
-  /* Functions in pl/pgsql. */
 
   /* Helper function for quoting the individual parts of multi-part
    *  identifiers like "scap", "cpes" and "id" in "scap.cpes.id" where
@@ -455,7 +421,7 @@ manage_create_sql_functions ()
            "        INTO execute_name"
            "        USING $2;"
            "        RETURN execute_name;"
-           "   WHEN $1 NOT IN ('nvt', 'cpe', 'cve', 'ovaldef', 'cert_bund_adv',"
+           "   WHEN $1 NOT IN ('nvt', 'cpe', 'cve', 'cert_bund_adv',"
            "                   'dfn_cert_adv', 'report', 'result', 'user')"
            "   THEN EXECUTE 'SELECT name FROM '"
            "                || quote_ident_split ($1 || 's_trash')"
@@ -772,7 +738,6 @@ manage_create_sql_functions ()
        "   WHEN arg_type = 'nvt'"
        "        OR arg_type = 'cve'"
        "        OR arg_type = 'cpe'"
-       "        OR arg_type = 'ovaldef'"
        "        OR arg_type = 'cert_bund_adv'"
        "        OR arg_type = 'dfn_cert_adv'"
        "   THEN RETURN true;"
@@ -1221,42 +1186,76 @@ manage_create_sql_functions ()
              "         END;"
              "$$ LANGUAGE SQL;");
 
-      sql ("CREATE OR REPLACE FUNCTION task_last_report (integer)"
-           " RETURNS integer AS $$"
-           /* Get the report from the most recently completed invocation of task. */
-           "  SELECT id FROM reports WHERE task = $1 AND scan_run_status = %u"
-           "  ORDER BY date DESC LIMIT 1;"
-           "$$ LANGUAGE SQL;",
-           TASK_STATUS_DONE);
+      /* column date in table reports was renamed to creation_time in version 245 */
+      if (current_db_version >= 245)
+        {
+          sql ("CREATE OR REPLACE FUNCTION task_last_report (integer)"
+               " RETURNS integer AS $$"
+               /* Get the report from the most recently completed invocation of task. */
+               "  SELECT id FROM reports WHERE task = $1 AND scan_run_status = %u"
+               "  ORDER BY creation_time DESC LIMIT 1;"
+               "$$ LANGUAGE SQL;",
+               TASK_STATUS_DONE);
+        }
 
-      sql ("CREATE OR REPLACE FUNCTION task_second_last_report (integer)"
-           " RETURNS integer AS $$"
-           /* Get report from second most recently completed invocation of task. */
-           "  SELECT id FROM reports WHERE task = $1 AND scan_run_status = %u"
-           "  ORDER BY date DESC LIMIT 1 OFFSET 1;"
-           "$$ LANGUAGE SQL;",
-           TASK_STATUS_DONE);
+      /* column date in table reports was renamed to creation_time in version 245 */
+      if (current_db_version >= 245)
+        {
+          sql ("CREATE OR REPLACE FUNCTION task_second_last_report (integer)"
+               " RETURNS integer AS $$"
+               /* Get report from second most recently completed invocation of task. */
+               "  SELECT id FROM reports WHERE task = $1 AND scan_run_status = %u"
+               "  ORDER BY creation_time DESC LIMIT 1 OFFSET 1;"
+               "$$ LANGUAGE SQL;",
+               TASK_STATUS_DONE);
+        }
 
+
+      /* if (current_db_version >= 189)                                           */
+      /* column date in table reports was renamed to creation_time in version 245 */
+      if (current_db_version >= 245)
+        {
+          sql ("CREATE OR REPLACE FUNCTION task_severity (integer,"  // task
+               "                                          integer,"  // overrides
+               "                                          integer)"  // min_qod
+               " RETURNS double precision AS $$"
+               /* Calculate the severity of a task. */
+               "  SELECT CASE"
+               "         WHEN (SELECT target = 0"
+               "               FROM tasks WHERE id = $1)"
+               "         THEN CAST (NULL AS double precision)"
+               "         ELSE"
+               "         (SELECT report_severity ((SELECT id FROM reports"
+               "                                   WHERE task = $1"
+               "                                   AND scan_run_status = %u"
+               "                                   ORDER BY creation_time DESC"
+               "                                   LIMIT 1 OFFSET 0), $2, $3))"
+               "         END;"
+               "$$ LANGUAGE SQL;",
+               TASK_STATUS_DONE);
+        }
       /* result_nvt column (in OVERRIDES_SQL) was added in version 189. */
-      if (current_db_version >= 189)
-        sql ("CREATE OR REPLACE FUNCTION task_severity (integer,"  // task
-             "                                          integer,"  // overrides
-             "                                          integer)"  // min_qod
-             " RETURNS double precision AS $$"
-             /* Calculate the severity of a task. */
-             "  SELECT CASE"
-             "         WHEN (SELECT target = 0"
-             "               FROM tasks WHERE id = $1)"
-             "         THEN CAST (NULL AS double precision)"
-             "         ELSE"
-             "         (SELECT report_severity ((SELECT id FROM reports"
-             "                                   WHERE task = $1"
-             "                                   AND scan_run_status = %u"
-             "                                   ORDER BY date DESC"
-             "                                   LIMIT 1 OFFSET 0), $2, $3))"
-             "         END;"
-             "$$ LANGUAGE SQL;",
-             TASK_STATUS_DONE);
+      else if (current_db_version >= 189)
+        {
+          sql ("CREATE OR REPLACE FUNCTION task_severity (integer,"  // task
+               "                                          integer,"  // overrides
+               "                                          integer)"  // min_qod
+               " RETURNS double precision AS $$"
+               /* Calculate the severity of a task. */
+               "  SELECT CASE"
+               "         WHEN (SELECT target = 0"
+               "               FROM tasks WHERE id = $1)"
+               "         THEN CAST (NULL AS double precision)"
+               "         ELSE"
+               "         (SELECT report_severity ((SELECT id FROM reports"
+               "                                   WHERE task = $1"
+               "                                   AND scan_run_status = %u"
+               "                                   ORDER BY date DESC"
+               "                                   LIMIT 1 OFFSET 0), $2, $3))"
+               "         END;"
+               "$$ LANGUAGE SQL;",
+               TASK_STATUS_DONE);
+        }
 
       sql ("CREATE OR REPLACE FUNCTION task_trend (integer, integer, integer)"
            " RETURNS text AS $$"
@@ -1716,7 +1715,7 @@ create_view_vulns ()
   if (sql_int ("SELECT EXISTS (SELECT * FROM information_schema.tables"
                "               WHERE table_catalog = '%s'"
                "               AND table_schema = 'scap'"
-               "               AND table_name = 'ovaldefs')"
+               "               AND table_name = 'cves')"
                " ::integer;",
                sql_database ()))
     sql ("CREATE OR REPLACE VIEW vulns AS"
@@ -1732,12 +1731,6 @@ create_view_vulns ()
          G_STRINGIFY (QOD_DEFAULT) " AS qod,"
          "       'cve' AS type"
          " FROM cves"
-         " WHERE uuid in (SELECT * FROM used_nvts)"
-         " UNION SELECT id, uuid, name, creation_time, modification_time,"
-         "       severity, "
-         G_STRINGIFY (QOD_DEFAULT) " AS qod,"
-         "       'ovaldef' AS type"
-         " FROM ovaldefs"
          " WHERE uuid in (SELECT * FROM used_nvts)");
   else
     sql ("CREATE OR REPLACE VIEW vulns AS"
@@ -1749,6 +1742,8 @@ create_view_vulns ()
          " FROM nvts"
          " WHERE uuid in (SELECT * FROM used_nvts)");
 }
+
+
 
 #undef VULNS_RESULTS_WHERE
 
@@ -1775,8 +1770,6 @@ create_tables ()
        "  timezone text,"
        "  hosts text,"
        "  hosts_allow integer,"
-       "  ifaces text,"
-       "  ifaces_allow integer,"
        "  method text,"
        "  creation_time integer,"
        "  modification_time integer);");
@@ -2262,8 +2255,6 @@ create_tables ()
        "  nvt_count integer,"
        "  families_growing integer,"
        "  nvts_growing integer,"
-       "  type integer,"
-       "  scanner integer REFERENCES scanners (id) ON DELETE RESTRICT,"
        "  predefined integer,"
        "  creation_time integer,"
        "  modification_time integer,"
@@ -2280,8 +2271,6 @@ create_tables ()
        "  nvt_count integer,"
        "  families_growing integer,"
        "  nvts_growing integer,"
-       "  type integer,"
-       "  scanner integer," /* REFERENCES scanners (id) */
        "  predefined integer,"
        "  creation_time integer,"
        "  modification_time integer,"
@@ -2294,8 +2283,7 @@ create_tables ()
        "  type text,"
        "  name text,"
        "  value text,"
-       "  default_value text,"
-       "  hr_name text);");
+       "  default_value text);");
 
   sql ("CREATE TABLE IF NOT EXISTS config_preferences_trash"
        " (id SERIAL PRIMARY KEY,"
@@ -2303,8 +2291,7 @@ create_tables ()
        "  type text,"
        "  name text,"
        "  value text,"
-       "  default_value text,"
-       "  hr_name text);");
+       "  default_value text);");
 
   sql ("CREATE TABLE IF NOT EXISTS schedules"
        " (id SERIAL PRIMARY KEY,"
@@ -2409,14 +2396,14 @@ create_tables ()
        "  uuid text UNIQUE NOT NULL,"
        "  owner integer REFERENCES users (id) ON DELETE RESTRICT,"
        "  task integer REFERENCES tasks (id) ON DELETE RESTRICT,"
-       "  date integer,"
+       "  creation_time integer,"
        "  start_time integer,"
        "  end_time integer,"
        "  comment text,"
        "  scan_run_status integer,"
        "  slave_progress integer,"
-       "  source_iface text,"
-       "  flags integer);");
+       "  flags integer,"
+       "  modification_time integer);");
 
   sql ("CREATE TABLE IF NOT EXISTS report_counts"
        " (id SERIAL PRIMARY KEY,"
@@ -3021,6 +3008,39 @@ db_extension_available (const char *name)
 }
 
 /**
+ * @brief Clean up old SQL functions now incliuded in the pg-gvm extension.
+ */
+void
+cleanup_old_sql_functions ()
+{
+  if (sql_int("SELECT count(*) FROM pg_extension WHERE extname = 'pg-gvm'"))
+    {
+      g_debug ("%s: pg-gvm already installed, skipping function cleanup",
+               __func__);
+      return;
+    }
+
+  g_message ("%s: cleaning up SQL functions now included in pg-gvm extension",
+               __func__);
+
+  sql ("DROP FUNCTION IF EXISTS"
+       " hosts_contains (text, text) CASCADE;");
+
+  sql ("DROP FUNCTION IF EXISTS"
+       " max_hosts (text, text) CASCADE;");
+
+  sql ("DROP FUNCTION IF EXISTS"
+       " next_time_ical (text, bigint, text) CASCADE;");
+
+  sql ("DROP FUNCTION IF EXISTS"
+       " next_time_ical (text, bigint, text, integer) CASCADE;");
+
+  sql ("DROP FUNCTION IF EXISTS"
+       " regexp (text, text) CASCADE;");
+
+}
+
+/**
  * @brief Ensure all extensions are installed.
  *
  * @return 0 success, 1 extension missing.
@@ -3029,15 +3049,24 @@ int
 check_db_extensions ()
 {
   if (db_extension_available ("uuid-ossp")
-      && db_extension_available ("pgcrypto"))
+      && db_extension_available ("pgcrypto")
+      && db_extension_available ("pg-gvm"))
     {
       g_debug ("%s: All required extensions are available.", __func__);
 
       // Switch to superuser role and try to install extensions.
       sql ("SET ROLE \"%s\";", DB_SUPERUSER_ROLE);
       
+      // Clean up old functions now in pg-gvm
+      cleanup_old_sql_functions ();
+
+      // Install the extensions
       sql ("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"");
       sql ("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"");
+      sql ("CREATE EXTENSION IF NOT EXISTS \"pg-gvm\"");
+      if (sql_int ("SELECT extversion != '1.1' FROM pg_extension"
+                   " WHERE extname='pg-gvm';"))
+        sql ("ALTER EXTENSION \"pg-gvm\" UPDATE;");
 
       sql ("RESET ROLE;");
       return 0;
@@ -3250,31 +3279,6 @@ manage_db_init (const gchar *name)
            " (cve INTEGER,"
            "  cpe INTEGER);");
 
-      sql ("CREATE TABLE scap2.ovaldefs"
-           " (id SERIAL PRIMARY KEY,"
-           "  uuid text,"
-           "  name text,"                   /* OVAL identifier. */
-           "  comment text,"
-           "  creation_time integer,"
-           "  modification_time integer,"
-           "  version INTEGER,"
-           "  deprecated INTEGER,"
-           "  def_class TEXT,"              /* Enum. */
-           "  title TEXT,"
-           "  description TEXT,"
-           "  xml_file TEXT,"
-           "  status TEXT,"
-           "  severity DOUBLE PRECISION DEFAULT 0,"
-           "  cve_refs INTEGER DEFAULT 0);");
-
-      sql ("CREATE TABLE scap2.ovalfiles"
-           " (id SERIAL PRIMARY KEY,"
-           "  xml_file TEXT);");
-
-      sql ("CREATE TABLE scap2.affected_ovaldefs"
-           " (cve INTEGER,"
-           "  ovaldef INTEGER);");
-
       /* Init tables. */
 
       sql ("INSERT INTO scap2.meta (name, value)"
@@ -3316,18 +3320,6 @@ manage_db_add_constraints (const gchar *name)
            " ADD UNIQUE (cve, cpe),"
            " ADD FOREIGN KEY(cve) REFERENCES cves(id),"
            " ADD FOREIGN KEY(cpe) REFERENCES cpes(id);");
-
-      sql ("ALTER TABLE scap2.ovaldefs"
-           " ADD UNIQUE (uuid);");
-
-      sql ("ALTER TABLE scap2.ovalfiles"
-           " ADD UNIQUE (xml_file);");
-
-      sql ("ALTER TABLE scap2.affected_ovaldefs"
-           " ALTER cve SET NOT NULL,"
-           " ALTER ovaldef SET NOT NULL,"
-           " ADD FOREIGN KEY(cve) REFERENCES cves(id),"
-           " ADD FOREIGN KEY(ovaldef) REFERENCES ovaldefs(id);");
     }
   else
     {
@@ -3374,19 +3366,6 @@ manage_db_init_indexes (const gchar *name)
            " ON scap2.affected_products (cpe);");
       sql ("CREATE INDEX afp_cve_idx"
            " ON scap2.affected_products (cve);");
-
-      sql ("CREATE INDEX ovaldefs_idx"
-           " ON scap2.ovaldefs (name);");
-      sql ("CREATE INDEX ovaldefs_by_creation_time"
-           " ON scap2.ovaldefs (creation_time);");
-
-      sql ("CREATE UNIQUE INDEX ovalfiles_idx"
-           " ON scap2.ovalfiles (xml_file);");
-
-      sql ("CREATE INDEX aff_ovaldefs_def_idx"
-           " ON scap2.affected_ovaldefs (ovaldef);");
-      sql ("CREATE INDEX aff_ovaldefs_cve_idx"
-           " ON scap2.affected_ovaldefs (cve);");
     }
   else
     {

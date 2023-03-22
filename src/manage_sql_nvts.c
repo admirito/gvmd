@@ -1,4 +1,4 @@
-/* Copyright (C) 2009-2021 Greenbone Networks GmbH
+/* Copyright (C) 2009-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -1960,7 +1960,7 @@ osp_scanner_feed_version (const gchar *update_socket)
   if (osp_get_vts_version (connection, &scanner_feed_version, &error))
     {
       if (error && strcmp (error, "OSPd OpenVAS is still starting") == 0)
-        g_info ("%s: failed to get scanner_feed_version. %s",
+        g_info ("%s: No feed version available yet. %s",
                 __func__, error);
       else
         g_warning ("%s: failed to get scanner_feed_version. %s",
@@ -2267,5 +2267,38 @@ manage_dump_vt_verification (GSList *log_config,
   feed_lockfile_unlock (&lockfile);
   manage_option_cleanup ();
 
+  return 0;
+}
+
+/**
+ * @brief Cleans up NVT related id sequences likely to run out.
+ *
+ * @return 0 success, -1 error.
+ */
+int
+cleanup_nvt_sequences () {
+  g_info ("Cleaning up NVT related id sequences...");
+  sql_begin_immediate ();
+
+  if (cleanup_ids_for_table ("nvts"))
+    {
+      sql_rollback ();
+      return -1;
+    }
+  g_info ("Updating nvt references in tags to new row ids");
+  sql ("UPDATE tag_resources"
+       " SET resource = (SELECT id FROM nvts WHERE uuid = resource_uuid)"
+       " WHERE resource_type = 'nvt';");
+  sql ("UPDATE tag_resources_trash"
+       " SET resource = (SELECT id FROM nvts WHERE uuid = resource_uuid)"
+       " WHERE resource_type = 'nvt';");
+
+  if (cleanup_ids_for_table ("vt_refs"))
+    {
+      sql_rollback ();
+      return -1;
+    }
+
+  sql_commit ();
   return 0;
 }

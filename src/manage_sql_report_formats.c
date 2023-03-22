@@ -1,4 +1,4 @@
-/* Copyright (C) 2020-2021 Greenbone Networks GmbH
+/* Copyright (C) 2020-2022 Greenbone Networks GmbH
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
@@ -23,6 +23,7 @@
  * The report format SQL for the GVM management layer.
  */
 
+#include "debug_utils.h"
 #include "manage_sql_report_formats.h"
 #include "manage_acl.h"
 #include "manage_report_formats.h"
@@ -43,7 +44,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <gvm/base/proctitle.h>
+#include <gvm/base/gvm_sentry.h>
+#include <bsd/unistd.h>
 #include <gvm/util/uuidutils.h>
 #include <gvm/util/fileutils.h>
 
@@ -2470,7 +2472,7 @@ validate_param_value (report_format_t report_format,
       case REPORT_FORMAT_PARAM_TYPE_REPORT_FORMAT_LIST:
         {
           if (g_regex_match_simple
-                ("^(?:[[:alnum:]-_]+)?(?:,(?:[[:alnum:]-_])+)*$", value, 0, 0)
+                ("^(?:[[:alnum:]\\-_]+)?(?:,(?:[[:alnum:]\\-_])+)*$", value, 0, 0)
               == FALSE)
             return 1;
           else
@@ -3413,7 +3415,8 @@ run_report_format_script (gchar *report_format_id,
             {
               /* Child.  Drop privileges, run command, exit. */
 
-              proctitle_set ("gvmd: Generating report");
+              init_sentry ();
+              setproctitle ("gvmd: Generating report");
 
               cleanup_manage_process (FALSE);
 
@@ -3421,6 +3424,7 @@ run_report_format_script (gchar *report_format_id,
                 {
                   g_warning ("%s (child): setgroups: %s",
                               __func__, strerror (errno));
+                  gvm_close_sentry ();
                   exit (EXIT_FAILURE);
                 }
               if (setgid (nobody->pw_gid))
@@ -3428,6 +3432,7 @@ run_report_format_script (gchar *report_format_id,
                   g_warning ("%s (child): setgid: %s",
                               __func__,
                               strerror (errno));
+                  gvm_close_sentry ();
                   exit (EXIT_FAILURE);
                 }
               if (setuid (nobody->pw_uid))
@@ -3435,6 +3440,7 @@ run_report_format_script (gchar *report_format_id,
                   g_warning ("%s (child): setuid: %s",
                               __func__,
                               strerror (errno));
+                  gvm_close_sentry ();
                   exit (EXIT_FAILURE);
                 }
 
@@ -3448,9 +3454,11 @@ run_report_format_script (gchar *report_format_id,
                               ret,
                               WEXITSTATUS (ret),
                               command);
+                  gvm_close_sentry ();
                   exit (EXIT_FAILURE);
                 }
 
+              gvm_close_sentry ();
               exit (EXIT_SUCCESS);
             }
 
