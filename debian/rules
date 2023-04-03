@@ -98,18 +98,23 @@
 
 override_dh_auto_configure:
 #	# gvmd 21.4.4 uses GVMD_RUN_DIR mainly, but due to a bug it has used GVM_RUN_DIR in the config/gvmd.service.in
-	dh_auto_configure -- -DLOCALSTATEDIR=/var -DGVM_RUN_DIR=/run/gvm -DGVMD_RUN_DIR=/run/gvm -DSYSCONFDIR=/etc -DDEFAULT_CONFIG_DIR=/etc/default -DLOGROTATE_DIR=/etc/logrotate.d -DSYSTEMD_SERVICE_DIR=/lib/systemd/system -DBACKEND=POSTGRESQL -DLIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH)
+	dh_auto_configure -- -DLOCALSTATEDIR=/var -DGVM_RUN_DIR=/run/gvm -DGVMD_RUN_DIR=/run/gvm -DSYSCONFDIR=/etc -DDEFAULT_CONFIG_DIR=/etc/default -DLOGROTATE_DIR=/etc/logrotate.d -DSYSTEMD_SERVICE_DIR=/lib/systemd/system -DBACKEND=POSTGRESQL -DLIBDIR=/usr/lib/$(DEB_HOST_MULTIARCH) -DPostgreSQL_ADDITIONAL_VERSIONS=14
 
 override_dh_auto_install:
 	dh_auto_install --destdir=$(shell realpath debian/gvmd-common)
+
+#	# rename sync scripts to distinguish them from the new greenbone-feed-sync project
+	mv debian/gvmd-common/usr/sbin/greenbone-feed-sync debian/gvmd-common/usr/sbin/greenbone-feed-sync-legacy
+	mv debian/gvmd-common/usr/sbin/greenbone-certdata-sync debian/gvmd-common/usr/sbin/greenbone-certdata-sync-legacy
+	mv debian/gvmd-common/usr/sbin/greenbone-scapdata-sync debian/gvmd-common/usr/sbin/greenbone-scapdata-sync-legacy
 
 #	# install dbconfig-common files for gvmd-pg
 	mkdir -p debian/gvmd-pg/usr/share/dbconfig-common/data/gvmd-pg/install-dbadmin
 	cp debian/gvmd-pg.dbconfig-common.install-dbadmin debian/gvmd-pg/usr/share/dbconfig-common/data/gvmd-pg/install-dbadmin/pgsql
 
-#	# move /usr/lib files from gvmd-common to libgvm-pg-server0
-	mkdir -p debian/libgvm-pg-server0/usr
-	mv debian/gvmd-common/usr/lib debian/libgvm-pg-server0/usr/
+#	# move /usr/lib files from gvmd-common to libgvm-pg-server22
+	mkdir -p debian/libgvm-pg-server22/usr
+	mv debian/gvmd-common/usr/lib debian/libgvm-pg-server22/usr/
 
 #	# move the "gvmd" binary, its man page and
 #	# "gvm-portnames-update" script to gvmd-pg package
@@ -120,7 +125,7 @@ override_dh_auto_install:
 #	#mv debian/gvmd-common/usr/sbin/gvm-portnames-update debian/gvmd-pg/usr/sbin/gvm-portnames-update-pg
 
 override_dh_installchangelogs:
-	dh_installchangelogs -k CHANGELOG.md
+	dh_installchangelogs -k changelog/*.md
 
 override_dh_installinit:
 # 	dh_installinit --name=gvmd --only-scripts -pgvmd-pg

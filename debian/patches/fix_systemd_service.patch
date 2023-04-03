@@ -1,9 +1,12 @@
 --- a/config/gvmd.service.in
 +++ b/config/gvmd.service.in
-@@ -13,7 +13,8 @@
- RuntimeDirectory=gvm
+@@ -9,9 +9,10 @@
+ Type=forking
+ User=gvm
+ PIDFile=${GVMD_PID_PATH}
+-RuntimeDirectory=gvmd
++RuntimeDirectory=gvm
  RuntimeDirectoryMode=2775
- EnvironmentFile=${DEFAULT_CONFIG_DIR}/gvmd
 -ExecStart=${SBINDIR}/gvmd --osp-vt-update=/run/ospd/ospd-openvas.sock --listen-group=gvm
 +EnvironmentFile=-${DEFAULT_CONFIG_DIR}/gvmd-pg
 +ExecStart=${SBINDIR}/gvmd --osp-vt-update=/run/ospd/ospd-openvas.sock --listen-group=gvm $OPTIONS

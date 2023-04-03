@@ -2,8 +2,8 @@ Source: gvmd
 Section: admin
 Priority: optional
 Maintainer: Mohammad Razavi <mrazavi64@gmail.com>
-Build-Depends: debhelper-compat (= 12), cmake, pkg-config, cppcheck, xmltoman, doxygen, xsltproc, libglib2.0-dev, libgnutls28-dev, libgcrypt20-dev, libgpgme-dev, libgvm-dev (>= 21.4.1), libical-dev, libpq-dev, postgresql-server-dev-12
-Standards-Version: 4.4.1
+Build-Depends: debhelper-compat (= 13), cmake, pkg-config, cppcheck, xmltoman, doxygen, xsltproc, libglib2.0-dev, libgnutls28-dev, libgcrypt20-dev, libgpgme-dev, libgvm-dev (>= 22.4.4), libical-dev, libbsd-dev, libpq-dev, postgresql-server-dev-14
+Standards-Version: 4.6.2
 Homepage: https://community.greenbone.net/
 Vcs-Browser: https://github.com/greenbone/gvmd
 Vcs-git: https://github.com/greenbone/gvmd.git
@@ -30,7 +30,7 @@ Package: gvmd-pg
 Architecture: any
 Pre-Depends: adduser, sudo
 Depends: ${shlibs:Depends}, ${misc:Depends}, gvmd-common (= ${binary:Version}), debconf, dbconfig-pgsql | dbconfig-no-thanks
-Recommends: postgresql-client, libgvm-pg-server0
+Recommends: postgresql-client, libgvm-pg-server22, postgresql-14-gvm
 Description: remote network security auditor - manager - with postgreql backend
  The Greenbone Vulnerability Management Solution (previously known as
  Open Vulnerability Assessment System) is a modular security auditing tool,
@@ -42,7 +42,7 @@ Description: remote network security auditor - manager - with postgreql backend
  .
  This package contains the manager (gvmd) part, with postgreql backend.
 
-Package: libgvm-pg-server0
+Package: libgvm-pg-server22
 Architecture: any
 Section: libs
 Depends: ${shlibs:Depends}, ${misc:Depends}
