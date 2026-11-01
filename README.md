@@ -1,3 +1,5 @@
+Archived on 2026-11-01, read-only: my Debian packaging of gvmd for the GVM packages on Launchpad (ppa:mrazavi/gvm), 2019 to 2023; no longer maintained
+
 ![Greenbone Logo](https://www.greenbone.net/wp-content/uploads/gb_new-logo_horizontal_rgb_small.png)
 
 # Greenbone Vulnerability Manager
